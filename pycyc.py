@@ -98,7 +98,7 @@ from matplotlib import pyplot as plt
 from matplotlib.figure import Figure                         
 from matplotlib.backends.backend_agg import FigureCanvasAgg 
 import time
-import cPickle
+import pickle
 import scipy, scipy.optimize
 import os
 
@@ -478,7 +478,7 @@ class CyclicSolver():
         orig_ar = self.ar
         self.ar = None
         fh = open(filename,'w')
-        cPickle.dump(self,fh,protocol=-1)
+        pickle.dump(self,fh,protocol=-1)
         fh.close()
         self.ar = orig_ar
         self.statefile = orig_statefile
@@ -1103,7 +1103,7 @@ def loadCyclicSolver(statefile):
     Load previously saved Cyclic Solver class
     """
     fh = open(statefile,'r')
-    cys = cPickle.load(fh)
+    cys = pickle.load(fh)
     fh.close()
     return cys
 
