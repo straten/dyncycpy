@@ -92,179 +92,197 @@ CS.loop(make_plots=True, tolfact=10, maxneg=10, maxlen = 110)
 try:
     import psrchive
 except:
-    print "pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files."
+    print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import numpy as np
 from matplotlib import pyplot as plt
-from matplotlib.figure import Figure                         
-from matplotlib.backends.backend_agg import FigureCanvasAgg 
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import time
 import pickle
 import scipy, scipy.optimize
 import os
 
-class CyclicSolver():
-    def __init__(self, filename=None, statefile=None, offp = None,tscrunch=None):
+
+class CyclicSolver:
+    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None):
         """
-        
+
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
         """
         if filename:
-            self.load(filename,offp=offp)
+            self.load(filename, offp=offp)
         elif statefile:
             self.loadState(statefile)
         else:
             self.ar = None
-            
+
         self.statefile = statefile
-        
-    def modelCS(self,ht=None,hf=None):
+
+    def modelCS(self, ht=None, hf=None):
         """
         Convenience function for computing modelCS using ref profile
-        
+
         Call as modelCS(ht) for time domain or modelCS(hf=hf) for freq domain
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs,a,b,c = make_model_cs(hf, self.s0, self.bw, self.ref_freq)
-        
+        cs, a, b, c = make_model_cs(hf, self.s0, self.bw, self.ref_freq)
+
         return cs
-            
-    def load(self,filename,offp=None,maxchan = None,tscrunch=None):
-        """ 
+
+    def load(self, filename, offp=None, maxchan=None, tscrunch=None):
+        """
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
-        
+
         *offp*: tuple (start,end) with start and end bin numbers to use as off pulse region for normalizing the bandpass
-        
+
         *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
                     subbands
         *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
         """
-        idx = 0 # only used to get parameters of integration, not data itself
-        
+        idx = 0  # only used to get parameters of integration, not data itself
+
         self.filename = filename
         self.ar = psrchive.Archive_load(filename)
-        
-        self.data = self.ar.get_data()  #we load all data here, so this should probably change in the long run
+
+        self.data = self.ar.get_data()  # we load all data here, so this should probably change in the long run
         if maxchan:
-            bwfact = maxchan/(1.0*self.data.shape[2]) # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
-            self.data = self.data[:,:,:maxchan,:]
+            bwfact = maxchan / (
+                1.0 * self.data.shape[2]
+            )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
+            self.data = self.data[:, :, :maxchan, :]
         else:
             bwfact = 1.0
         if offp:
-            self.data = self.data/(np.abs(self.data[:,:,:,offp[0]:offp[1]]).mean(3)[:,:,:,None])
+            self.data = self.data / (np.abs(self.data[:, :, :, offp[0] : offp[1]]).mean(3)[:, :, :, None])
         if tscrunch:
-            for k in range(1,tscrunch):
-                self.data[:-k,:,:,:] += self.data[k:,:,:,:]
-#            d = self.data
-#            nsub = d.shape[0]/tscrunch
-#            ntot = nsub*tscrunch
-#            self.data = d[:ntot,:,:,:].reshape((nsub,tscrunch,d.shape[1],d.shape[2],d.shape[3])).mean(1)
+            for k in range(1, tscrunch):
+                self.data[:-k, :, :, :] += self.data[k:, :, :, :]
+        #            d = self.data
+        #            nsub = d.shape[0]/tscrunch
+        #            ntot = nsub*tscrunch
+        #            self.data = d[:ntot,:,:,:].reshape((nsub,tscrunch,d.shape[1],d.shape[2],d.shape[3])).mean(1)
         subint = self.ar.get_Integration(idx)
-        self.nspec,self.npol,self.nchan,self.nbin = self.data.shape
-        
+        self.nspec, self.npol, self.nchan, self.nbin = self.data.shape
+
         epoch = subint.get_epoch()
         try:
             self.imjd = np.floor(epoch)
-            self.fmjd = np.fmod(epoch,1)
-        except: #new version of psrchive has different kind of epoch
+            self.fmjd = np.fmod(epoch, 1)
+        except:  # new version of psrchive has different kind of epoch
             self.imjd = epoch.intday()
             self.fmjd = epoch.fracday()
         self.ref_phase = 0.0
-        self.ref_freq = 1.0/subint.get_folding_period()
+        self.ref_freq = 1.0 / subint.get_folding_period()
         self.bw = np.abs(subint.get_bandwidth()) * bwfact
         self.rf = subint.get_centre_frequency()
-        
-        self.source = self.ar.get_source() # source name
+
+        self.source = self.ar.get_source()  # source name
 
         self.nlag = self.nchan
         self.nphase = self.nbin
-        self.nharm = self.nphase/2 + 1
-        
-        self.dynamic_spectrum = np.zeros((self.nspec,self.nchan))
-        self.optimized_filters = np.zeros((self.nspec,self.nchan),dtype='complex')
-        self.intrinsic_profiles = np.zeros((self.nspec,self.nbin))
+        self.nharm = self.nphase / 2 + 1
+
+        self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
+        self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
         self.nopt = 0
-        self.nloop = 0        
-        
-    def initProfile(self,loadFile=None,ipol=0,maxinitharm=None):
+        self.nloop = 0
+
+    def initProfile(self, loadFile=None, ipol=0, maxinitharm=None):
         """
         Initialize the reference profile
-        
+
         If loadFile is not specified, will compute an initial profile from the data
         If loadFile ends with .txt, it is assumed to be a filter_profile output file
         If loadFile ends with .npy, it is assumed to be a numpy data file
-        
+
         Resulting profile is assigned to self.pp_ref
         The results of this routine have been checked to agree with filter_profile -i
-        
+
         *maxinitharm* : zero harmonics above this one in the initial profile (acts to smooth/denoise) (optional)
-        
+
         """
-        hf_prev = np.ones((self.nchan,),dtype='complex')
+        hf_prev = np.ones((self.nchan,), dtype="complex")
         self.hf_prev = hf_prev
-        
-        self.pp_int = np.zeros((self.nphase)) #intrinsic profile
+
+        self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
         if loadFile:
-            if loadFile.endswith('.npy'):
+            if loadFile.endswith(".npy"):
                 self.pp_ref = np.load(loadFile)
-            elif loadFile.endswith('.txt'):
+            elif loadFile.endswith(".txt"):
                 self.pp_ref = loadProfile(loadFile)
             else:
                 raise Exception("Filename must end with .txt or .npy to indicate type")
             return
-        
-        #initialize profile from data
-        #the results of this routine have been checked against filter_profile and they perform the same
+
+        # initialize profile from data
+        # the results of this routine have been checked against filter_profile and they perform the same
         for isub in range(self.data.shape[0]):
-            ps = self.data[isub,ipol]
+            ps = self.data[isub, ipol]
             cs = ps2cs(ps)
-            cs = normalize_cs(cs,bw=self.bw,ref_freq=self.ref_freq)
-            cs = cyclic_padding(cs,self.bw,self.ref_freq)
-            hf = np.ones((self.nchan,),dtype='complex')
+            cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+            cs = cyclic_padding(cs, self.bw, self.ref_freq)
+            hf = np.ones((self.nchan,), dtype="complex")
             ht = freq2time(hf)
             rindex = np.abs(ht).argmax()
             self.rindex = rindex
-                    
-            ph = optimize_profile(cs,hf,self.bw,self.ref_freq)
+
+            ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
             ph[0] = 0.0
             if maxinitharm:
                 ph[maxinitharm:] = 0.0
             pp = harm2phase(ph)
-            
+
             self.pp_int += pp
-            
+
         self.pp_ref = self.pp_int[:]
-        
-    def solve(self,**kwargs):
+
+    def solve(self, **kwargs):
         """
         Construct an iterative solution to the IRF using multiple subintegrations
         """
-        if kwargs.pop('restart',False):
-                self.nopt = 0
-        savefile = kwargs.pop('savebase',os.path.abspath(self.filename)+('_%02d.cysolve.pkl' % self.nloop))
+        if kwargs.pop("restart", False):
+            self.nopt = 0
+        savefile = kwargs.pop("savebase", os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop))
 
-        if kwargs.has_key('savedir'):
-            savedir = kwargs['savedir']
+        if kwargs.has_key("savedir"):
+            savedir = kwargs["savedir"]
         for isub in range(self.nspec):
-            kwargs['isub'] = isub
+            kwargs["isub"] = isub
             self.loop(**kwargs)
-            print "Saving after nopt:", self.nopt
+            print("Saving after nopt:", self.nopt)
             self.saveState(savefile)
-            
+
         self.pp_ref = self.pp_int
         self.nloop += 1
 
-        
-    def loop(self,isub=0,ipol=0,hf_prev=None,make_plots=False,
-             maxfun = 1000, tolfact=1, iprint=1, plotdir = None,
-             maxneg = None, maxlen = None, rindex= None,
-             ht0 = None,max_plot_lag=50,use_last_soln=True, use_minphase = True,
-             onp=None,adjust_delay=True,plot_every=1):
+    def loop(
+        self,
+        isub=0,
+        ipol=0,
+        hf_prev=None,
+        make_plots=False,
+        maxfun=1000,
+        tolfact=1,
+        iprint=1,
+        plotdir=None,
+        maxneg=None,
+        maxlen=None,
+        rindex=None,
+        ht0=None,
+        max_plot_lag=50,
+        use_last_soln=True,
+        use_minphase=True,
+        onp=None,
+        adjust_delay=True,
+        plot_every=1,
+    ):
         """
         Run the non-linear solver to compute the IRF
-        
+
         maxfun: int
             maximum number of objective function evaluations
         tolfact: float
@@ -274,7 +292,7 @@ class CyclicSolver():
         iprint: int
             Passed to scipy.optimize.fmin_l_bfgs (see docs)
             use 0 for silent, 1 for verbose, 2 for more log info
-            
+
         max_plot_lag: highest lag to plot in diagnostic plots.
         use_last_soln: If true, use last filter as initial guess for this subint
         use_minphase: if true, use minimum phase IRF as initial guess
@@ -285,41 +303,40 @@ class CyclicSolver():
         if make_plots:
             self.mlag = max_plot_lag
             if plotdir is None:
-                blah,fbase = os.path.split(self.filename)
-                plotdir = os.path.join(os.path.abspath(os.path.curdir),('%s_plots' % fbase))
+                blah, fbase = os.path.split(self.filename)
+                plotdir = os.path.join(os.path.abspath(os.path.curdir), ("%s_plots" % fbase))
             if not os.path.exists(plotdir):
                 try:
                     os.mkdir(plotdir)
                 except:
-                    print "Warning: couldn't make",plotdir,"not plotting"
+                    print("Warning: couldn't make", plotdir, "not plotting")
                     self.make_plots = False
             self.plotdir = plotdir
-                
+
         self.isub = isub
         self.ipol = ipol
         self.iprint = iprint
-        ps = self.data[isub,ipol] #dimensions will now be (nchan,nbin)
+        ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
         cs = ps2cs(ps)
-        cs = normalize_cs(cs,bw=self.bw,ref_freq=self.ref_freq)
-        cs = cyclic_padding(cs,self.bw,self.ref_freq)
-        
-        
+        cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+        cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
         if hf_prev is None:
             _hf_prev = self.hf_prev
         else:
             _hf_prev = hf_prev
-        
+
         self.ps = ps
         self.cs = cs
-        
-        self.dynamic_spectrum[isub,:] = np.real(cs[:,0])
-        
+
+        self.dynamic_spectrum[isub, :] = np.real(cs[:, 0])
+
         self.ph_ref = phase2harm(self.pp_ref)
         self.ph_ref = normalize_profile(self.ph_ref)
         self.ph_ref[0] = 0
         ph = self.ph_ref[:]
         self.s0 = ph
-                    
+
         if self.nopt == 0 or not use_last_soln:
             self.pp_int = np.zeros((self.nphase,))
             if ht0 is None:
@@ -327,143 +344,138 @@ class CyclicSolver():
                     delay = self.phase_gradient(cs)
                 else:
                     delay = rindex
-                print "initial filter: delta function at delay = %d" % delay
-                ht = np.zeros((self.nlag,),dtype='complex')
+                print("initial filter: delta function at delay = %d" % delay)
+                ht = np.zeros((self.nlag,), dtype="complex")
                 ht[delay] = self.nlag
                 if use_minphase:
                     if onp is None:
-                        print "onp not specified, so not using minimum phase"
+                        print("onp not specified, so not using minimum phase")
                     else:
-                        spect = np.abs(self.data[isub,ipol,:,onp[0]:onp[1]]).mean(1)
-                        ht = freq2time(minphase(spect-spect.min()))
-                        ht = np.roll(ht,delay)
-                        print "using minimum phase with peak at:",np.abs(ht).argmax()
+                        spect = np.abs(self.data[isub, ipol, :, onp[0] : onp[1]]).mean(1)
+                        ht = freq2time(minphase(spect - spect.min()))
+                        ht = np.roll(ht, delay)
+                        print("using minimum phase with peak at:", np.abs(ht).argmax())
             else:
                 ht = ht0.copy()
             hf = time2freq(ht)
         else:
             hf = _hf_prev.copy()
         ht = freq2time(hf)
-        
+
         if self.nopt == 0 or adjust_delay:
             if rindex is None:
                 rindex = np.abs(ht).argmax()
             self.rindex = rindex
         else:
             rindex = self.rindex
-        print "max filter index = %d" % self.rindex
-        
+        print("max filter index = %d" % self.rindex)
+
         if maxneg is not None:
             if maxlen is not None:
                 valsamp = maxlen
             else:
-                valsamp = ht.shape[0]/2 + maxneg
+                valsamp = ht.shape[0] / 2 + maxneg
             minbound = np.zeros_like(ht)
-            minbound[:valsamp] = 1+1j
-            minbound = np.roll(minbound,rindex-maxneg)
-            b = get_params(minbound,rindex)
-            bchoice = [0,None]
-            bounds = [(bchoice[int(x)],bchoice[int(x)]) for x in b]
+            minbound[:valsamp] = 1 + 1j
+            minbound = np.roll(minbound, rindex - maxneg)
+            b = get_params(minbound, rindex)
+            bchoice = [0, None]
+            bounds = [(bchoice[int(x)], bchoice[int(x)]) for x in b]
         else:
-            bounds=None
-        #rotate phase time
+            bounds = None
+        # rotate phase time
         phasor = np.conj(ht[rindex])
         ht = ht * phasor / np.abs(phasor)
-        
-        dim0 = 2*self.nlag-1
-        
-        var,nvalid = self.cyclic_variance(cs)
+
+        dim0 = 2 * self.nlag - 1
+
+        var, nvalid = self.cyclic_variance(cs)
         self.noise = np.sqrt(var)
         dof = nvalid - dim0 - self.nphase
-        print "variance : %.5e" % var
-        print "nsamp    : %.5e" % nvalid
-        print "dof      : %.5e" % dof
-        print "min obj  : %.5e" % (dof*var)
-        
+        print("variance : %.5e" % var)
+        print("nsamp    : %.5e" % nvalid)
+        print("dof      : %.5e" % dof)
+        print("min obj  : %.5e" % (dof * var))
+
         tol = 1e-1 / (dof)
-        print "ftol     : %.5e" % (tol)
-        scipytol = tolfact*tol/2.220E-16 #2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
-        print "scipytol : %.5e" % scipytol
+        print("ftol     : %.5e" % (tol))
+        scipytol = tolfact * tol / 2.220e-16  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
+        print("scipytol : %.5e" % scipytol)
         x0 = get_params(ht, rindex)
-        
+
         self.niter = 0
         self.objval = []
-        
-        x,f,d = scipy.optimize.fmin_l_bfgs_b(cyclic_merit_lag, x0,m=20, args = (self,),
-                                             iprint=iprint,maxfun=maxfun,factr = scipytol,bounds=bounds)
+
+        x, f, d = scipy.optimize.fmin_l_bfgs_b(
+            cyclic_merit_lag, x0, m=20, args=(self,), iprint=iprint, maxfun=maxfun, factr=scipytol, bounds=bounds
+        )
         ht = get_ht(x, rindex)
         hf = time2freq(ht)
-        
+
         self.hf_soln = hf[:]
-        
+
         hf = match_two_filters(_hf_prev, hf)
-        self.optimized_filters[isub,:] = hf
+        self.optimized_filters[isub, :] = hf
         self.hf_prev = hf.copy()
-        
-        ph = optimize_profile(cs,hf,self.bw,self.ref_freq)
+
+        ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
         ph[0] = 0.0
         pp = harm2phase(ph)
-        
-        self.intrinsic_profiles[isub,:] = pp
+
+        self.intrinsic_profiles[isub, :] = pp
         self.pp_int += pp
-        
+
         self.nopt += 1
-            
-            
-    def saveResults(self,fbase=None):
+
+    def saveResults(self, fbase=None):
         if fbase is None:
             fbase = self.filename
-        writeProfile(fbase + '.pp_int.txt', self.pp_int)
-        writeProfile(fbase + '.pp_ref.txt', self.pp_ref)
-        writeArray(fbase+'.hfs.txt',self.optimized_filters)
-        writeArray(fbase+'.dynspec.txt',self.dynamic_spectrum)
+        writeProfile(fbase + ".pp_int.txt", self.pp_int)
+        writeProfile(fbase + ".pp_ref.txt", self.pp_ref)
+        writeArray(fbase + ".hfs.txt", self.optimized_filters)
+        writeArray(fbase + ".dynspec.txt", self.dynamic_spectrum)
         pass
-    
-        
-            
-    def cyclic_variance(self,cs):
+
+    def cyclic_variance(self, cs):
         ih = self.nharm - 1
-        
-        imin,imax = chan_limits_cs(iharm = ih,nchan=self.nchan,bw=self.bw,ref_freq=self.ref_freq) #highest harmonic
-        var = (np.abs(cs[imin:imax,ih])**2).sum()
-        nvalid = imax-imin
-        var = var/nvalid
-        
-        for ih in range(1,self.nharm-1):
-            imin,imax = chan_limits_cs(iharm = ih,nchan=self.nchan,bw=self.bw,ref_freq=self.ref_freq)
-            nvalid += (imax-imin)
-        return var,nvalid*2
-            
-    def phase_gradient(self,cs,ph_ref = None):
+
+        imin, imax = chan_limits_cs(iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq)  # highest harmonic
+        var = (np.abs(cs[imin:imax, ih]) ** 2).sum()
+        nvalid = imax - imin
+        var = var / nvalid
+
+        for ih in range(1, self.nharm - 1):
+            imin, imax = chan_limits_cs(iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq)
+            nvalid += imax - imin
+        return var, nvalid * 2
+
+    def phase_gradient(self, cs, ph_ref=None):
         if ph_ref is None:
             ph_ref = self.ph_ref
         ih = 1
-        imin,imax = chan_limits_cs(iharm=ih,nchan=self.nchan,bw=self.bw,ref_freq=self.ref_freq)
-        grad_sum = cs[:,ih].sum()
+        imin, imax = chan_limits_cs(iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq)
+        grad_sum = cs[:, ih].sum()
         grad_sum /= ph_ref[ih]
         phase_angle = np.angle(grad_sum)
         # ensure -pi < ph < pi
         if phase_angle > np.pi:
-            phase_angle = phase_angle - 2*np.pi
-        #express as delay
+            phase_angle = phase_angle - 2 * np.pi
+        # express as delay
         phase_angle /= -2 * np.pi * self.ref_freq
         phase_angle *= 1e6 * self.bw
-        
-        if phase_angle > self.nchan/2:
-            delay = self.nchan/2
-        elif phase_angle < -(self.nchan/2):
-            delay = self.nchan/2 + 1
+
+        if phase_angle > self.nchan / 2:
+            delay = self.nchan / 2
+        elif phase_angle < -(self.nchan / 2):
+            delay = self.nchan / 2 + 1
         elif phase_angle < -0.1:
             delay = int(phase_angle) + self.nchan - 1
         else:
             delay = int(phase_angle)
-            
+
         return delay
-            
-        
-        
-        
-    def saveState(self,filename=None):
+
+    def saveState(self, filename=None):
         """
         not yet ready for use
         Save current state of this class (inlcuding current CS solution)
@@ -473,18 +485,17 @@ class CyclicSolver():
             if self.statefile:
                 filename = self.statefile
             else:
-                filename = self.filename + '.cysolve.pkl'
+                filename = self.filename + ".cysolve.pkl"
         orig_statefile = self.statefile
         orig_ar = self.ar
         self.ar = None
-        fh = open(filename,'w')
-        pickle.dump(self,fh,protocol=-1)
+        fh = open(filename, "w")
+        pickle.dump(self, fh, protocol=-1)
         fh.close()
         self.ar = orig_ar
         self.statefile = orig_statefile
-        print "Saved state in:", filename
-        
-            
+        print("Saved state in:", filename)
+
     def plotCurrentSolution(self):
         cs_model = self.model
         grad = self.grad
@@ -492,313 +503,446 @@ class CyclicSolver():
         ht = self.ht
         mlag = self.mlag
         fig = Figure()
-        ax1 = fig.add_subplot(3,3,1)
-        csextent = [1,mlag-1,self.rf+self.bw/2.0,self.rf-self.bw/2.0]
-        im = ax1.imshow(np.log10(np.abs(self.cs[:,1:mlag])),aspect='auto',interpolation='nearest',extent=csextent)
-        #im = ax1.imshow(cs2ps(self.cs),aspect='auto',interpolation='nearest',extent=csextent)
-        ax1.set_xlim(0,mlag)
-        ax1.text(0.9,0.9,"log|CS|",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax1.transAxes, bbox=dict(alpha=0.75,fc='white'))
-        im.set_clim(-4,2)
-        
-        ax1b = fig.add_subplot(3,3,2)
-        im = ax1b.imshow(np.angle(self.cs[:,:mlag])-np.median(np.angle(self.cs[:,:mlag]),axis=0)[None,:],cmap=plt.cm.hsv,aspect='auto',interpolation='nearest',extent=csextent)
-        #im = ax1b.imshow(self.cs[:,:mlag].imag,aspect='auto',interpolation='nearest',extent=csextent)
-        
-        im.set_clim(-np.pi,np.pi)
-        ax1b.set_xlim(0,mlag)
-        ax1b.text(0.9,0.9,"angle(CS)",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax1b.transAxes, bbox=dict(alpha=0.75,fc='white'))
+        ax1 = fig.add_subplot(3, 3, 1)
+        csextent = [1, mlag - 1, self.rf + self.bw / 2.0, self.rf - self.bw / 2.0]
+        im = ax1.imshow(np.log10(np.abs(self.cs[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+        # im = ax1.imshow(cs2ps(self.cs),aspect='auto',interpolation='nearest',extent=csextent)
+        ax1.set_xlim(0, mlag)
+        ax1.text(
+            0.9,
+            0.9,
+            "log|CS|",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax1.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
+        im.set_clim(-4, 2)
+
+        ax1b = fig.add_subplot(3, 3, 2)
+        im = ax1b.imshow(
+            np.angle(self.cs[:, :mlag]) - np.median(np.angle(self.cs[:, :mlag]), axis=0)[None, :],
+            cmap=plt.cm.hsv,
+            aspect="auto",
+            interpolation="nearest",
+            extent=csextent,
+        )
+        # im = ax1b.imshow(self.cs[:,:mlag].imag,aspect='auto',interpolation='nearest',extent=csextent)
+
+        im.set_clim(-np.pi, np.pi)
+        ax1b.set_xlim(0, mlag)
+        ax1b.text(
+            0.9,
+            0.9,
+            "angle(CS)",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax1b.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
         for tl in ax1b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        ax2 = fig.add_subplot(3,3,4)
-        im = ax2.imshow(np.log10(np.abs(cs_model[:,1:mlag])),aspect='auto',interpolation='nearest',extent=csextent)
-        #im = ax2.imshow(cs2ps(cs_model),aspect='auto',interpolation='nearest',extent=csextent)
-        im.set_clim(-4,2)
-        ax2.set_xlim(0,mlag)
-        ax2.set_ylabel('RF (MHz)')
-        ax2.text(0.9,0.9,"log|CS model|",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax2.transAxes, bbox=dict(alpha=0.75,fc='white'))
+        ax2 = fig.add_subplot(3, 3, 4)
+        im = ax2.imshow(np.log10(np.abs(cs_model[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+        # im = ax2.imshow(cs2ps(cs_model),aspect='auto',interpolation='nearest',extent=csextent)
+        im.set_clim(-4, 2)
+        ax2.set_xlim(0, mlag)
+        ax2.set_ylabel("RF (MHz)")
+        ax2.text(
+            0.9,
+            0.9,
+            "log|CS model|",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax2.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
 
-        ax2b = fig.add_subplot(3,3,5)
-        im = ax2b.imshow(np.angle(cs_model[:,:mlag])-np.median(np.angle(cs_model[:,:mlag]),axis=0)[None,:],cmap=plt.cm.hsv,aspect='auto',interpolation='nearest',extent=csextent)
-        #im = ax2b.imshow(cs_model[:,:mlag].imag,aspect='auto',interpolation='nearest',extent=csextent)
-        im.set_clim(-np.pi,np.pi)
-        ax2b.set_xlim(0,mlag)
-        ax2b.text(0.9,0.9,"angle(CS model)",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax2b.transAxes, bbox=dict(alpha=0.75,fc='white'))
+        ax2b = fig.add_subplot(3, 3, 5)
+        im = ax2b.imshow(
+            np.angle(cs_model[:, :mlag]) - np.median(np.angle(cs_model[:, :mlag]), axis=0)[None, :],
+            cmap=plt.cm.hsv,
+            aspect="auto",
+            interpolation="nearest",
+            extent=csextent,
+        )
+        # im = ax2b.imshow(cs_model[:,:mlag].imag,aspect='auto',interpolation='nearest',extent=csextent)
+        im.set_clim(-np.pi, np.pi)
+        ax2b.set_xlim(0, mlag)
+        ax2b.text(
+            0.9,
+            0.9,
+            "angle(CS model)",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax2b.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
         for tl in ax2b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        sopt = optimize_profile(self.cs,hf,self.bw,self.ref_freq)
+        sopt = optimize_profile(self.cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
-        sopt[0] = 0.0        
+        sopt[0] = 0.0
         smeas = normalize_profile(self.cs.mean(0))
         smeas[0] = 0.0
-#        cs_model0,csplus,csminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
+        #        cs_model0,csplus,csminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
 
-        ax3 = fig.add_subplot(3,3,7)
-#        ax3.imshow(np.log(np.abs(cs_model0)[:,1:]),aspect='auto')
-        err = (np.abs(self.cs-cs_model)[:,1:mlag])
-        #err = cs2ps(self.cs) - cs2ps(normalize_cs(cs_model,self.bw,self.ref_freq))
-        im = ax3.imshow(err,aspect='auto',interpolation='nearest',extent=csextent)
-        ax3.set_xlim(0,mlag)
-#        im.set_clim(err[1:-1,1:-1].min(),err[1:-1,1:-1].max())
-        im.set_clim(0,3*self.noise)
-        ax3.text(0.9,0.9,"|error|",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax3.transAxes, bbox=dict(alpha=0.75,fc='white'))
-        ax3.set_xlabel('Harmonic')
-        
-        ax3b = fig.add_subplot(3,3,8)
-        im = ax3b.imshow(np.angle((self.cs[:,:mlag]/cs_model[:,:mlag])),cmap=plt.cm.hsv,aspect='auto',interpolation='nearest',extent=csextent)
-        #im = ax3b.imshow((self.cs[:,:mlag]-cs_model[:,:mlag]).imag,aspect='auto',interpolation='nearest',extent=csextent)
-        im.set_clim(-np.pi/2.,np.pi/2.)
-        ax3b.set_xlim(0,mlag)
-        ax3b.text(0.9,0.9,"angle(error)",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax3b.transAxes, bbox=dict(alpha=0.75,fc='white'))
+        ax3 = fig.add_subplot(3, 3, 7)
+        #        ax3.imshow(np.log(np.abs(cs_model0)[:,1:]),aspect='auto')
+        err = np.abs(self.cs - cs_model)[:, 1:mlag]
+        # err = cs2ps(self.cs) - cs2ps(normalize_cs(cs_model,self.bw,self.ref_freq))
+        im = ax3.imshow(err, aspect="auto", interpolation="nearest", extent=csextent)
+        ax3.set_xlim(0, mlag)
+        #        im.set_clim(err[1:-1,1:-1].min(),err[1:-1,1:-1].max())
+        im.set_clim(0, 3 * self.noise)
+        ax3.text(
+            0.9,
+            0.9,
+            "|error|",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax3.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
+        ax3.set_xlabel("Harmonic")
+
+        ax3b = fig.add_subplot(3, 3, 8)
+        im = ax3b.imshow(
+            np.angle((self.cs[:, :mlag] / cs_model[:, :mlag])),
+            cmap=plt.cm.hsv,
+            aspect="auto",
+            interpolation="nearest",
+            extent=csextent,
+        )
+        # im = ax3b.imshow((self.cs[:,:mlag]-cs_model[:,:mlag]).imag,aspect='auto',interpolation='nearest',extent=csextent)
+        im.set_clim(-np.pi / 2.0, np.pi / 2.0)
+        ax3b.set_xlim(0, mlag)
+        ax3b.text(
+            0.9,
+            0.9,
+            "angle(error)",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax3b.transAxes,
+            bbox=dict(alpha=0.75, fc="white"),
+        )
         for tl in ax3b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        ax3b.set_xlabel('Harmonic')
+        ax3b.set_xlabel("Harmonic")
 
-        ax4 = fig.add_subplot(4,3,3)
-        t = np.arange(ht.shape[0])/self.bw
-        ax4.plot(t,np.roll(20*np.log10(np.abs(ht)),(ht.shape[0]/2)-self.rindex))
-        ax4.plot(t,np.roll(20*np.log10(np.convolve(np.ones((10,))/10.0,np.abs(ht),mode='same')),(ht.shape[0]/2)-self.rindex),linewidth=2,color='r',alpha=0.4)
-        
-        ax4.set_ylim(0,80)
-        ax4.set_xlim(t[0],t[-1])
-        ax4.text(0.9,0.9,"dB|h(t)|$^2$",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax4.transAxes)
-        ax4.text(0.95,0.01,"$\\mu$s",
-                 fontdict=dict(size='small'),va='bottom',ha='right',
-                 transform=ax4.transAxes)
-        ax4b = fig.add_subplot(4,3,6)
-        f = np.linspace(self.rf+self.bw/2.0,self.rf-self.bw/2.0,self.nchan)
-        ax4b.plot(f,np.abs(hf))
-        ax4b.text(0.9,0.9,"|H(f)|",
-                 fontdict=dict(size='small'),va='top',ha='right',
-                 transform=ax4b.transAxes)
-        ax4b.text(0.95,0.01,"MHz",
-                 fontdict=dict(size='small'),va='bottom',ha='right',
-                 transform=ax4b.transAxes)
-        ax4b.set_xlim(f.min(),f.max())
+        ax4 = fig.add_subplot(4, 3, 3)
+        t = np.arange(ht.shape[0]) / self.bw
+        ax4.plot(t, np.roll(20 * np.log10(np.abs(ht)), (ht.shape[0] / 2) - self.rindex))
+        ax4.plot(
+            t,
+            np.roll(
+                20 * np.log10(np.convolve(np.ones((10,)) / 10.0, np.abs(ht), mode="same")),
+                (ht.shape[0] / 2) - self.rindex,
+            ),
+            linewidth=2,
+            color="r",
+            alpha=0.4,
+        )
+
+        ax4.set_ylim(0, 80)
+        ax4.set_xlim(t[0], t[-1])
+        ax4.text(0.9, 0.9, "dB|h(t)|$^2$", fontdict=dict(size="small"), va="top", ha="right", transform=ax4.transAxes)
+        ax4.text(0.95, 0.01, "$\\mu$s", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4.transAxes)
+        ax4b = fig.add_subplot(4, 3, 6)
+        f = np.linspace(self.rf + self.bw / 2.0, self.rf - self.bw / 2.0, self.nchan)
+        ax4b.plot(f, np.abs(hf))
+        ax4b.text(0.9, 0.9, "|H(f)|", fontdict=dict(size="small"), va="top", ha="right", transform=ax4b.transAxes)
+        ax4b.text(0.95, 0.01, "MHz", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4b.transAxes)
+        ax4b.set_xlim(f.min(), f.max())
         ax4b.xaxis.set_major_locator(plt.MaxNLocator(4))
-        ax5 = fig.add_subplot(4,3,9)
+        ax5 = fig.add_subplot(4, 3, 9)
         if len(self.objval) >= 3:
             x = np.abs(np.diff(np.array(self.objval).flatten()))
-            ax5.plot(np.arange(x.shape[0]),np.log10(x))
-        ax5.text(0.9,0.9,"log($\\Delta$merit)",
-                 fontdict=dict(size='small'),va='top',ha='right',transform=ax5.transAxes)
-        ax6 = fig.add_subplot(4,3,12)
-        pref =  harm2phase(self.s0)
-        ax6.plot(pref,label='Reference',linewidth=2)
-        ax6.plot(harm2phase(sopt),'r',label='Intrinsic')
-        ax6.plot(harm2phase(smeas),'g',label='Measured')
-        l = ax6.legend(loc='upper left',prop=dict(size='xx-small'),title='Profiles')
+            ax5.plot(np.arange(x.shape[0]), np.log10(x))
+        ax5.text(
+            0.9, 0.9, "log($\\Delta$merit)", fontdict=dict(size="small"), va="top", ha="right", transform=ax5.transAxes
+        )
+        ax6 = fig.add_subplot(4, 3, 12)
+        pref = harm2phase(self.s0)
+        ax6.plot(pref, label="Reference", linewidth=2)
+        ax6.plot(harm2phase(sopt), "r", label="Intrinsic")
+        ax6.plot(harm2phase(smeas), "g", label="Measured")
+        l = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
         l.get_frame().set_alpha(0.5)
-        ax6.set_xlim(0,pref.shape[0])
+        ax6.set_xlim(0, pref.shape[0])
         fname = self.filename[-50:]
         if len(self.filename) > 50:
-            fname = '...' + fname
-        title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, self.isub,self.ipol,self.nopt)
-        title += ("Source: %s Freq: %s MHz Feval #%04d Merit: %.3e Grad: %.3e" % 
-                  (self.source, self.rf, self.niter, self.objval[-1], np.abs(grad).sum()))
-        fig.suptitle(title, size='small')
+            fname = "..." + fname
+        title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, self.isub, self.ipol, self.nopt)
+        title += "Source: %s Freq: %s MHz Feval #%04d Merit: %.3e Grad: %.3e" % (
+            self.source,
+            self.rf,
+            self.niter,
+            self.objval[-1],
+            np.abs(grad).sum(),
+        )
+        fig.suptitle(title, size="small")
         canvas = FigureCanvasAgg(fig)
-        fname = os.path.join(self.plotdir,('%s_%04d_%04d.png' % (self.source, self.nopt, self.niter)))
+        fname = os.path.join(self.plotdir, ("%s_%04d_%04d.png" % (self.source, self.nopt, self.niter)))
         canvas.print_figure(fname)
 
 
-def plotSimulation(CS,mlag=100):
+def plotSimulation(CS, mlag=100):
     if CS.ht0 is None:
-        print "Does not appear this is a simulation run"
+        print("Does not appear this is a simulation run")
     grad = CS.grad
     hf = CS.hf
-    ht = CS.ht#[CS.isub,:]
+    ht = CS.ht  # [CS.isub,:]
     cs0 = CS.modelCS(ht)
-    t = np.arange(ht.shape[0])/CS.bw
-    f = np.linspace(CS.rf+CS.bw/2.0,CS.rf-CS.bw/2.0,CS.nchan)
-    csextent = [1,mlag-1,CS.rf-CS.bw/2.0,CS.rf+CS.bw/2.0]
+    t = np.arange(ht.shape[0]) / CS.bw
+    f = np.linspace(CS.rf + CS.bw / 2.0, CS.rf - CS.bw / 2.0, CS.nchan)
+    csextent = [1, mlag - 1, CS.rf - CS.bw / 2.0, CS.rf + CS.bw / 2.0]
     ht0 = CS.ht0[CS.isub]
     hf0 = match_two_filters(hf, time2freq(ht0))
     cs_model = CS.modelCS(ht0)
-    
-    fig = Figure(figsize=(10,7))
-    ax1 = fig.add_subplot(3,3,1)
-    ax1.plot(f,np.abs(hf),label=r'|$\hat{H}(f)$|')
-    ax1.plot(f,np.abs(hf0),label='|$H$(f)|')
-    l = ax1.legend(loc='upper right',prop=dict(size='x-small'))
+
+    fig = Figure(figsize=(10, 7))
+    ax1 = fig.add_subplot(3, 3, 1)
+    ax1.plot(f, np.abs(hf), label=r"|$\hat{H}(f)$|")
+    ax1.plot(f, np.abs(hf0), label="|$H$(f)|")
+    l = ax1.legend(loc="upper right", prop=dict(size="x-small"))
     l.get_frame().set_alpha(0.5)
-    ax1.text(0.9,0.1,"MHz",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax1.transAxes, bbox=dict(alpha=0.75,fc='white'))
+    ax1.text(
+        0.9,
+        0.1,
+        "MHz",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax1.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
 
-    ax1.set_xlim(f.min(),f.max())
-    
-    ax2 = fig.add_subplot(3,3,4)
-    ax2.plot(f,np.abs(hf/hf0),label=r'$\left|\frac{\hat{H}(f)}{H(f)}\right|$')
-    ax2.plot(f,np.angle(hf/hf0), alpha=0.7, label = r'$\angle\left(\frac{\hat{H}(f)}{H(f)}\right)$')
-    l = ax2.legend(loc='lower left',prop=dict(size='x-small'))
+    ax1.set_xlim(f.min(), f.max())
+
+    ax2 = fig.add_subplot(3, 3, 4)
+    ax2.plot(f, np.abs(hf / hf0), label=r"$\left|\frac{\hat{H}(f)}{H(f)}\right|$")
+    ax2.plot(f, np.angle(hf / hf0), alpha=0.7, label=r"$\angle\left(\frac{\hat{H}(f)}{H(f)}\right)$")
+    l = ax2.legend(loc="lower left", prop=dict(size="x-small"))
     l.get_frame().set_alpha(0.5)
-    ax2.text(0.9,0.1,"MHz",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax2.transAxes, bbox=dict(alpha=0.75,fc='white'))
+    ax2.text(
+        0.9,
+        0.1,
+        "MHz",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax2.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
 
+    # ax2.plot(f[:-1],np.diff(np.angle(hf/hf0)))
+    # ax2.plot(f[:-1],np.diff(np.angle(minphase(np.abs(hf))/hf0)))
+    ax2.set_ylim(-3.2, 3.2)
+    ax2.set_xlim(f.min(), f.max())
 
-    #ax2.plot(f[:-1],np.diff(np.angle(hf/hf0)))
-    #ax2.plot(f[:-1],np.diff(np.angle(minphase(np.abs(hf))/hf0)))
-    ax2.set_ylim(-3.2,3.2)
-    ax2.set_xlim(f.min(),f.max())
-    
-    ax3 = fig.add_subplot(3,3,2)
-#    im = ax3.imshow(np.abs(cs_model[:,:mlag]/cs0[:,:mlag]),
-#                     aspect='auto',interpolation='nearest',extent=csextent)
-#    im.set_clim(0.5,2)
-    pt = 1e3*np.linspace(0,1,CS.nphase) / CS.ref_freq
-    ax3.plot(pt,np.fft.fftshift(CS.pp_meas),'r',label='measured')
-    ax3.plot(pt,np.fft.fftshift(CS.pp_int),'cyan',alpha=0.7,label='deconvolved')
-    ax3.plot(pt,np.fft.fftshift(harm2phase(CS.s0)),'k',label='original')
-    ax3.errorbar([pt[len(pt)/4]],[CS.pp_meas.max()/2.0],xerr=CS.tau/1e3,capsize=5,linewidth=2)
-    ax3.text(pt[len(pt)/4],CS.pp_meas.max()*.55,'tau',fontdict=dict(size='small'))
-    ax3.set_xlim(0,pt[-1])
-    l = ax3.legend(loc='upper right',prop=dict(size='x-small'))
+    ax3 = fig.add_subplot(3, 3, 2)
+    #    im = ax3.imshow(np.abs(cs_model[:,:mlag]/cs0[:,:mlag]),
+    #                     aspect='auto',interpolation='nearest',extent=csextent)
+    #    im.set_clim(0.5,2)
+    pt = 1e3 * np.linspace(0, 1, CS.nphase) / CS.ref_freq
+    ax3.plot(pt, np.fft.fftshift(CS.pp_meas), "r", label="measured")
+    ax3.plot(pt, np.fft.fftshift(CS.pp_int), "cyan", alpha=0.7, label="deconvolved")
+    ax3.plot(pt, np.fft.fftshift(harm2phase(CS.s0)), "k", label="original")
+    ax3.errorbar([pt[len(pt) / 4]], [CS.pp_meas.max() / 2.0], xerr=CS.tau / 1e3, capsize=5, linewidth=2)
+    ax3.text(pt[len(pt) / 4], CS.pp_meas.max() * 0.55, "tau", fontdict=dict(size="small"))
+    ax3.set_xlim(0, pt[-1])
+    l = ax3.legend(loc="upper right", prop=dict(size="x-small"))
     l.get_frame().set_alpha(0.5)
-    ax3.text(0.9,0.1,"ms",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax3.transAxes, bbox=dict(alpha=0.75,fc='white'))
+    ax3.text(
+        0.9,
+        0.1,
+        "ms",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax3.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
 
+    ax4 = fig.add_subplot(3, 3, 3)
+    im = ax4.imshow(
+        np.angle(cs_model[:, :mlag] / cs0[:, :mlag]),
+        cmap=plt.cm.hsv,
+        aspect="auto",
+        interpolation="nearest",
+        extent=csextent,
+    )
+    im.set_clim(-3.2, 3.2)
+    ax4.text(
+        0.9,
+        0.9,
+        "angle cs_model/cs0",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax4.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
 
-    
-    ax4 = fig.add_subplot(3,3,3)
-    im = ax4.imshow(np.angle(cs_model[:,:mlag]/cs0[:,:mlag]), cmap=plt.cm.hsv,
-                     aspect='auto',interpolation='nearest',extent=csextent)
-    im.set_clim(-3.2,3.2)
-    ax4.text(0.9,0.9,"angle cs_model/cs0",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax4.transAxes, bbox=dict(alpha=0.75,fc='white'))
-
-    
-    ax5 = fig.add_subplot(3,3,5)
-#    im = ax5.imshow(np.abs(CS.cs[:,:mlag]/cs0[:,:mlag]),
-#                     aspect='auto',interpolation='nearest',extent=csextent)
-#    im.set_clim(0.5,2)
-    ax5.plot(t/1e3,np.fft.fftshift(20*np.log10(np.abs(ht0)/np.abs(ht0).max())),label='dB($|h(t)|^2$)')
-    ax5.plot(t/1e3,np.fft.fftshift(20*np.log10(np.abs(ht)/np.abs(ht).max()))-40.0,'r',label=r'dB($|\hat{h}(t)|^2$)-40') 
-    ax5.set_ylim(-80.,0)
-    ax5.set_xlim(0,t[-1]/1e3)
-    l = ax5.legend(loc='upper left',prop=dict(size='x-small'))
+    ax5 = fig.add_subplot(3, 3, 5)
+    #    im = ax5.imshow(np.abs(CS.cs[:,:mlag]/cs0[:,:mlag]),
+    #                     aspect='auto',interpolation='nearest',extent=csextent)
+    #    im.set_clim(0.5,2)
+    ax5.plot(t / 1e3, np.fft.fftshift(20 * np.log10(np.abs(ht0) / np.abs(ht0).max())), label="dB($|h(t)|^2$)")
+    ax5.plot(
+        t / 1e3,
+        np.fft.fftshift(20 * np.log10(np.abs(ht) / np.abs(ht).max())) - 40.0,
+        "r",
+        label=r"dB($|\hat{h}(t)|^2$)-40",
+    )
+    ax5.set_ylim(-80.0, 0)
+    ax5.set_xlim(0, t[-1] / 1e3)
+    l = ax5.legend(loc="upper left", prop=dict(size="x-small"))
     l.get_frame().set_alpha(0.5)
-    ax5.text(0.9,0.1,"ms",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax5.transAxes, bbox=dict(alpha=0.75,fc='white'))
+    ax5.text(
+        0.9,
+        0.1,
+        "ms",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax5.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
 
-
-    
-    ax8 = fig.add_subplot(3,3,8)
+    ax8 = fig.add_subplot(3, 3, 8)
     maxt0 = t[np.fft.fftshift(np.abs(ht0)).argmax()]
     maxt = t[np.fft.fftshift(np.abs(ht)).argmax()]
     if maxt0 < maxt:
         maxt = maxt0
-#    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht0)/np.abs(ht0).max())),label='dB($|h(t)|^2$)')
-#    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht)/np.abs(ht).max())),'r',label=r'dB($|\hat{h}(t)|^2$)') 
-#    ax8.set_ylim(-80.,0)
+    #    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht0)/np.abs(ht0).max())),label='dB($|h(t)|^2$)')
+    #    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht)/np.abs(ht).max())),'r',label=r'dB($|\hat{h}(t)|^2$)')
+    #    ax8.set_ylim(-80.,0)
 
-    ax8.plot(t-maxt,np.fft.fftshift((np.abs(ht0)/np.abs(ht0).max())),label='$|h(t)|$')
-    ax8.plot(t-maxt,np.fft.fftshift((np.abs(ht)/np.abs(ht).max())),'r',label=r'$|\hat{h}(t)|$') 
-    
-    left = - 5 * CS.tau
-    right =  20 * CS.tau
-    if right > t[-1]-maxt:
-        right = t[-1]-maxt
-    ax8.set_xlim(left,right)
-    l = ax8.legend(loc='upper right',prop=dict(size='x-small'))
+    ax8.plot(t - maxt, np.fft.fftshift((np.abs(ht0) / np.abs(ht0).max())), label="$|h(t)|$")
+    ax8.plot(t - maxt, np.fft.fftshift((np.abs(ht) / np.abs(ht).max())), "r", label=r"$|\hat{h}(t)|$")
+
+    left = -5 * CS.tau
+    right = 20 * CS.tau
+    if right > t[-1] - maxt:
+        right = t[-1] - maxt
+    ax8.set_xlim(left, right)
+    l = ax8.legend(loc="upper right", prop=dict(size="x-small"))
     l.get_frame().set_alpha(0.5)
-    ax8.set_xlabel(r'$\mu$s')
-    
-    ax6 = fig.add_subplot(3,3,6)
-    im = ax6.imshow(np.angle(CS.cs[:,:mlag]/cs0[:,:mlag]), cmap=plt.cm.hsv,
-                     aspect='auto',interpolation='nearest',extent=csextent)
-    im.set_clim(-3.2,3.2)
-    ax6.text(0.9,0.9,"angle cs_meas/cs0",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax6.transAxes, bbox=dict(alpha=0.75,fc='white'))
-    
-    ax7 = fig.add_subplot(3,3,7)
-    im = ax7.imshow(np.log10(np.abs(CS.cs[:,:mlag])), 
-                     aspect='auto',interpolation='nearest',extent=csextent)
-    ax7.text(0.9,0.9,"log|CS meas|",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax7.transAxes, bbox=dict(alpha=0.75,fc='white'))
-    ax7.set_xlabel('harmonic')
-    ax7.set_ylabel('MHz')
+    ax8.set_xlabel(r"$\mu$s")
 
-    ax9 = fig.add_subplot(3,3,9)
-    im = ax9.imshow(np.angle(CS.cs[:,:mlag]), cmap = plt.cm.hsv,
-                     aspect='auto',interpolation='nearest',extent=csextent)
-    
-    ax9.text(0.9,0.9,"angle(CS meas)",
-         fontdict=dict(size='small'),va='top',ha='right',
-         transform=ax9.transAxes, bbox=dict(alpha=0.75,fc='white'))
-    ax9.set_xlabel('harmonic')
-    
+    ax6 = fig.add_subplot(3, 3, 6)
+    im = ax6.imshow(
+        np.angle(CS.cs[:, :mlag] / cs0[:, :mlag]),
+        cmap=plt.cm.hsv,
+        aspect="auto",
+        interpolation="nearest",
+        extent=csextent,
+    )
+    im.set_clim(-3.2, 3.2)
+    ax6.text(
+        0.9,
+        0.9,
+        "angle cs_meas/cs0",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax6.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
+
+    ax7 = fig.add_subplot(3, 3, 7)
+    im = ax7.imshow(np.log10(np.abs(CS.cs[:, :mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+    ax7.text(
+        0.9,
+        0.9,
+        "log|CS meas|",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax7.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
+    ax7.set_xlabel("harmonic")
+    ax7.set_ylabel("MHz")
+
+    ax9 = fig.add_subplot(3, 3, 9)
+    im = ax9.imshow(
+        np.angle(CS.cs[:, :mlag]), cmap=plt.cm.hsv, aspect="auto", interpolation="nearest", extent=csextent
+    )
+
+    ax9.text(
+        0.9,
+        0.9,
+        "angle(CS meas)",
+        fontdict=dict(size="small"),
+        va="top",
+        ha="right",
+        transform=ax9.transAxes,
+        bbox=dict(alpha=0.75, fc="white"),
+    )
+    ax9.set_xlabel("harmonic")
+
     fname = CS.filename[-50:]
     if len(CS.filename) > 50:
-        fname = '...' + fname
+        fname = "..." + fname
     try:
-        harmstr = 'Harmonics: %d' % CS.pharm
+        harmstr = "Harmonics: %d" % CS.pharm
     except AttributeError:
-        harmstr = ''
-        
+        harmstr = ""
+
     try:
-        taustr = 'h(t) tau: %.1f' % CS.tau
+        taustr = "h(t) tau: %.1f" % CS.tau
         if CS.noise is not None:
-            snrstr = 'snr: %.3f' % CS.noise
+            snrstr = "snr: %.3f" % CS.noise
         else:
-            snrstr = ''
+            snrstr = ""
     except AttributeError:
-        taustr = ''        
-  
-     
-    title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, CS.isub,CS.ipol,CS.nopt)
-    title += harmstr + ' ' + taustr + ' ' + snrstr + ' ' + (" Feval #%04d Merit: %.3e" % 
-              (CS.niter, CS.objval[-1]))
-    fig.suptitle(title, size='small')
+        taustr = ""
+
+    title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, CS.isub, CS.ipol, CS.nopt)
+    title += harmstr + " " + taustr + " " + snrstr + " " + (" Feval #%04d Merit: %.3e" % (CS.niter, CS.objval[-1]))
+    fig.suptitle(title, size="small")
     canvas = FigureCanvasAgg(fig)
-    fname = os.path.join(CS.plotdir,('sim_SNR_%.1f_%s_%04d_%04d.pdf' % (CS.noise, CS.source, CS.nopt, CS.niter)))
+    fname = os.path.join(CS.plotdir, ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter)))
     canvas.print_figure(fname)
 
 
 def fold(v):
     """
     Fold negative response onto positive time for minimum phase calculation
-    """        
+    """
     n = v.shape[0]
-    nt = n/2
+    nt = n / 2
     rf = np.zeros_like(v[:nt])
     rf[:-1] = v[1:nt]
-    rf += np.conj(v[:nt-1:-1])
+    rf += np.conj(v[: nt - 1 : -1])
     rw = np.zeros_like(v)
     rw[0] = v[0]
-    rw[1:nt+1] = rf
-    return rw    
+    rw[1 : nt + 1] = rf
+    return rw
+
 
 def minphase(v):
     clipped = v.copy()
     thresh = 1e-5
     clipped[np.abs(v) < thresh] = thresh
-    return np.exp(np.fft.fft(fold(np.fft.ifft(np.log(clipped)))))        
+    return np.exp(np.fft.fft(fold(np.fft.ifft(np.log(clipped)))))
+
+
 def loadArray(fname):
     """
     Load array from txt file in format generated by filter_profile,
     useful for filters.txt, dynamic_spectrum.txt
     """
-    fh = open(fname,'r')
+    fh = open(fname, "r")
     try:
         x = int(fh.readline())
     except:
@@ -808,39 +952,41 @@ def loadArray(fname):
     except:
         raise Exception("couldn't read second dimension")
     raw = np.loadtxt(fh)
-    if raw.shape[0] != x*y:
-        raise Exception("number of rows of data=",raw.shape[0]," not equal to product of dimensions:",x,y)
+    if raw.shape[0] != x * y:
+        raise Exception("number of rows of data=", raw.shape[0], " not equal to product of dimensions:", x, y)
     if len(raw.shape) > 1:
-        data = raw[:,0] + raw[:,1]*1j
+        data = raw[:, 0] + raw[:, 1] * 1j
     else:
         data = raw[:]
-    data.shape = (x,y)
+    data.shape = (x, y)
     fh.close()
     return data
 
-def writeArray(fname,arr):
+
+def writeArray(fname, arr):
     """
     Write array to ascii file in same format as filter_profile does
     """
-    fh = open(fname,'w')
-    fh.write('%d\n' % arr.shape[0])
-    fh.write('%d\n' % arr.shape[1])
+    fh = open(fname, "w")
+    fh.write("%d\n" % arr.shape[0])
+    fh.write("%d\n" % arr.shape[1])
     for x in range(arr.shape[0]):
         for y in range(arr.shape[1]):
             if arr.dtype == np.complex:
-                fh.write('%.7e %.7e\n' % (arr[x,y].real, arr[x,y].imag))
+                fh.write("%.7e %.7e\n" % (arr[x, y].real, arr[x, y].imag))
             else:
-                fh.write('%.7e\n' % (arr[x,y]))
+                fh.write("%.7e\n" % (arr[x, y]))
     fh.close()
-    
-def writeProfile(fname,prof):
+
+
+def writeProfile(fname, prof):
     """
     Write profile to ascii file in same format as filter_profile does
     """
-    t = np.linspace(0,1,prof.shape[0],endpoint=False)
-    fh = open(fname,'w')
+    t = np.linspace(0, 1, prof.shape[0], endpoint=False)
+    fh = open(fname, "w")
     for x in range(prof.shape[0]):
-        fh.write('%.7e %.7e\n' % (t[x],prof[x]))
+        fh.write("%.7e %.7e\n" % (t[x], prof[x]))
     fh.close()
 
 
@@ -848,9 +994,10 @@ def loadProfile(fname):
     """
     Load profile in format generated by filter_profile
     """
-    
+
     x = np.loadtxt(fname)
-    return x[:,1]
+    return x[:, 1]
+
 
 # np.fft does /n for all iffts, unlike fftw. So for now we keep normalization same for cross check
 # by multiplying by n
@@ -860,53 +1007,65 @@ def loadProfile(fname):
 # However the fftw documentation indicates that one should instead divide by the length of the
 # input array.
 # I've left the bug in for now to compare directly to filter_profile
- 
+
+
 def cs2cc(cs):
-    return cs.shape[0] * np.fft.ifft(cs,axis=0)
+    return cs.shape[0] * np.fft.ifft(cs, axis=0)
+
+
 def cc2cs(cc):
-    cs = np.fft.fft(cc,axis=0)
-    #cc2cs_renorm
-    return cs/cs.shape[0]
+    cs = np.fft.fft(cc, axis=0)
+    # cc2cs_renorm
+    return cs / cs.shape[0]
+
 
 def ps2cs(ps):
-    cs =  np.fft.rfft(ps,axis=1)
-    #ps2cs renorm
-    return cs/cs.shape[1] # original version from Cyclic-modelling
-    #return cs/(2*(cs.shape[1] - 1))
+    cs = np.fft.rfft(ps, axis=1)
+    # ps2cs renorm
+    return cs / cs.shape[1]  # original version from Cyclic-modelling
+    # return cs/(2*(cs.shape[1] - 1))
+
 
 def cs2ps(cs):
-    return (cs.shape[1] -1) * 2 * np.fft.irfft(cs,axis=1)
+    return (cs.shape[1] - 1) * 2 * np.fft.irfft(cs, axis=1)
+
 
 def time2freq(ht):
     hf = np.fft.fft(ht)
-    #filter_freq_renorm
-    return hf/hf.shape[0]
+    # filter_freq_renorm
+    return hf / hf.shape[0]
+
 
 def freq2time(hf):
     return hf.shape[0] * np.fft.ifft(hf)
 
+
 def harm2phase(ph):
     return (ph.shape[0] - 1) * 2 * np.fft.irfft(ph)
 
+
 def phase2harm(pp):
     ph = np.fft.rfft(pp)
-    #profile_harm_renorm
-    return ph/ph.shape[0]  #original version from Cyclic-modelling
-    #return ph/(2*(ph.shape[0]-1))
+    # profile_harm_renorm
+    return ph / ph.shape[0]  # original version from Cyclic-modelling
+    # return ph/(2*(ph.shape[0]-1))
 
-def match_two_filters(hf1,hf2):
+
+def match_two_filters(hf1, hf2):
     z = (hf1 * np.conj(hf2)).sum()
-    z2 = (hf2 * np.conj(hf2)).sum() # = np.abs(hf2)**2.sum()
+    z2 = (hf2 * np.conj(hf2)).sum()  # = np.abs(hf2)**2.sum()
     z /= np.abs(z)
-    z *= np.sqrt(1.0*hf1.shape[0]/np.real(z2))
-    return hf2*z
+    z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
+    return hf2 * z
+
 
 def normalize_profile(ph):
     """
     Normalize harmonic profile such that first harmonic has magnitude 1
     """
-    return ph/np.abs(ph[1])
-    
+    return ph / np.abs(ph[1])
+
+
 def normalize_pp(pp):
     """
     Normalize a profile but keep it in phase rather than harmonics
@@ -916,193 +1075,203 @@ def normalize_pp(pp):
     ph[0] = 0
     return harm2phase(ph)
 
-def normalize_cs(cs,bw,ref_freq):
-    rms1 = rms_cs(cs,ih=1,bw=bw,ref_freq=ref_freq)
-    rmsn = rms_cs(cs,ih=cs.shape[1]-1,bw=bw,ref_freq=ref_freq)
-    normfac = np.sqrt(np.abs(rms1**2-rmsn**2))
-    return cs/normfac
 
-def rms_cs(cs,ih,bw,ref_freq):
+def normalize_cs(cs, bw, ref_freq):
+    rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
+    rmsn = rms_cs(cs, ih=cs.shape[1] - 1, bw=bw, ref_freq=ref_freq)
+    normfac = np.sqrt(np.abs(rms1**2 - rmsn**2))
+    return cs / normfac
+
+
+def rms_cs(cs, ih, bw, ref_freq):
     nchan = cs.shape[0]
-    imin,imax = chan_limits_cs(ih,nchan,bw,ref_freq)
-    rms = np.sqrt((np.abs(cs[imin:imax,ih])**2).mean())
+    imin, imax = chan_limits_cs(ih, nchan, bw, ref_freq)
+    rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
 
-def cyclic_padding(cs,bw,ref_freq):
+
+def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
     for ih in range(nharm):
-        imin,imax = chan_limits_cs(ih,nchan,bw,ref_freq)
-        cs[:imin,ih] = 0
-        cs[imax:,ih] = 0
+        imin, imax = chan_limits_cs(ih, nchan, bw, ref_freq)
+        cs[:imin, ih] = 0
+        cs[imax:, ih] = 0
     return cs
 
-def chan_limits_cs(iharm,nchan,bw,ref_freq):
+
+def chan_limits_cs(iharm, nchan, bw, ref_freq):
     inv_aspect = ref_freq * nchan
-    inv_aspect *= iharm / (bw*1e6)
+    inv_aspect *= iharm / (bw * 1e6)
     inv_aspect -= 1
     inv_aspect /= 2.0
     ichan = int(inv_aspect) + 1
-    if ichan > nchan/2:
-        ichan = nchan/2
-    return (ichan,nchan-ichan) #min,max
+    if ichan > nchan / 2:
+        ichan = nchan / 2
+    return (ichan, nchan - ichan)  # min,max
 
 
-def cyclic_shear_cs(cs,shear,bw,ref_freq):
+def cyclic_shear_cs(cs, shear, bw, ref_freq):
     nharm = cs.shape[1]
     nlag = cs.shape[0]
-    dtau = 1/(bw*1e6)
+    dtau = 1 / (bw * 1e6)
     dalpha = ref_freq
-    #cs2cc
+    # cs2cc
     cc = cs2cc(cs)
     lags = np.arange(nlag)
-    lags[nlag/2+1:] = lags[nlag/2+1:] - nlag
-    tau1 = dtau*lags
-    alpha1 = dalpha*np.arange(nharm) 
+    lags[nlag / 2 + 1 :] = lags[nlag / 2 + 1 :] - nlag
+    tau1 = dtau * lags
+    alpha1 = dalpha * np.arange(nharm)
 
-    phases = np.outer( shear* (-2.0*np.pi) * tau1, alpha1)
-    
-    cc = cc * np.exp(1j*phases)
-    
-    return cc2cs(cc),phases
-    
-    
-    
-def make_model_cs(hf,s0,bw,ref_freq):
+    phases = np.outer(shear * (-2.0 * np.pi) * tau1, alpha1)
+
+    cc = cc * np.exp(1j * phases)
+
+    return cc2cs(cc), phases
+
+
+def make_model_cs(hf, s0, bw, ref_freq):
     nchan = hf.shape[0]
     nharm = s0.shape[0]
-    #profile2cs
-    cs = np.repeat(s0[np.newaxis,:],nchan,axis=0) # fill the cs model with the harmonic profile for each freq chan
-    #filter2cs
-    cs_tmp = np.repeat(hf[:,np.newaxis],nharm,axis=1) # fill the cs_tmp model with the filter for each harmonic
-    
-    csplus,plus_phases = cyclic_shear_cs(cs_tmp,shear=0.5,bw=bw,ref_freq=ref_freq)
-    csminus,minus_phases = cyclic_shear_cs(cs_tmp,shear=-0.5,bw=bw,ref_freq=ref_freq) # this is redundant, minus phases is just negative of plus phases
-    
-    cs = cs * csplus * np.conj(csminus)
-    
-    cs = cyclic_padding(cs,bw,ref_freq)
-    
-    return cs,csplus,csminus,minus_phases # minus_phases has factor of 2*pi*tau*alpha 
+    # profile2cs
+    cs = np.repeat(s0[np.newaxis, :], nchan, axis=0)  # fill the cs model with the harmonic profile for each freq chan
+    # filter2cs
+    cs_tmp = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
 
-def optimize_profile(cs,hf,bw,ref_freq):
+    csplus, plus_phases = cyclic_shear_cs(cs_tmp, shear=0.5, bw=bw, ref_freq=ref_freq)
+    csminus, minus_phases = cyclic_shear_cs(
+        cs_tmp, shear=-0.5, bw=bw, ref_freq=ref_freq
+    )  # this is redundant, minus phases is just negative of plus phases
+
+    cs = cs * csplus * np.conj(csminus)
+
+    cs = cyclic_padding(cs, bw, ref_freq)
+
+    return cs, csplus, csminus, minus_phases  # minus_phases has factor of 2*pi*tau*alpha
+
+
+def optimize_profile(cs, hf, bw, ref_freq):
     nchan = cs.shape[0]
     nharm = cs.shape[1]
-    #filter2cs
-    cs1 = np.repeat(hf[:,np.newaxis],nharm,axis=1) # fill the cs_tmp model with the filter for each harmonic
-    csplus,plus_phases = cyclic_shear_cs(cs1,shear=0.5,bw=bw,ref_freq=ref_freq)
-    
-    csminus,minus_phases = cyclic_shear_cs(cs1,shear=-0.5,bw=bw,ref_freq=ref_freq)
-    
-    #cs H(-)H(+)*
-    cshmhp =  cs * csminus * np.conj(csplus)
-    #|H(-)|^2 |H(+)|^2
-    maghmhp = (np.abs(csminus)*np.abs(csplus))**2
-    #fscrunch
-    denom = fscrunch_cs(maghmhp,bw=bw,ref_freq=ref_freq)
-    numer = fscrunch_cs(cshmhp,bw=bw,ref_freq=ref_freq)
-    s0 = numer/denom
+    # filter2cs
+    cs1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
+    csplus, plus_phases = cyclic_shear_cs(cs1, shear=0.5, bw=bw, ref_freq=ref_freq)
+
+    csminus, minus_phases = cyclic_shear_cs(cs1, shear=-0.5, bw=bw, ref_freq=ref_freq)
+
+    # cs H(-)H(+)*
+    cshmhp = cs * csminus * np.conj(csplus)
+    # |H(-)|^2 |H(+)|^2
+    maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+    # fscrunch
+    denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq)
+    numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq)
+    s0 = numer / denom
     s0[np.real(denom) <= 0.0] = 0
     return s0
-    
-def fscrunch_cs(cs,bw,ref_freq):
+
+
+def fscrunch_cs(cs, bw, ref_freq):
     cstmp = cs[:]
-    cstmp = cyclic_padding(cstmp,bw,ref_freq)
-#    rm = np.abs(cs-cstmp).sum()
-#    print "fscrunch saved:",rm
+    cstmp = cyclic_padding(cstmp, bw, ref_freq)
+    #    rm = np.abs(cs-cstmp).sum()
+    #    print "fscrunch saved:",rm
     return cstmp.sum(0)
-    
-def get_params(ht,rindex):
+
+
+def get_params(ht, rindex):
     nlag = ht.shape[0]
-    params = np.zeros((2*nlag - 1,), dtype='float')
+    params = np.zeros((2 * nlag - 1,), dtype="float")
     if rindex > 0:
-        params[:2*(rindex)] = ht[:rindex].view('float')
-    params[2*rindex] = ht[rindex].real
-    if rindex < nlag-1:
-        params[2*rindex+1:] = ht[rindex+1:].view('float')
+        params[: 2 * (rindex)] = ht[:rindex].view("float")
+    params[2 * rindex] = ht[rindex].real
+    if rindex < nlag - 1:
+        params[2 * rindex + 1 :] = ht[rindex + 1 :].view("float")
     return params
-def get_ht(params,rindex):
-    nlag = (params.shape[0]+1)/2
-    ht = np.zeros((nlag,),dtype='complex')
-    ht[:rindex] = params[:2*rindex].view('complex')
-    ht[rindex] = params[2*rindex]
-    ht[rindex+1:] = params[2*rindex+1:].view('complex')
+
+
+def get_ht(params, rindex):
+    nlag = (params.shape[0] + 1) / 2
+    ht = np.zeros((nlag,), dtype="complex")
+    ht[:rindex] = params[: 2 * rindex].view("complex")
+    ht[rindex] = params[2 * rindex]
+    ht[rindex + 1 :] = params[2 * rindex + 1 :].view("complex")
     return ht
-    
-def cyclic_merit_lag(x,*args):
+
+
+def cyclic_merit_lag(x, *args):
     """
     The objective function. Computes mean squared merit and gradient
-    
+
     Format is compatible with scipy.optimize
     """
     CS = args[0]
-    print "rindex",CS.rindex
-    ht = get_ht(x,CS.rindex)
+    print("rindex", CS.rindex)
+    ht = get_ht(x, CS.rindex)
     hf = time2freq(ht)
     CS.hf = hf
     CS.ht = ht
-    cs_model,csplus,csminus,phases = make_model_cs(hf,CS.s0,CS.bw,CS.ref_freq)
-    merit = 2*(np.abs(cs_model[:,1:] - CS.cs[:,1:])**2).sum() #ignore zeroth harmonic (dc term)
-    
+    cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
+    merit = 2 * (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
+
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
-    
-    #gradient_lag
-    diff = cs_model - CS.cs #model - data
+
+    # gradient_lag
+    diff = cs_model - CS.cs  # model - data
     cc1 = cs2cc(diff * csminus)
-    
-# original c code for reference:
-#    for (ilag=0; ilag<cc1.nlag; ilag++) {
-#        gradient->data[ilag] = 0.0 + I * 0.0;
-#        int lag = (ilag<=cc1.nlag/2) ? ilag : ilag-cc1.nlag;
-#        tau = (double)lag * (double)cs->nchan /
-#        ( (double)cc1.nlag * cc1.bw*1.e6 );
-#        for (ih=1; ih<cc1.nharm; ih++) {
-#            phs = M_PI * tau * (double)ih * cc1.ref_freq;
-#            phasor = cos(phs)+I*sin(phs);
-#            fftwf_complex *ccval = get_cc(&cc1,ih,ip,ilag);
-#            gradient->data[ilag] += 4.0 * (*ccval) * phasor
-#            * conj(s0->data[ih]) / (float)cs->nchan;
-#        }
-#     }
 
-    #we reuse phases and csminus, csplus from the make_model_cs call
+    # original c code for reference:
+    #    for (ilag=0; ilag<cc1.nlag; ilag++) {
+    #        gradient->data[ilag] = 0.0 + I * 0.0;
+    #        int lag = (ilag<=cc1.nlag/2) ? ilag : ilag-cc1.nlag;
+    #        tau = (double)lag * (double)cs->nchan /
+    #        ( (double)cc1.nlag * cc1.bw*1.e6 );
+    #        for (ih=1; ih<cc1.nharm; ih++) {
+    #            phs = M_PI * tau * (double)ih * cc1.ref_freq;
+    #            phasor = cos(phs)+I*sin(phs);
+    #            fftwf_complex *ccval = get_cc(&cc1,ih,ip,ilag);
+    #            gradient->data[ilag] += 4.0 * (*ccval) * phasor
+    #            * conj(s0->data[ih]) / (float)cs->nchan;
+    #        }
+    #     }
 
-    phasors = np.exp(1j*phases)
-    cs0 = np.repeat(CS.s0[np.newaxis,:],CS.nlag,axis=0) #filter2cs
+    # we reuse phases and csminus, csplus from the make_model_cs call
+
+    phasors = np.exp(1j * phases)
+    cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
     grad = 4.0 * cc1 * phasors * np.conj(cs0) / CS.nchan
-    grad = grad[:,1:].sum(1) # sum over all harmonics to get function of lag
-    
-    #conjugate(res)
-    #calc positive shear
-    #multiply
-    #cs2cc
+    grad = grad[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+    # conjugate(res)
+    # calc positive shear
+    # multiply
+    # cs2cc
     cc2 = cs2cc(np.conj(diff) * csplus)
     grad2 = 4.0 * cc2 * np.conj(phasors) * cs0 / CS.nchan
-    
-    grad = grad + grad2[:,1:].sum(1)
+
+    grad = grad + grad2[:, 1:].sum(1)
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
     if CS.iprint:
-        print "merit= %.7e  grad= %.7e" % (merit,(np.abs(grad)**2).sum())
-            
+        print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
+
     if CS.make_plots:
         if CS.niter % CS.plot_every == 0:
             CS.plotCurrentSolution()
-        
-        
-    
+
     grad = get_params(grad, CS.rindex)
     CS.niter += 1
-    
-    return merit,grad
+
+    return merit, grad
+
 
 def loadCyclicSolver(statefile):
     """
     Load previously saved Cyclic Solver class
     """
-    fh = open(statefile,'r')
+    fh = open(statefile, "r")
     cys = pickle.load(fh)
     fh.close()
     return cys
@@ -1110,12 +1279,13 @@ def loadCyclicSolver(statefile):
 
 if __name__ == "__main__":
     import sys
+
     fname = sys.argv[1]
     CS = CyclicSolver(filename=fname)
     if len(sys.argv) > 2:
-        CS.initProfile(loadFile = sys.argv[2])
+        CS.initProfile(loadFile=sys.argv[2])
     else:
         CS.initProfile()
-    np.save(('%s_profile.npy' % CS.source),CS.pp_ref)
-    CS.loop(make_plots=True,tolfact=20)
+    np.save(("%s_profile.npy" % CS.source), CS.pp_ref)
+    CS.loop(make_plots=True, tolfact=20)
     CS.saveResults()
