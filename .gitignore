@@ -35,6 +35,7 @@ pip-log.txt
 /.project
 /.pydevproject
 /*.tst
+.ipynb_checkpoints/
 
 *.pdf
 *.pkl
