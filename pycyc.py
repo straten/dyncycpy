@@ -97,7 +97,6 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-import time
 import pickle
 import scipy, scipy.optimize
 import os
@@ -182,7 +181,7 @@ class CyclicSolver:
 
         self.nlag = self.nchan
         self.nphase = self.nbin
-        self.nharm = self.nphase / 2 + 1
+        self.nharm = int(self.nphase / 2) + 1
 
         self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -248,7 +247,7 @@ class CyclicSolver:
             self.nopt = 0
         savefile = kwargs.pop("savebase", os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop))
 
-        if kwargs.has_key("savedir"):
+        if "savedir" in kwargs:
             savedir = kwargs["savedir"]
         for isub in range(self.nspec):
             kwargs["isub"] = isub
@@ -374,7 +373,7 @@ class CyclicSolver:
             if maxlen is not None:
                 valsamp = maxlen
             else:
-                valsamp = ht.shape[0] / 2 + maxneg
+                valsamp = int(ht.shape[0] / 2) + maxneg
             minbound = np.zeros_like(ht)
             minbound[:valsamp] = 1 + 1j
             minbound = np.roll(minbound, rindex - maxneg)
@@ -465,9 +464,9 @@ class CyclicSolver:
         phase_angle *= 1e6 * self.bw
 
         if phase_angle > self.nchan / 2:
-            delay = self.nchan / 2
+            delay = int(self.nchan / 2)
         elif phase_angle < -(self.nchan / 2):
-            delay = self.nchan / 2 + 1
+            delay = int(self.nchan / 2 + 1)
         elif phase_angle < -0.1:
             delay = int(phase_angle) + self.nchan - 1
         else:
@@ -523,7 +522,7 @@ class CyclicSolver:
         ax1b = fig.add_subplot(3, 3, 2)
         im = ax1b.imshow(
             np.angle(self.cs[:, :mlag]) - np.median(np.angle(self.cs[:, :mlag]), axis=0)[None, :],
-            cmap=plt.cm.hsv,
+            cmap="hsv",
             aspect="auto",
             interpolation="nearest",
             extent=csextent,
@@ -564,7 +563,7 @@ class CyclicSolver:
         ax2b = fig.add_subplot(3, 3, 5)
         im = ax2b.imshow(
             np.angle(cs_model[:, :mlag]) - np.median(np.angle(cs_model[:, :mlag]), axis=0)[None, :],
-            cmap=plt.cm.hsv,
+            cmap="hsv",
             aspect="auto",
             interpolation="nearest",
             extent=csextent,
@@ -614,7 +613,7 @@ class CyclicSolver:
         ax3b = fig.add_subplot(3, 3, 8)
         im = ax3b.imshow(
             np.angle((self.cs[:, :mlag] / cs_model[:, :mlag])),
-            cmap=plt.cm.hsv,
+            cmap="hsv",
             aspect="auto",
             interpolation="nearest",
             extent=csextent,
@@ -638,12 +637,12 @@ class CyclicSolver:
 
         ax4 = fig.add_subplot(4, 3, 3)
         t = np.arange(ht.shape[0]) / self.bw
-        ax4.plot(t, np.roll(20 * np.log10(np.abs(ht)), (ht.shape[0] / 2) - self.rindex))
+        ax4.plot(t, np.roll(20 * np.log10(np.abs(ht)), int(ht.shape[0] / 2) - self.rindex))
         ax4.plot(
             t,
             np.roll(
                 20 * np.log10(np.convolve(np.ones((10,)) / 10.0, np.abs(ht), mode="same")),
-                (ht.shape[0] / 2) - self.rindex,
+                int(ht.shape[0] / 2) - self.rindex,
             ),
             linewidth=2,
             color="r",
@@ -774,7 +773,7 @@ def plotSimulation(CS, mlag=100):
     ax4 = fig.add_subplot(3, 3, 3)
     im = ax4.imshow(
         np.angle(cs_model[:, :mlag] / cs0[:, :mlag]),
-        cmap=plt.cm.hsv,
+        cmap="hsv",
         aspect="auto",
         interpolation="nearest",
         extent=csextent,
@@ -841,7 +840,7 @@ def plotSimulation(CS, mlag=100):
     ax6 = fig.add_subplot(3, 3, 6)
     im = ax6.imshow(
         np.angle(CS.cs[:, :mlag] / cs0[:, :mlag]),
-        cmap=plt.cm.hsv,
+        cmap="hsv",
         aspect="auto",
         interpolation="nearest",
         extent=csextent,
@@ -875,7 +874,7 @@ def plotSimulation(CS, mlag=100):
 
     ax9 = fig.add_subplot(3, 3, 9)
     im = ax9.imshow(
-        np.angle(CS.cs[:, :mlag]), cmap=plt.cm.hsv, aspect="auto", interpolation="nearest", extent=csextent
+        np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent
     )
 
     ax9.text(
@@ -898,12 +897,11 @@ def plotSimulation(CS, mlag=100):
     except AttributeError:
         harmstr = ""
 
+    snrstr = ""
     try:
         taustr = "h(t) tau: %.1f" % CS.tau
         if CS.noise is not None:
             snrstr = "snr: %.3f" % CS.noise
-        else:
-            snrstr = ""
     except AttributeError:
         taustr = ""
 
@@ -920,7 +918,7 @@ def fold(v):
     Fold negative response onto positive time for minimum phase calculation
     """
     n = v.shape[0]
-    nt = n / 2
+    nt = int(n / 2)
     rf = np.zeros_like(v[:nt])
     rf[:-1] = v[1:nt]
     rf += np.conj(v[: nt - 1 : -1])
@@ -972,7 +970,7 @@ def writeArray(fname, arr):
     fh.write("%d\n" % arr.shape[1])
     for x in range(arr.shape[0]):
         for y in range(arr.shape[1]):
-            if arr.dtype == np.complex:
+            if arr.dtype == np.complex128:
                 fh.write("%.7e %.7e\n" % (arr[x, y].real, arr[x, y].imag))
             else:
                 fh.write("%.7e\n" % (arr[x, y]))
@@ -1107,7 +1105,7 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
     inv_aspect /= 2.0
     ichan = int(inv_aspect) + 1
     if ichan > nchan / 2:
-        ichan = nchan / 2
+        ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
 
 
@@ -1119,7 +1117,7 @@ def cyclic_shear_cs(cs, shear, bw, ref_freq):
     # cs2cc
     cc = cs2cc(cs)
     lags = np.arange(nlag)
-    lags[nlag / 2 + 1 :] = lags[nlag / 2 + 1 :] - nlag
+    lags[int(nlag / 2) + 1 :] = lags[int(nlag / 2) + 1 :] - nlag
     tau1 = dtau * lags
     alpha1 = dalpha * np.arange(nharm)
 
@@ -1191,7 +1189,7 @@ def get_params(ht, rindex):
 
 
 def get_ht(params, rindex):
-    nlag = (params.shape[0] + 1) / 2
+    nlag = int((params.shape[0] + 1) / 2)
     ht = np.zeros((nlag,), dtype="complex")
     ht[:rindex] = params[: 2 * rindex].view("complex")
     ht[rindex] = params[2 * rindex]
@@ -1271,9 +1269,8 @@ def loadCyclicSolver(statefile):
     """
     Load previously saved Cyclic Solver class
     """
-    fh = open(statefile, "r")
-    cys = pickle.load(fh)
-    fh.close()
+    with open(statefile, "rb") as fh:
+        cys = pickle.load(fh)
     return cys
 
 
