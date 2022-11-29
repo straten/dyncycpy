@@ -99,6 +99,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pickle
 import scipy, scipy.optimize
+from scipy.fft import fftshift, fft, rfft, ifft, irfft
 import os
 
 
@@ -751,9 +752,9 @@ def plotSimulation(CS, mlag=100):
     #                     aspect='auto',interpolation='nearest',extent=csextent)
     #    im.set_clim(0.5,2)
     pt = 1e3 * np.linspace(0, 1, CS.nphase) / CS.ref_freq
-    ax3.plot(pt, np.fft.fftshift(CS.pp_meas), "r", label="measured")
-    ax3.plot(pt, np.fft.fftshift(CS.pp_int), "cyan", alpha=0.7, label="deconvolved")
-    ax3.plot(pt, np.fft.fftshift(harm2phase(CS.s0)), "k", label="original")
+    ax3.plot(pt, fftshift(CS.pp_meas), "r", label="measured")
+    ax3.plot(pt, fftshift(CS.pp_int), "cyan", alpha=0.7, label="deconvolved")
+    ax3.plot(pt, fftshift(harm2phase(CS.s0)), "k", label="original")
     ax3.errorbar([pt[len(pt) / 4]], [CS.pp_meas.max() / 2.0], xerr=CS.tau / 1e3, capsize=5, linewidth=2)
     ax3.text(pt[len(pt) / 4], CS.pp_meas.max() * 0.55, "tau", fontdict=dict(size="small"))
     ax3.set_xlim(0, pt[-1])
@@ -794,10 +795,10 @@ def plotSimulation(CS, mlag=100):
     #    im = ax5.imshow(np.abs(CS.cs[:,:mlag]/cs0[:,:mlag]),
     #                     aspect='auto',interpolation='nearest',extent=csextent)
     #    im.set_clim(0.5,2)
-    ax5.plot(t / 1e3, np.fft.fftshift(20 * np.log10(np.abs(ht0) / np.abs(ht0).max())), label="dB($|h(t)|^2$)")
+    ax5.plot(t / 1e3, fftshift(20 * np.log10(np.abs(ht0) / np.abs(ht0).max())), label="dB($|h(t)|^2$)")
     ax5.plot(
         t / 1e3,
-        np.fft.fftshift(20 * np.log10(np.abs(ht) / np.abs(ht).max())) - 40.0,
+        fftshift(20 * np.log10(np.abs(ht) / np.abs(ht).max())) - 40.0,
         "r",
         label=r"dB($|\hat{h}(t)|^2$)-40",
     )
@@ -817,16 +818,16 @@ def plotSimulation(CS, mlag=100):
     )
 
     ax8 = fig.add_subplot(3, 3, 8)
-    maxt0 = t[np.fft.fftshift(np.abs(ht0)).argmax()]
-    maxt = t[np.fft.fftshift(np.abs(ht)).argmax()]
+    maxt0 = t[fftshift(np.abs(ht0)).argmax()]
+    maxt = t[fftshift(np.abs(ht)).argmax()]
     if maxt0 < maxt:
         maxt = maxt0
     #    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht0)/np.abs(ht0).max())),label='dB($|h(t)|^2$)')
     #    ax8.plot(t-maxt,np.fft.fftshift(20*np.log10(np.abs(ht)/np.abs(ht).max())),'r',label=r'dB($|\hat{h}(t)|^2$)')
     #    ax8.set_ylim(-80.,0)
 
-    ax8.plot(t - maxt, np.fft.fftshift((np.abs(ht0) / np.abs(ht0).max())), label="$|h(t)|$")
-    ax8.plot(t - maxt, np.fft.fftshift((np.abs(ht) / np.abs(ht).max())), "r", label=r"$|\hat{h}(t)|$")
+    ax8.plot(t - maxt, fftshift((np.abs(ht0) / np.abs(ht0).max())), label="$|h(t)|$")
+    ax8.plot(t - maxt, fftshift((np.abs(ht) / np.abs(ht).max())), "r", label=r"$|\hat{h}(t)|$")
 
     left = -5 * CS.tau
     right = 20 * CS.tau
@@ -873,9 +874,7 @@ def plotSimulation(CS, mlag=100):
     ax7.set_ylabel("MHz")
 
     ax9 = fig.add_subplot(3, 3, 9)
-    im = ax9.imshow(
-        np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent
-    )
+    im = ax9.imshow(np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent)
 
     ax9.text(
         0.9,
@@ -932,7 +931,7 @@ def minphase(v):
     clipped = v.copy()
     thresh = 1e-5
     clipped[np.abs(v) < thresh] = thresh
-    return np.exp(np.fft.fft(fold(np.fft.ifft(np.log(clipped)))))
+    return np.exp(fft(fold(ifft(np.log(clipped)))))
 
 
 def loadArray(fname):
@@ -1008,42 +1007,42 @@ def loadProfile(fname):
 
 
 def cs2cc(cs):
-    return cs.shape[0] * np.fft.ifft(cs, axis=0)
+    return cs.shape[0] * ifft(cs, axis=0)
 
 
 def cc2cs(cc):
-    cs = np.fft.fft(cc, axis=0)
+    cs = fft(cc, axis=0)
     # cc2cs_renorm
     return cs / cs.shape[0]
 
 
 def ps2cs(ps):
-    cs = np.fft.rfft(ps, axis=1)
+    cs = rfft(ps, axis=1)
     # ps2cs renorm
     return cs / cs.shape[1]  # original version from Cyclic-modelling
     # return cs/(2*(cs.shape[1] - 1))
 
 
 def cs2ps(cs):
-    return (cs.shape[1] - 1) * 2 * np.fft.irfft(cs, axis=1)
+    return (cs.shape[1] - 1) * 2 * irfft(cs, axis=1)
 
 
 def time2freq(ht):
-    hf = np.fft.fft(ht)
+    hf = fft(ht)
     # filter_freq_renorm
     return hf / hf.shape[0]
 
 
 def freq2time(hf):
-    return hf.shape[0] * np.fft.ifft(hf)
+    return hf.shape[0] * ifft(hf)
 
 
 def harm2phase(ph):
-    return (ph.shape[0] - 1) * 2 * np.fft.irfft(ph)
+    return (ph.shape[0] - 1) * 2 * irfft(ph)
 
 
 def phase2harm(pp):
-    ph = np.fft.rfft(pp)
+    ph = rfft(pp)
     # profile_harm_renorm
     return ph / ph.shape[0]  # original version from Cyclic-modelling
     # return ph/(2*(ph.shape[0]-1))
