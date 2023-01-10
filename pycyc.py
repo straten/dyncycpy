@@ -104,14 +104,16 @@ import os
 
 
 class CyclicSolver:
-    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None):
+    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False):
         """
 
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
         """
+        self.zap_edges = zap_edges
+        self.pscrunch = pscrunch
         if filename:
-            self.load(filename, offp=offp)
+            self.load(filename, offp=offp, pscrunch=pscrunch)
         elif statefile:
             self.loadState(statefile)
         else:
@@ -131,7 +133,7 @@ class CyclicSolver:
 
         return cs
 
-    def load(self, filename, offp=None, maxchan=None, tscrunch=None):
+    def load(self, filename, offp=None, maxchan=None, tscrunch=None, pscrunch=False):
         """
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
 
@@ -140,13 +142,20 @@ class CyclicSolver:
         *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
                     subbands
         *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
+
+        *pscrunch* : average the polarisations
         """
         idx = 0  # only used to get parameters of integration, not data itself
 
         self.filename = filename
         self.ar = psrchive.Archive_load(filename)
+        if pscrunch:
+            self.ar.pscrunch()
 
         self.data = self.ar.get_data()  # we load all data here, so this should probably change in the long run
+        if self.zap_edges is not None:
+            zap_count = int(self.zap_edges * self.data.shape[2])
+            self.data = self.data[:, :, zap_count:-zap_count, :]
         if maxchan:
             bwfact = maxchan / (
                 1.0 * self.data.shape[2]
@@ -927,11 +936,11 @@ def fold(v):
     return rw
 
 
-def minphase(v):
+def minphase(v, workers=2):
     clipped = v.copy()
     thresh = 1e-5
     clipped[np.abs(v) < thresh] = thresh
-    return np.exp(fft(fold(ifft(np.log(clipped)))))
+    return np.exp(fft(fold(ifft(np.log(clipped), workers=workers)), workers=workers))
 
 
 def loadArray(fname):
@@ -1006,43 +1015,43 @@ def loadProfile(fname):
 # I've left the bug in for now to compare directly to filter_profile
 
 
-def cs2cc(cs):
-    return cs.shape[0] * ifft(cs, axis=0)
+def cs2cc(cs, workers=2):
+    return cs.shape[0] * ifft(cs, axis=0, workers=workers)
 
 
-def cc2cs(cc):
-    cs = fft(cc, axis=0)
+def cc2cs(cc, workers=2):
+    cs = fft(cc, axis=0, workers=workers)
     # cc2cs_renorm
     return cs / cs.shape[0]
 
 
-def ps2cs(ps):
-    cs = rfft(ps, axis=1)
+def ps2cs(ps, workers=2):
+    cs = rfft(ps, axis=1, workers=workers)
     # ps2cs renorm
     return cs / cs.shape[1]  # original version from Cyclic-modelling
     # return cs/(2*(cs.shape[1] - 1))
 
 
-def cs2ps(cs):
-    return (cs.shape[1] - 1) * 2 * irfft(cs, axis=1)
+def cs2ps(cs, workers=2):
+    return (cs.shape[1] - 1) * 2 * irfft(cs, axis=1, workers=workers)
 
 
-def time2freq(ht):
-    hf = fft(ht)
+def time2freq(ht, workers=2):
+    hf = fft(ht, workers=workers)
     # filter_freq_renorm
     return hf / hf.shape[0]
 
 
-def freq2time(hf):
-    return hf.shape[0] * ifft(hf)
+def freq2time(hf, workers=2):
+    return hf.shape[0] * ifft(hf, workers=workers)
 
 
-def harm2phase(ph):
-    return (ph.shape[0] - 1) * 2 * irfft(ph)
+def harm2phase(ph, workers=2):
+    return (ph.shape[0] - 1) * 2 * irfft(ph, workers=workers)
 
 
-def phase2harm(pp):
-    ph = rfft(pp)
+def phase2harm(pp, workers=2):
+    ph = rfft(pp, workers=workers)
     # profile_harm_renorm
     return ph / ph.shape[0]  # original version from Cyclic-modelling
     # return ph/(2*(ph.shape[0]-1))
