@@ -156,7 +156,8 @@ class CyclicSolver:
         if self.zap_edges is not None:
             zap_count = int(self.zap_edges * self.data.shape[2])
             self.data = self.data[:, :, zap_count:-zap_count, :]
-        if maxchan:
+            bwfact = 1.0 - self.zap_edges * 2
+        elif maxchan:
             bwfact = maxchan / (
                 1.0 * self.data.shape[2]
             )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
