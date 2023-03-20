@@ -104,20 +104,31 @@ import os
 
 
 class CyclicSolver:
-    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False):
+    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None):
         """
-
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
+        *offp*: tuple (start,end) with start and end bin numbers to use as off pulse region for normalizing the bandpass
+        *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
+                    subbands
+        *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
+        *pscrunch* : average the polarisations
         """
+
         self.zap_edges = zap_edges
         self.pscrunch = pscrunch
+        self.tscrunch = tscrunch
+        self.offp = offp
+        self.maxchan = maxchan
+
+        self.filenames = []
+        self.nspec = 0
+
         if filename:
-            self.load(filename, offp=offp, pscrunch=pscrunch)
+            self.load(filename)
+
         elif statefile:
             self.loadState(statefile)
-        else:
-            self.ar = None
 
         self.statefile = statefile
 
@@ -133,72 +144,90 @@ class CyclicSolver:
 
         return cs
 
-    def load(self, filename, offp=None, maxchan=None, tscrunch=None, pscrunch=False):
+    def load(self, filename):
         """
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
-
-        *offp*: tuple (start,end) with start and end bin numbers to use as off pulse region for normalizing the bandpass
-
-        *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
-                    subbands
-        *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
-
-        *pscrunch* : average the polarisations
         """
-        idx = 0  # only used to get parameters of integration, not data itself
 
-        self.filename = filename
-        self.ar = psrchive.Archive_load(filename)
-        if pscrunch:
-            self.ar.pscrunch()
+        self.filenames.append( filename )
+        ar = psrchive.Archive_load(filename)
+        if self.pscrunch:
+            ar.pscrunch()
 
-        self.data = self.ar.get_data()  # we load all data here, so this should probably change in the long run
+        data = ar.get_data()  # we load all data here, so this should probably change in the long run
         if self.zap_edges is not None:
-            zap_count = int(self.zap_edges * self.data.shape[2])
-            self.data = self.data[:, :, zap_count:-zap_count, :]
+            zap_count = int(self.zap_edges * data.shape[2])
+            data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
-        elif maxchan:
-            bwfact = maxchan / (
-                1.0 * self.data.shape[2]
+        elif self.maxchan:
+            bwfact = self,maxchan / (
+                1.0 * data.shape[2]
             )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
-            self.data = self.data[:, :, :maxchan, :]
+            data = data[:, :, :self.maxchan, :]
         else:
             bwfact = 1.0
-        if offp:
-            self.data = self.data / (np.abs(self.data[:, :, :, offp[0] : offp[1]]).mean(3)[:, :, :, None])
-        if tscrunch:
-            for k in range(1, tscrunch):
-                self.data[:-k, :, :, :] += self.data[k:, :, :, :]
-        #            d = self.data
+
+        if self.offp:
+            data = data / (np.abs(data[:, :, :, self.offp[0] : self.offp[1]]).mean(3)[:, :, :, None])
+
+        if self.tscrunch:
+            for k in range(1, self.tscrunch):
+                data[:-k, :, :, :] += data[k:, :, :, :]
+        #            d = data
         #            nsub = d.shape[0]/tscrunch
         #            ntot = nsub*tscrunch
-        #            self.data = d[:ntot,:,:,:].reshape((nsub,tscrunch,d.shape[1],d.shape[2],d.shape[3])).mean(1)
-        subint = self.ar.get_Integration(idx)
-        self.nspec, self.npol, self.nchan, self.nbin = self.data.shape
+        #            data = d[:ntot,:,:,:].reshape((nsub,tscrunch,d.shape[1],d.shape[2],d.shape[3])).mean(1)
 
-        epoch = subint.get_epoch()
-        try:
-            self.imjd = np.floor(epoch)
-            self.fmjd = np.fmod(epoch, 1)
-        except:  # new version of psrchive has different kind of epoch
-            self.imjd = epoch.intday()
-            self.fmjd = epoch.fracday()
-        self.ref_phase = 0.0
-        self.ref_freq = 1.0 / subint.get_folding_period()
-        self.bw = np.abs(subint.get_bandwidth()) * bwfact
-        self.rf = subint.get_centre_frequency()
+        if self.nspec == 0:
 
-        self.source = self.ar.get_source()  # source name
+            self.nspec, self.npol, self.nchan, self.nbin = data.shape
+            self.data = data
 
-        self.nlag = self.nchan
-        self.nphase = self.nbin
-        self.nharm = int(self.nphase / 2) + 1
+            idx = 0  # only used to get parameters of integration, not data itself
+            subint = ar.get_Integration(idx)            
+            epoch = subint.get_epoch()
+            try:
+                self.imjd = np.floor(epoch)
+                self.fmjd = np.fmod(epoch, 1)
+            except:  # new version of psrchive has different kind of epoch
+                self.imjd = epoch.intday()
+                self.fmjd = epoch.fracday()
+            self.ref_phase = 0.0
+            self.ref_freq = 1.0 / subint.get_folding_period()
+            self.bw = np.abs(subint.get_bandwidth()) * bwfact
+            self.rf = subint.get_centre_frequency()
+
+            self.source = ar.get_source()  # source name
+
+            self.nlag = self.nchan
+            self.nphase = self.nbin
+            self.nharm = int(self.nphase / 2) + 1
+            self.nopt = 0
+            self.nloop = 0
+
+            ar = None;
+        else:
+            ar = None;
+
+            nspec, npol, nchan, nbin = data.shape
+
+            assert npol == self.npol
+            assert nchan == self.nchan
+            assert nbin == self.nbin
+
+            self.nspec += nspec
+            self.data = np.append(self.data, data, axis=0)
+
+            nspec, npol, nchan, nbin = self.data.shape
+
+            assert nspec == self.nspec
+            assert npol == self.npol
+            assert nchan == self.nchan
+            assert nbin == self.nbin
 
         self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
-        self.nopt = 0
-        self.nloop = 0
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None):
         """
@@ -497,12 +526,11 @@ class CyclicSolver:
             else:
                 filename = self.filename + ".cysolve.pkl"
         orig_statefile = self.statefile
-        orig_ar = self.ar
-        self.ar = None
+
         fh = open(filename, "w")
         pickle.dump(self, fh, protocol=-1)
         fh.close()
-        self.ar = orig_ar
+
         self.statefile = orig_statefile
         print("Saved state in:", filename)
 
