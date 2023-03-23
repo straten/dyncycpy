@@ -298,6 +298,59 @@ class CyclicSolver:
         self.pp_ref = self.pp_int
         self.nloop += 1
 
+    def fista_da_lot (self, ipol=0):
+        """
+        First draft of using FISTA to solve the 2D transfer function
+        """
+
+        self.grad_2d = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.merit = 0
+
+        for isub in range(self.nspec):
+
+            ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+            cs = ps2cs(ps)
+            cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+            cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
+            self.ps = ps
+            self.cs = cs
+
+            self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
+
+            self.ph_ref = phase2harm(self.pp_ref)
+            self.ph_ref = normalize_profile(self.ph_ref)
+            self.ph_ref[0] = 0
+            ph = self.ph_ref[:]
+            self.s0 = ph
+
+            if self.nopt == 0:
+                self.pp_int = np.zeros((self.nphase,))
+                delay = self.phase_gradient(cs)
+                    
+                print("initial filter: delta function at delay = %d" % delay)
+                ht = np.zeros((self.nlag,), dtype="complex")
+                ht[delay] = self.nlag
+                hf = time2freq(ht)    
+            else:
+                hf = self.hf_prev.copy()
+                ht = freq2time(hf)
+
+            rindex = np.abs(ht).argmax()
+            self.rindex = rindex
+            
+            print("max filter index = %d" % self.rindex)
+
+            phasor = np.conj(ht[rindex])
+            ht = ht * phasor / np.abs(phasor)
+
+            _merit, grad = complex_cyclic_merit_lag (ht, self)
+
+            self.merit += _merit
+            self.grad_2d[isub] = grad[:]
+
+
+
     def loop(
         self,
         isub=0,
@@ -1234,23 +1287,26 @@ def get_ht(params, rindex):
     return ht
 
 
-def cyclic_merit_lag(x, *args):
+def cyclic_merit_lag(x, CS):
     """
     The objective function. Computes mean squared merit and gradient
 
     Format is compatible with scipy.optimize
     """
-    CS = args[0]
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
+    merit, grad = complex_cyclic_merit_lag (ht, CS)
+    # the objval list keeps track of how the convergence is going
+    CS.objval.append(merit)
+    grad = get_params(grad, CS.rindex)
+    return merit, grad
+
+def complex_cyclic_merit_lag (ht, CS):
     hf = time2freq(ht)
     CS.hf = hf
     CS.ht = ht
     cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
     merit = 2 * (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
-
-    # the objval list keeps track of how the convergence is going
-    CS.objval.append(merit)
 
     # gradient_lag
     diff = cs_model - CS.cs  # model - data
@@ -1275,7 +1331,7 @@ def cyclic_merit_lag(x, *args):
 
     phasors = np.exp(1j * phases)
     cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
-    grad = 4.0 * cc1 * phasors * np.conj(cs0) / CS.nchan
+    grad = 4.0 * cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
     grad = grad[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
     # conjugate(res)
@@ -1296,7 +1352,7 @@ def cyclic_merit_lag(x, *args):
         if CS.niter % CS.plot_every == 0:
             CS.plotCurrentSolution()
 
-    grad = get_params(grad, CS.rindex)
+
     CS.niter += 1
 
     return merit, grad
