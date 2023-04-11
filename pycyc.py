@@ -298,15 +298,31 @@ class CyclicSolver:
         self.pp_ref = self.pp_int
         self.nloop += 1
 
-    def fista_da_lot (self, ipol=0):
+    def prepare_fista_da_lot (self, ipol=0, maxsubint=None):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
 
-        self.grad_2d = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.merit = 0
+        self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
 
-        for isub in range(self.nspec):
+        self.merit = 0
+        self.ipol = ipol
+        self.nopt = 0
+
+        if maxsubint is None:
+            maxsubint = self.nspec
+
+        self.ph_ref = phase2harm(self.pp_ref)
+        self.ph_ref = normalize_profile(self.ph_ref)
+        self.ph_ref[0] = 0
+        ph = self.ph_ref[:]
+        self.s0 = ph
+
+        self.pp_int = np.zeros((self.nphase,))
+
+        for isub in range(maxsubint):
 
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
             cs = ps2cs(ps)
@@ -317,39 +333,63 @@ class CyclicSolver:
             self.cs = cs
 
             self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
+            self.cyclic_spectra[isub,:,:] = cs[:,:]
 
-            self.ph_ref = phase2harm(self.pp_ref)
-            self.ph_ref = normalize_profile(self.ph_ref)
-            self.ph_ref[0] = 0
-            ph = self.ph_ref[:]
-            self.s0 = ph
-
-            if self.nopt == 0:
-                self.pp_int = np.zeros((self.nphase,))
-                delay = self.phase_gradient(cs)
+            delay = self.phase_gradient(cs)
                     
-                print("initial filter: delta function at delay = %d" % delay)
-                ht = np.zeros((self.nlag,), dtype="complex")
-                ht[delay] = self.nlag
-                hf = time2freq(ht)    
-            else:
-                hf = self.hf_prev.copy()
-                ht = freq2time(hf)
-
-            rindex = np.abs(ht).argmax()
-            self.rindex = rindex
-            
-            print("max filter index = %d" % self.rindex)
-
-            phasor = np.conj(ht[rindex])
-            ht = ht * phasor / np.abs(phasor)
+            print(f"initial filter: isub={isub} delay={delay}")
+            ht = np.zeros((self.nlag,), dtype="complex")
+            ht[0] = 1 # self.nlag
 
             _merit, grad = complex_cyclic_merit_lag (ht, self)
 
             self.merit += _merit
-            self.grad_2d[isub] = grad[:]
 
+            # WvS notes consistency of gradients defined by eqs 22, 24, and 24 of WDvS13 and eqs A1 and A5 of OW23
+            self.h_time_delay_grad[isub] = grad[:]  
+            self.h_time_delay[isub] = ht[:]
 
+        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0)
+        self.h_doppler_delay = fft(self.h_time_delay, axis=0)
+
+    def get_derivative(self, wavefield):
+        return self.h_doppler_delay_grad
+    
+    def get_func_val(self, wavefield):
+        return self.merit
+
+    def update_fista_da_lot (self, new_h_doppler_delay):
+
+        self.h_time_delay = ifft(new_h_doppler_delay, axis=0)
+        self.h_doppler_delay = new_h_doppler_delay
+
+        nspec = new_h_doppler_delay.shape[0]
+        self.merit = 0
+        phasor = 0
+
+        for isub in range(nspec):
+
+            ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
+            cs = self.cyclic_spectra[isub]
+            self.ps = ps
+            self.cs = cs
+
+            ht = self.h_time_delay[isub]
+
+            if isub == 0:
+                phasor = np.conj(ht[0])
+                phasor /= np.abs(phasor)
+
+            ht = ht * phasor
+
+            print(f"update isub={isub}/{nspec}")
+
+            _merit, grad = complex_cyclic_merit_lag (ht, self)
+
+            self.merit += _merit
+            self.h_time_delay_grad[isub] = grad[:]
+
+        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0)
 
     def loop(
         self,
