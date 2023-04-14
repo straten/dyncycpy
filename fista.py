@@ -3,7 +3,8 @@ from scipy.linalg import norm
 import logging, logger
 from typing import Optional
 
-from lib import Residual, extract_part_of_array
+# from lib import Residual, extract_part_of_array
+from pycyc import CyclicSolver as Residual # TODO dirty hack
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
@@ -129,7 +130,6 @@ def take_fista_step(
     func,
     backtrack,
     alpha,
-    s,
     eta,
     y_n,
     _lambda,
@@ -141,15 +141,11 @@ def take_fista_step(
     t_n,
     x_n,
     demerits,
-    model,
-    control_indices,
     eps,
 ):
     # calculate the updated model, either with backtracking, or using fixed alpha
     # Apply proximal operators (in the case of backtracking, the operators are applied within the backtracking)
     if backtrack:
-        if i == 0:
-            alpha = 1.0 / s  # type: ignore
         L, x_np1 = backtrack_B3(
             func.get_func_val,
             func.get_derivative,
@@ -183,8 +179,7 @@ def take_fista_step(
     y_np1 = x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n)
 
     func_val = func.get_func_val(x_np1)
-    if control_indices:
-        model = extract_part_of_array(model, x_np1, control_indices)
+
     demerits = np.append(demerits, func_val)
     x_n = x_np1
     y_n = y_np1
@@ -198,7 +193,7 @@ def take_fista_step(
         log.info(
             f"in iteration {i}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
         )
-    return x_n, y_n, L, t_n, model, demerits
+    return x_n, y_n, L, t_n, demerits
 
 
 def fista(
@@ -248,8 +243,6 @@ def fista(
     if len(fix_support) > 0:
         log.info(f"Fixing support")
     x_tmp = np.array([[]])
-    if control_indices:
-        x_tmp = extract_part_of_array(x_tmp, x_0, control_indices)
     model = x_tmp
     demerits = np.array([])
 

@@ -229,7 +229,7 @@ class CyclicSolver:
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
 
-    def initProfile(self, loadFile=None, ipol=0, maxinitharm=None):
+    def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
         Initialize the reference profile
 
@@ -243,9 +243,14 @@ class CyclicSolver:
         *maxinitharm* : zero harmonics above this one in the initial profile (acts to smooth/denoise) (optional)
 
         """
+
+        if maxsubint is not None:
+            self.nspec = maxsubint
+
         hf_prev = np.ones((self.nchan,), dtype="complex")
         self.hf_prev = hf_prev
 
+        self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
         if loadFile:
@@ -259,11 +264,18 @@ class CyclicSolver:
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
-        for isub in range(self.data.shape[0]):
+        for isub in range(self.nspec):
+
+            print(f"init profile isub={isub}/{self.nspec}")
+
             ps = self.data[isub, ipol]
             cs = ps2cs(ps)
             cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
             cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
+            self.cyclic_spectra[isub] = cs
+            self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
+
             hf = np.ones((self.nchan,), dtype="complex")
             ht = freq2time(hf)
             rindex = np.abs(ht).argmax()
@@ -298,21 +310,61 @@ class CyclicSolver:
         self.pp_ref = self.pp_int
         self.nloop += 1
 
-    def prepare_fista_da_lot (self, ipol=0, maxsubint=None):
+    def updateProfile(self, new_h_doppler_delay):
+        """
+        Update the reference profile
+
+        Resulting profile is assigned to self.pp_ref
+        """
+
+        self.h_time_delay = ifft(new_h_doppler_delay, axis=0)
+        self.h_doppler_delay = new_h_doppler_delay
+
+        self.pp_int = np.zeros((self.nphase))  # intrinsic profile
+
+        nsubint = self.nspec
+
+        # initialize profile from data
+        # the results of this routine have been checked against filter_profile and they perform the same
+        for isub in range(nsubint):
+            ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
+            cs = self.cyclic_spectra[isub]
+            self.ps = ps
+            self.cs = cs
+
+            ht = self.h_time_delay[isub]
+
+            if isub == 0:
+                phasor = np.conj(ht[0])
+                phasor /= np.abs(phasor)
+
+            ht = ht * phasor
+
+            hf = time2freq(ht)
+            ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
+            ph[0] = 0.0
+            pp = harm2phase(ph)
+
+            print(f"update profile isub={isub}/{nsubint}")
+
+            self.intrinsic_profiles[isub, :] = pp
+            self.pp_int += pp
+
+        self.pp_ref = self.pp_int[:]
+
+    def initWavefield (self, ipol=0):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
 
+        nsubint = self.nspec
+
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
 
         self.merit = 0
         self.ipol = ipol
         self.nopt = 0
-
-        if maxsubint is None:
-            maxsubint = self.nspec
 
         self.ph_ref = phase2harm(self.pp_ref)
         self.ph_ref = normalize_profile(self.ph_ref)
@@ -320,26 +372,20 @@ class CyclicSolver:
         ph = self.ph_ref[:]
         self.s0 = ph
 
-        self.pp_int = np.zeros((self.nphase,))
+        for isub in range(nsubint):
 
-        for isub in range(maxsubint):
-
-            ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-            cs = ps2cs(ps)
-            cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
-            cs = cyclic_padding(cs, self.bw, self.ref_freq)
-
+            ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
+            cs = self.cyclic_spectra[isub]
             self.ps = ps
             self.cs = cs
 
-            self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
-            self.cyclic_spectra[isub,:,:] = cs[:,:]
-
             delay = self.phase_gradient(cs)
                     
-            print(f"initial filter: isub={isub} delay={delay}")
-            ht = np.zeros((self.nlag,), dtype="complex")
-            ht[0] = 1 # self.nlag
+            print(f"initial filter: isub={isub}/{nsubint} delay={delay}")
+            hf = np.ones((self.nchan,), dtype="complex")
+            ht = freq2time(hf)
+            # ht = np.zeros((self.nlag,), dtype="complex")
+            # ht[0] = 1 # self.nlag
 
             _merit, grad = complex_cyclic_merit_lag (ht, self)
 
@@ -356,18 +402,22 @@ class CyclicSolver:
         return self.h_doppler_delay_grad
     
     def get_func_val(self, wavefield):
+        # NEED TO MAKE THIS RECOMPUTE THE MERIT IN ORDER FOR BACKTRACKING TO WORK
         return self.merit
 
-    def update_fista_da_lot (self, new_h_doppler_delay):
+    def updateWavefield (self):
 
-        self.h_time_delay = ifft(new_h_doppler_delay, axis=0)
-        self.h_doppler_delay = new_h_doppler_delay
-
-        nspec = new_h_doppler_delay.shape[0]
+        nsubint = self.nspec
         self.merit = 0
         phasor = 0
 
-        for isub in range(nspec):
+        self.ph_ref = phase2harm(self.pp_ref)
+        self.ph_ref = normalize_profile(self.ph_ref)
+        self.ph_ref[0] = 0
+        ph = self.ph_ref[:]
+        self.s0 = ph
+
+        for isub in range(nsubint):
 
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
             cs = self.cyclic_spectra[isub]
@@ -382,7 +432,7 @@ class CyclicSolver:
 
             ht = ht * phasor
 
-            print(f"update isub={isub}/{nspec}")
+            print(f"update filter isub={isub}/{nsubint}")
 
             _merit, grad = complex_cyclic_merit_lag (ht, self)
 
