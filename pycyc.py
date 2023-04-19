@@ -229,6 +229,7 @@ class CyclicSolver:
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
         self.save_cyclic_spectra = False
+        self.ml_profile = False
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
@@ -384,6 +385,7 @@ class CyclicSolver:
         First draft of using FISTA to solve the 2D transfer function
         """
 
+        self.ml_profile = True
         nsubint = self.nspec
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -1471,8 +1473,7 @@ def complex_cyclic_merit_lag (ht, CS):
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
     grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-    ml_profile = True
-    if ml_profile:
+    if CS.ml_profile:
         # |H(-)|^2 |H(+)|^2
         maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
         denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
@@ -1481,23 +1482,25 @@ def complex_cyclic_merit_lag (ht, CS):
         cshmhp = CS.cs * csminus * np.conj(csplus)
         numer = fscrunch_cs(cshmhp, bw=CS.bw, ref_freq=CS.ref_freq)
 
-        second_term = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
-        second_term += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
-        second_term /= denom ** 2
+        ddenom_dh = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
+        ddenom_dh += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
+        ddenom_dh /= denom ** 2
 
-        fscr = fscrunch_cs(csplus * np.conj(csminus *diff), bw=CS.bw, ref_freq=CS.ref_freq) / CS.nchan
-        ds_dh = cs2cc(CS.cs*csminus) / denom * phasors - numer * second_term
+        fscr = fscrunch_cs(csplus * np.conj(csminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) / CS.nchan
+        ds_dh = cs2cc(CS.cs*csminus) / denom * phasors - numer * ddenom_dh
         grad2 = fscr * ds_dh 
         dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-        ds_dh = cs2cc(np.conj(CS.cs)*csplus) / denom * np.conj(phasors) - np.conj(numer) * second_term
-        grad2 =  np.conj(fscr) * ds_dh
+        ds_dh = cs2cc(np.conj(CS.cs)*csplus) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
+        grad2 = np.conj(fscr) * ds_dh
         dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
         agrad = np.vdot(grad,grad)
         adgrad = np.vdot(dgrad,dgrad)
         cosgrad = np.vdot(dgrad,grad) / np.sqrt(agrad * adgrad)
         print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
+
+        grad += dgrad
 
     # s0 = numer / denom
     # s0[np.real(denom) <= 0.0] = 0
