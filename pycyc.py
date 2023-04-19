@@ -228,6 +228,7 @@ class CyclicSolver:
         self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
+        self.save_cyclic_spectra = False
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
@@ -250,7 +251,9 @@ class CyclicSolver:
         hf_prev = np.ones((self.nchan,), dtype="complex")
         self.hf_prev = hf_prev
 
-        self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
+        if self.save_cyclic_spectra:
+            self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
+
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
         if loadFile:
@@ -266,14 +269,17 @@ class CyclicSolver:
         # the results of this routine have been checked against filter_profile and they perform the same
         for isub in range(self.nspec):
 
-            print(f"init profile isub={isub}/{self.nspec}")
+            if self.iprint:
+                print(f"init profile isub={isub}/{self.nspec}")
 
             ps = self.data[isub, ipol]
             cs = ps2cs(ps)
             cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
             cs = cyclic_padding(cs, self.bw, self.ref_freq)
 
-            self.cyclic_spectra[isub] = cs
+            if self.save_cyclic_spectra:
+                self.cyclic_spectra[isub] = cs
+
             self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
 
             hf = np.ones((self.nchan,), dtype="complex")
@@ -281,6 +287,7 @@ class CyclicSolver:
             rindex = np.abs(ht).argmax()
             self.rindex = rindex
 
+            # ph = profile harmonics
             ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
             ph[0] = 0.0
             if maxinitharm:
@@ -317,7 +324,7 @@ class CyclicSolver:
         Resulting profile is assigned to self.pp_ref
         """
 
-        self.h_time_delay = ifft(new_h_doppler_delay, axis=0)
+        self.h_time_delay = ifft(new_h_doppler_delay, axis=0) * new_h_doppler_delay.shape[0]
         self.h_doppler_delay = new_h_doppler_delay
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
@@ -328,7 +335,14 @@ class CyclicSolver:
         # the results of this routine have been checked against filter_profile and they perform the same
         for isub in range(nsubint):
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-            cs = self.cyclic_spectra[isub]
+
+            if self.save_cyclic_spectra:
+                cs = self.cyclic_spectra[isub]
+            else:
+                cs = ps2cs(ps)
+                cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+                cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
             self.ps = ps
             self.cs = cs
 
@@ -345,12 +359,25 @@ class CyclicSolver:
             ph[0] = 0.0
             pp = harm2phase(ph)
 
-            print(f"update profile isub={isub}/{nsubint}")
+            if self.iprint:
+                print(f"update profile isub={isub}/{nsubint}")
 
             self.intrinsic_profiles[isub, :] = pp
             self.pp_int += pp
 
         self.pp_ref = self.pp_int[:]
+
+    def updateFake(self, new_h_doppler_delay, pp):
+        """
+        Update the reference profile
+
+        Resulting profile is assigned to self.pp_ref
+        """
+
+        self.h_time_delay = ifft(new_h_doppler_delay, axis=0) * new_h_doppler_delay.shape[0]
+        self.h_doppler_delay = new_h_doppler_delay
+
+        self.pp_ref = self.pp_int = pp
 
     def initWavefield (self, ipol=0):
         """
@@ -375,13 +402,21 @@ class CyclicSolver:
         for isub in range(nsubint):
 
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-            cs = self.cyclic_spectra[isub]
+            if self.save_cyclic_spectra:
+                cs = self.cyclic_spectra[isub]
+            else:
+                cs = ps2cs(ps)
+                cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+                cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
             self.ps = ps
             self.cs = cs
 
             delay = self.phase_gradient(cs)
-                    
-            print(f"initial filter: isub={isub}/{nsubint} delay={delay}")
+            
+            if self.iprint:
+                print(f"initial filter: isub={isub}/{nsubint} delay={delay}")
+
             hf = np.ones((self.nchan,), dtype="complex")
             ht = freq2time(hf)
             # ht = np.zeros((self.nlag,), dtype="complex")
@@ -395,8 +430,8 @@ class CyclicSolver:
             self.h_time_delay_grad[isub] = grad[:]  
             self.h_time_delay[isub] = ht[:]
 
-        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0)
-        self.h_doppler_delay = fft(self.h_time_delay, axis=0)
+        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
+        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
     def get_derivative(self, wavefield):
         return self.h_doppler_delay_grad
@@ -420,7 +455,13 @@ class CyclicSolver:
         for isub in range(nsubint):
 
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-            cs = self.cyclic_spectra[isub]
+            if self.save_cyclic_spectra:
+                cs = self.cyclic_spectra[isub]
+            else:
+                cs = ps2cs(ps)
+                cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+                cs = cyclic_padding(cs, self.bw, self.ref_freq)
+
             self.ps = ps
             self.cs = cs
 
@@ -432,14 +473,15 @@ class CyclicSolver:
 
             ht = ht * phasor
 
-            print(f"update filter isub={isub}/{nsubint}")
+            if self.iprint:
+                print(f"update filter isub={isub}/{nsubint}")
 
             _merit, grad = complex_cyclic_merit_lag (ht, self)
 
             self.merit += _merit
             self.h_time_delay_grad[isub] = grad[:]
 
-        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0)
+        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
 
     def loop(
         self,
@@ -1187,25 +1229,25 @@ def loadProfile(fname):
 # I've left the bug in for now to compare directly to filter_profile
 
 
-def cs2cc(cs, workers=2):
-    return cs.shape[0] * ifft(cs, axis=0, workers=workers)
+def cs2cc(cs, workers=2, axis=0):
+    return cs.shape[axis] * ifft(cs, axis=axis, workers=workers)
 
 
-def cc2cs(cc, workers=2):
-    cs = fft(cc, axis=0, workers=workers)
+def cc2cs(cc, workers=2, axis=0):
+    cs = fft(cc, axis=axis, workers=workers)
     # cc2cs_renorm
-    return cs / cs.shape[0]
+    return cs / cs.shape[axis]
 
 
-def ps2cs(ps, workers=2):
-    cs = rfft(ps, axis=1, workers=workers)
+def ps2cs(ps, workers=2, axis=1):
+    cs = rfft(ps, axis=axis, workers=workers)
     # ps2cs renorm
-    return cs / cs.shape[1]  # original version from Cyclic-modelling
+    return cs / cs.shape[axis]  # original version from Cyclic-modelling
     # return cs/(2*(cs.shape[1] - 1))
 
 
-def cs2ps(cs, workers=2):
-    return (cs.shape[1] - 1) * 2 * irfft(cs, axis=1, workers=workers)
+def cs2ps(cs, workers=2, axis=1):
+    return (cs.shape[axis] - 1) * 2 * irfft(cs, axis=axis, workers=workers)
 
 
 def time2freq(ht, workers=2):
@@ -1396,11 +1438,11 @@ def complex_cyclic_merit_lag (ht, CS):
     CS.hf = hf
     CS.ht = ht
     cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
-    merit = 2 * (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
+    merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
     # gradient_lag
     diff = cs_model - CS.cs  # model - data
-    cc1 = cs2cc(diff * csminus)
+    phasors = np.exp(1j * phases)
 
     # original c code for reference:
     #    for (ilag=0; ilag<cc1.nlag; ilag++) {
@@ -1419,19 +1461,53 @@ def complex_cyclic_merit_lag (ht, CS):
 
     # we reuse phases and csminus, csplus from the make_model_cs call
 
-    phasors = np.exp(1j * phases)
     cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
-    grad = 4.0 * cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
-    grad = grad[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+    cc1 = cs2cc(diff * csminus)
+    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
+    grad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+    cc1 = cs2cc(np.conj(diff) * csplus)
+    grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
+    grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+    ml_profile = True
+    if ml_profile:
+        # |H(-)|^2 |H(+)|^2
+        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+        denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
+
+        # data H(-)H(+)*
+        cshmhp = CS.cs * csminus * np.conj(csplus)
+        numer = fscrunch_cs(cshmhp, bw=CS.bw, ref_freq=CS.ref_freq)
+
+        second_term = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
+        second_term += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
+        second_term /= denom ** 2
+
+        fscr = fscrunch_cs(csplus * np.conj(csminus *diff), bw=CS.bw, ref_freq=CS.ref_freq) / CS.nchan
+        ds_dh = cs2cc(CS.cs*csminus) / denom * phasors - numer * second_term
+        grad2 = fscr * ds_dh 
+        dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+        ds_dh = cs2cc(np.conj(CS.cs)*csplus) / denom * np.conj(phasors) - np.conj(numer) * second_term
+        grad2 =  np.conj(fscr) * ds_dh
+        dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+
+        agrad = np.vdot(grad,grad)
+        adgrad = np.vdot(dgrad,dgrad)
+        cosgrad = np.vdot(dgrad,grad) / np.sqrt(agrad * adgrad)
+        print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
+
+    # s0 = numer / denom
+    # s0[np.real(denom) <= 0.0] = 0
+    # return s0
 
     # conjugate(res)
     # calc positive shear
     # multiply
     # cs2cc
-    cc2 = cs2cc(np.conj(diff) * csplus)
-    grad2 = 4.0 * cc2 * np.conj(phasors) * cs0 / CS.nchan
 
-    grad = grad + grad2[:, 1:].sum(1)
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
