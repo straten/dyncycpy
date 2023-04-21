@@ -385,7 +385,7 @@ class CyclicSolver:
         First draft of using FISTA to solve the 2D transfer function
         """
 
-        self.ml_profile = True
+        # self.ml_profile = True
         nsubint = self.nspec
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -433,6 +433,7 @@ class CyclicSolver:
             self.h_time_delay[isub] = ht[:]
 
         self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
+        self.h_doppler_delay_grad[0][0] = 0+0j
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
     def get_derivative(self, wavefield):
@@ -441,6 +442,11 @@ class CyclicSolver:
     def get_func_val(self, wavefield):
         # NEED TO MAKE THIS RECOMPUTE THE MERIT IN ORDER FOR BACKTRACKING TO WORK
         return self.merit
+    
+    def evaluate (self, wavefield):
+        self.updateProfile (wavefield)
+        self.updateWavefield ()
+        return self.merit, self.h_doppler_delay_grad
 
     def updateWavefield (self):
 
@@ -1498,7 +1504,9 @@ def complex_cyclic_merit_lag (ht, CS):
         agrad = np.vdot(grad,grad)
         adgrad = np.vdot(dgrad,dgrad)
         cosgrad = np.vdot(dgrad,grad) / np.sqrt(agrad * adgrad)
-        print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
+
+        if CS.iprint:
+            print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
 
         grad += dgrad
 
@@ -1511,6 +1519,8 @@ def complex_cyclic_merit_lag (ht, CS):
     # multiply
     # cs2cc
 
+    half_nchan = CS.nchan // 2
+    grad[half_nchan:] = 0
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
