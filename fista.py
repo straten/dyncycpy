@@ -126,7 +126,7 @@ def complex_phase_fix(x: np.ndarray, coords: list, value=0):
 
 
 def take_fista_step(
-    i,
+    iter,
     func,
     backtrack,
     alpha,
@@ -163,7 +163,9 @@ def take_fista_step(
     else:
         # Need to define L when not backtracking since we're returning it:
         L = 1.0 / alpha
-        x_np1 = y_n - alpha * func.get_derivative(y_n)
+
+        y_val, y_grad = func.evaluate (y_n)
+        x_np1 = y_n - alpha * y_grad
         x_np1 = apply_prox_operators(
             _lambda,
             delay_for_inf,
@@ -178,7 +180,12 @@ def take_fista_step(
     t_np1 = (1 + np.sqrt(1 + 4 * np.power(t_n, 2))) / 2.0
     y_np1 = x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n)
 
-    func_val = func.get_func_val(x_np1)
+    func_val, func_grad = func.evaluate(x_np1)
+
+    # Estimate minimum L using equation (12) from ow23
+    diff = x_np1 - y_n
+    gdiff = y_grad - func_grad
+    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
 
     demerits = np.append(demerits, func_val)
     x_n = x_np1
@@ -186,14 +193,14 @@ def take_fista_step(
     t_n = t_np1
     if eps:
         if np.abs(func_val - demerits[-2]) < eps:
-            log.info(f"Achieved required precision ({eps}) in iteration {i}, interrupting.")
+            log.info(f"Achieved required precision ({eps}) in iteration {iter}, interrupting.")
     if np.count_nonzero(x_np1) == 0:
         log.info("solution brought to zero, stopping")
-    if i % 50 == 0:
+    if iter % 50 == 0:
         log.info(
-            f"in iteration {i}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
+            f"in iteration {iter}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
         )
-    return x_n, y_n, L, t_n, demerits
+    return x_n, y_n, L_min, t_n, demerits
 
 
 def fista(
