@@ -318,19 +318,41 @@ class CyclicSolver:
         self.pp_ref = self.pp_int
         self.nloop += 1
 
-    def updateProfile(self, new_h_doppler_delay):
+    def updateProfile(self, h_doppler_delay):
         """
         Update the reference profile
 
         Resulting profile is assigned to self.pp_ref
         """
 
-        self.h_time_delay = ifft(new_h_doppler_delay, axis=0) * new_h_doppler_delay.shape[0]
-        self.h_doppler_delay = new_h_doppler_delay
+        nsubint = self.nspec
+
+        self.h_time_delay = ifft(h_doppler_delay, axis=0) * h_doppler_delay.shape[0]
+
+        reduce_phase_noise = False
+        if reduce_phase_noise:
+            for isub in range(nsubint):
+                ht = self.h_time_delay[isub]
+                hf = time2freq(ht)
+                if isub > 0:
+                    z = (np.conj(hf) * hf_prev).sum()
+                    z /= np.abs(z)
+                    hf *= z
+                hf_prev = hf
+                self.h_time_delay[isub] = freq2time(hf)
+            h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+
+        enforce_orthogonal_real_imag = False
+        if enforce_orthogonal_real_imag:
+            z = (h_doppler_delay * h_doppler_delay).sum()
+            z /= np.abs(z)
+            z = np.sqrt(z)
+            print (f"h_doppler_delay z={z}")
+            h_doppler_delay /= z
+
+        self.h_doppler_delay = np.copy(h_doppler_delay)
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
-
-        nsubint = self.nspec
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -349,11 +371,12 @@ class CyclicSolver:
 
             ht = self.h_time_delay[isub]
 
-            if isub == 0:
-                phasor = np.conj(ht[0])
-                phasor /= np.abs(phasor)
-
-            ht = ht * phasor
+            zero_phase_first = False
+            if zero_phase_first:
+                if isub == 0:
+                    phasor = np.conj(ht[0])
+                    phasor /= np.abs(phasor)
+                ht = ht * phasor
 
             hf = time2freq(ht)
             ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
@@ -368,18 +391,6 @@ class CyclicSolver:
 
         self.pp_ref = self.pp_int[:]
 
-    def updateFake(self, new_h_doppler_delay, pp):
-        """
-        Update the reference profile
-
-        Resulting profile is assigned to self.pp_ref
-        """
-
-        self.h_time_delay = ifft(new_h_doppler_delay, axis=0) * new_h_doppler_delay.shape[0]
-        self.h_doppler_delay = new_h_doppler_delay
-
-        self.pp_ref = self.pp_int = pp
-
     def initWavefield (self, ipol=0):
         """
         First draft of using FISTA to solve the 2D transfer function
@@ -391,50 +402,13 @@ class CyclicSolver:
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
 
-        self.merit = 0
+        self.h_time_delay[:,0] = self.nchan
+        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+
         self.ipol = ipol
         self.nopt = 0
 
-        self.ph_ref = phase2harm(self.pp_ref)
-        self.ph_ref = normalize_profile(self.ph_ref)
-        self.ph_ref[0] = 0
-        ph = self.ph_ref[:]
-        self.s0 = ph
-
-        for isub in range(nsubint):
-
-            ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-            if self.save_cyclic_spectra:
-                cs = self.cyclic_spectra[isub]
-            else:
-                cs = ps2cs(ps)
-                cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
-                cs = cyclic_padding(cs, self.bw, self.ref_freq)
-
-            self.ps = ps
-            self.cs = cs
-
-            delay = self.phase_gradient(cs)
-            
-            if self.iprint:
-                print(f"initial filter: isub={isub}/{nsubint} delay={delay}")
-
-            hf = np.ones((self.nchan,), dtype="complex")
-            ht = freq2time(hf)
-            # ht = np.zeros((self.nlag,), dtype="complex")
-            # ht[0] = 1 # self.nlag
-
-            _merit, grad = complex_cyclic_merit_lag (ht, self)
-
-            self.merit += _merit
-
-            # WvS notes consistency of gradients defined by eqs 22, 24, and 24 of WDvS13 and eqs A1 and A5 of OW23
-            self.h_time_delay_grad[isub] = grad[:]  
-            self.h_time_delay[isub] = ht[:]
-
-        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
-        self.h_doppler_delay_grad[0][0] = 0+0j
-        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+        self.updateWavefield()
 
     def get_derivative(self, wavefield):
         return self.h_doppler_delay_grad
@@ -452,14 +426,13 @@ class CyclicSolver:
 
         nsubint = self.nspec
         self.merit = 0
-        phasor = 0
 
         self.ph_ref = phase2harm(self.pp_ref)
         self.ph_ref = normalize_profile(self.ph_ref)
         self.ph_ref[0] = 0
         ph = self.ph_ref[:]
         self.s0 = ph
-
+        
         for isub in range(nsubint):
 
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
@@ -487,9 +460,19 @@ class CyclicSolver:
             _merit, grad = complex_cyclic_merit_lag (ht, self)
 
             self.merit += _merit
+
+            reduce_phase_noise = True
+            if reduce_phase_noise and isub > 0:
+                prev_grad = self.h_time_delay_grad[0]
+                z = (np.conj(grad) * prev_grad).sum()
+                z /= np.abs(z)
+                grad *= z
+
             self.h_time_delay_grad[isub] = grad[:]
+            # self.h_time_delay[isub] = ht[:]
 
         self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
+        self.h_doppler_delay_grad[0][0] = 0+0j
 
     def loop(
         self,
@@ -1438,7 +1421,9 @@ def cyclic_merit_lag(x, CS):
     merit, grad = complex_cyclic_merit_lag (ht, CS)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
-    grad = get_params(grad, CS.rindex)
+
+    # multiply by 2 when going from Wertinger to real/imag derivatives
+    grad = get_params(2.0* grad, CS.rindex)
     return merit, grad
 
 def complex_cyclic_merit_lag (ht, CS):
