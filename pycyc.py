@@ -230,6 +230,9 @@ class CyclicSolver:
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
         self.save_cyclic_spectra = False
         self.ml_profile = False
+        self.enforce_orthogonal_real_imag = False
+        self.reduce_phase_noise_time_delay = False
+        self.reduce_phase_noise_time_delay_grad = False
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
@@ -327,12 +330,17 @@ class CyclicSolver:
 
         nsubint = self.nspec
 
+        print (f"h_doppler_delay[0,0]={h_doppler_delay[0,0]}")
+
         self.h_time_delay = ifft(h_doppler_delay, axis=0) * h_doppler_delay.shape[0]
 
-        reduce_phase_noise = False
-        if reduce_phase_noise:
+        if self.reduce_phase_noise_time_delay:
             for isub in range(nsubint):
                 ht = self.h_time_delay[isub]
+                if isub == 0:
+                    phasor = ht[0]
+                    phasor /= np.abs(phasor)
+                    ht *= np.conj(phasor)
                 hf = time2freq(ht)
                 if isub > 0:
                     z = (np.conj(hf) * hf_prev).sum()
@@ -340,17 +348,16 @@ class CyclicSolver:
                     hf *= z
                 hf_prev = hf
                 self.h_time_delay[isub] = freq2time(hf)
-            h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+            h_doppler_delay[:] = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
-        enforce_orthogonal_real_imag = False
-        if enforce_orthogonal_real_imag:
+        if self.enforce_orthogonal_real_imag:
             z = (h_doppler_delay * h_doppler_delay).sum()
             z /= np.abs(z)
             z = np.sqrt(z)
             print (f"h_doppler_delay z={z}")
-            h_doppler_delay /= z
+            h_doppler_delay *= np.conj(z)
 
-        self.h_doppler_delay = np.copy(h_doppler_delay)
+        self.h_doppler_delay[:] = h_doppler_delay
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
@@ -401,6 +408,7 @@ class CyclicSolver:
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
 
         self.h_time_delay[:,0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
@@ -433,6 +441,8 @@ class CyclicSolver:
         ph = self.ph_ref[:]
         self.s0 = ph
         
+        phasor = 1.+0.j
+
         for isub in range(nsubint):
 
             ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
@@ -448,11 +458,12 @@ class CyclicSolver:
 
             ht = self.h_time_delay[isub]
 
-            if isub == 0:
-                phasor = np.conj(ht[0])
-                phasor /= np.abs(phasor)
-
-            ht = ht * phasor
+            rephase_origin = False
+            if rephase_origin:
+                if isub == 0:
+                    phasor = np.conj(ht[0])
+                    phasor /= np.abs(phasor)
+                ht = ht * phasor
 
             if self.iprint:
                 print(f"update filter isub={isub}/{nsubint}")
@@ -461,18 +472,24 @@ class CyclicSolver:
 
             self.merit += _merit
 
-            reduce_phase_noise = True
-            if reduce_phase_noise and isub > 0:
+            if self.reduce_phase_noise_time_delay_grad and isub > 0:
                 prev_grad = self.h_time_delay_grad[0]
                 z = (np.conj(grad) * prev_grad).sum()
                 z /= np.abs(z)
                 grad *= z
 
-            self.h_time_delay_grad[isub] = grad[:]
-            # self.h_time_delay[isub] = ht[:]
+            self.h_time_delay_grad[isub,:] = grad
 
-        self.h_doppler_delay_grad = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
-        self.h_doppler_delay_grad[0][0] = 0+0j
+        self.h_doppler_delay_grad[:,:] = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
+
+        align_phase_gradient = False
+        if align_phase_gradient:
+            print (f"h_doppler_delay_grad[0,0]={self.h_doppler_delay_grad[0,0]}")
+            phasor = np.conj(self.h_doppler_delay_grad[0,0])
+            phasor /= np.abs(phasor)
+            self.h_doppler_delay_grad *= phasor
+
+        self.h_doppler_delay_grad[0,0] = 0.+0.j
 
     def loop(
         self,
