@@ -255,8 +255,9 @@ class CyclicSolver:
         hf_prev = np.ones((self.nchan,), dtype="complex")
         self.hf_prev = hf_prev
 
-        if self.save_cyclic_spectra:
-            self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
+        self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_time_delay[:,0] = self.nchan
+        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
@@ -271,36 +272,25 @@ class CyclicSolver:
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
-        for isub in range(self.nspec):
+        if self.save_cyclic_spectra:
+            self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
 
-            if self.iprint:
-                print(f"init profile isub={isub}/{self.nspec}")
+            for isub in range(self.nspec):
+                if self.iprint:
+                    print(f"init profile isub={isub}/{self.nspec}")
 
-            ps = self.data[isub, ipol]
-            cs = ps2cs(ps)
-            cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
-            cs = cyclic_padding(cs, self.bw, self.ref_freq)
+                ps = self.data[isub, ipol]
+                cs = ps2cs(ps)
+                cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+                cs = cyclic_padding(cs, self.bw, self.ref_freq)
 
-            if self.save_cyclic_spectra:
                 self.cyclic_spectra[isub] = cs
 
-            self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
-
-            hf = np.ones((self.nchan,), dtype="complex")
-            ht = freq2time(hf)
-            rindex = np.abs(ht).argmax()
-            self.rindex = rindex
-
-            # ph = profile harmonics
-            ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
-            ph[0] = 0.0
-            if maxinitharm:
-                ph[maxinitharm:] = 0.0
-            pp = harm2phase(ph)
-
-            self.pp_int += pp
-
-        self.pp_ref = self.pp_int[:]
+        self.maxinitharm = maxinitharm
+        self.ipol = ipol
+        self.save_dynamic_spectrum = True
+        self.updateProfile (self.h_doppler_delay)
+        self.save_dynamic_spectrum = False
 
     def solve(self, **kwargs):
         """
@@ -330,11 +320,10 @@ class CyclicSolver:
 
         nsubint = self.nspec
 
-        print (f"h_doppler_delay[0,0]={h_doppler_delay[0,0]}")
-
         self.h_time_delay = ifft(h_doppler_delay, axis=0) * h_doppler_delay.shape[0]
 
         if self.reduce_phase_noise_time_delay:
+            print ("reduce_phase_noise_time_delay")
             for isub in range(nsubint):
                 ht = self.h_time_delay[isub]
                 if isub == 0:
@@ -348,16 +337,16 @@ class CyclicSolver:
                     hf *= z
                 hf_prev = hf
                 self.h_time_delay[isub] = freq2time(hf)
-            h_doppler_delay[:] = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+            np.copyto(h_doppler_delay, fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0])
 
         if self.enforce_orthogonal_real_imag:
             z = (h_doppler_delay * h_doppler_delay).sum()
-            z /= np.abs(z)
-            z = np.sqrt(z)
-            print (f"h_doppler_delay z={z}")
-            h_doppler_delay *= np.conj(z)
+            ph = z / np.abs(z)
+            ph = np.sqrt(ph)
+            print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
+            h_doppler_delay *= np.conj(ph)
 
-        self.h_doppler_delay[:] = h_doppler_delay
+        np.copyto(self.h_doppler_delay, h_doppler_delay)
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
@@ -373,21 +362,18 @@ class CyclicSolver:
                 cs = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
                 cs = cyclic_padding(cs, self.bw, self.ref_freq)
 
+            if self.save_dynamic_spectrum:
+                self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
+
             self.ps = ps
             self.cs = cs
 
             ht = self.h_time_delay[isub]
-
-            zero_phase_first = False
-            if zero_phase_first:
-                if isub == 0:
-                    phasor = np.conj(ht[0])
-                    phasor /= np.abs(phasor)
-                ht = ht * phasor
-
             hf = time2freq(ht)
             ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
             ph[0] = 0.0
+            if self.maxinitharm:
+                ph[self.maxinitharm:] = 0.0
             pp = harm2phase(ph)
 
             if self.iprint:
@@ -396,22 +382,17 @@ class CyclicSolver:
             self.intrinsic_profiles[isub, :] = pp
             self.pp_int += pp
 
-        self.pp_ref = self.pp_int[:]
+        self.pp_ref = self.pp_int
 
     def initWavefield (self, ipol=0):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
 
-        # self.ml_profile = True
         nsubint = self.nspec
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
-
-        self.h_time_delay[:,0] = self.nchan
-        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
         self.ipol = ipol
         self.nopt = 0
@@ -428,7 +409,7 @@ class CyclicSolver:
     def evaluate (self, wavefield):
         self.updateProfile (wavefield)
         self.updateWavefield ()
-        return self.merit, self.h_doppler_delay_grad
+        return self.merit, np.copy(self.h_doppler_delay_grad)
 
     def updateWavefield (self):
 
@@ -480,7 +461,7 @@ class CyclicSolver:
 
             self.h_time_delay_grad[isub,:] = grad
 
-        self.h_doppler_delay_grad[:,:] = fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0]
+        np.copyto(self.h_doppler_delay_grad, fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0])
 
         align_phase_gradient = False
         if align_phase_gradient:
