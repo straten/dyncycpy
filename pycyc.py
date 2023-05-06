@@ -320,7 +320,7 @@ class CyclicSolver:
 
         nsubint = self.nspec
 
-        self.h_time_delay = ifft(h_doppler_delay, axis=0) * h_doppler_delay.shape[0]
+        self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
         if self.reduce_phase_noise_time_delay:
             print ("reduce_phase_noise_time_delay")
@@ -337,7 +337,7 @@ class CyclicSolver:
                     hf *= z
                 hf_prev = hf
                 self.h_time_delay[isub] = freq2time(hf)
-            np.copyto(h_doppler_delay, fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0])
+            np.copyto(h_doppler_delay, time2freq(self.h_time_delay, axis=0))
 
         if self.enforce_orthogonal_real_imag:
             z = (h_doppler_delay * h_doppler_delay).sum()
@@ -461,7 +461,7 @@ class CyclicSolver:
 
             self.h_time_delay_grad[isub,:] = grad
 
-        np.copyto(self.h_doppler_delay_grad, fft(self.h_time_delay_grad, axis=0) / self.h_time_delay_grad.shape[0])
+        np.copyto(self.h_doppler_delay_grad, time2freq(self.h_time_delay_grad, axis=0))
 
         align_phase_gradient = False
         if align_phase_gradient:
@@ -1239,14 +1239,14 @@ def cs2ps(cs, workers=2, axis=1):
     return (cs.shape[axis] - 1) * 2 * irfft(cs, axis=axis, workers=workers)
 
 
-def time2freq(ht, workers=2):
-    hf = fft(ht, workers=workers)
+def time2freq(ht, workers=2, axis=0):
+    hf = fft(ht, axis=axis, workers=workers)
     # filter_freq_renorm
-    return hf / hf.shape[0]
+    return hf / hf.shape[axis]
 
 
-def freq2time(hf, workers=2):
-    return hf.shape[0] * ifft(hf, workers=workers)
+def freq2time(hf, workers=2, axis=0):
+    return hf.shape[axis] * ifft(hf, axis=axis, workers=workers)
 
 
 def harm2phase(ph, workers=2):
