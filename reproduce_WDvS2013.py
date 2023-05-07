@@ -28,7 +28,9 @@ CS.load("P2067/chan07/53873.31676.07.15s.cyc")
 CS.data.shape, CS.nspec
 
 CS.initProfile()
-plt.plot(CS.pp_int, savefig='initProfile.png') # TO-DO filename
+plt.plot(CS.pp_int)
+plt.savefig('initProfile.png')
+plt.clf()
 
 pp_scattered = np.copy(CS.pp_ref)
 
@@ -86,10 +88,13 @@ with open(f"profiles_full_{ipass}.pkl", "wb") as fh:
 
 # Reproduce Figure 2 of WDvS13
 plot_intrinsic_vs_observed(CS, np.average(CS.data, axis=(0, 1, 2)), savefig='intrinsic_vs_observed.png')
+plt.clf()
 
 # Reproduce the bottom panel of Figure 7 of WDvS13
 avg=np.sum(abs(ifft(filters_full[0],axis=1)),axis=0)
-plt.plot(np.log(avg), savefig='impulse.png')
+plt.plot(np.log(avg))
+plt.savefig('impulse.png')
+plt.clf()
 
 # Reproduce Figure 8 of WDvS13, using the wavefield derived from only the second file (subint 236 onward)
 subfilts=filters_full[0][236:]
@@ -100,4 +105,5 @@ plotthis = np.log10(np.abs(fftshift(wavefield)))
 plt.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-2)
 plt.colorbar()
 plt.savefig('wavefield.png')
+plt.clf()
 
