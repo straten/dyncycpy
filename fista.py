@@ -185,7 +185,7 @@ def take_fista_step(
     # Estimate minimum L using equation (12) from ow23
     diff = x_np1 - y_n
     gdiff = y_grad - func_grad
-    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
+    L_min = 2.0 * np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
 
     demerits = np.append(demerits, func_val)
     x_n = x_np1
