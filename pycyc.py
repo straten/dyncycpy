@@ -123,6 +123,7 @@ class CyclicSolver:
 
         self.filenames = []
         self.nspec = 0
+        self.iprint = 0
 
         if filename:
             self.load(filename)
