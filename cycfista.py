@@ -2,16 +2,13 @@
 # coding: utf-8
 
 import numpy as np
-import pycyc
+import pycyc, fista
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import matplotlib as mpl
 from plotting import plot_intrinsic_vs_observed
-import copy
-import pickle
-import importlib
-import sys
-import time
+import copy, pickle
+import sys, time
 
 mpl.rcParams["image.aspect"] = "auto"
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
@@ -28,6 +25,7 @@ CS.initProfile()
 
 plt.plot(CS.pp_int)
 plt.savefig('cycfista_init_profile.png')
+plt.clf()
 
 pp_scattered = np.copy(CS.pp_ref)
 
@@ -93,8 +91,8 @@ for i in range (1000):
     if CS.merit > prev_merit:
         print ("**** bad step")
         reset = False
-        if reset:
-            if step_factor < min_step_factor:
+        if step_factor < min_step_factor:
+            if reset:
                 print ("****** reset")
                 x_n = np.copy(best_x)
                 y_n = np.copy(best_x)
@@ -120,6 +118,7 @@ for i in range (1000):
         plt.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
         plt.colorbar()
         plt.savefig(base + '_wavefield.png')
+        plt.clf()
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
-
+        plot.clf()
 
