@@ -13,7 +13,7 @@ mpl.rcParams["ytick.minor.size"] = 4
 mpl.rcParams["figure.figsize"] = [8.0, 6.0]
 
 
-def plot_intrinsic_vs_observed(CS, pp_ref=None):
+def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     fig, axs = plt.subplots(nrows=2, ncols=1, figsize=(8, 12))
     offset = 100
 
@@ -82,3 +82,6 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None):
     axs[1].spines.right.set_visible(False)
     axs[1].spines.top.set_visible(False)
     _ = axs[1].set_xlabel("Pulse Phase [Turns]")
+    if savefig is not None:
+        fig.savefig(savefig)
+
