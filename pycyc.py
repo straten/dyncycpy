@@ -367,7 +367,7 @@ class CyclicSolver:
             variance = np.sum(np.abs(noise)**2) / np.size(noise)
             rms = np.sqrt(variance)
             print(f'start={start_chan} end={end_chan} size={np.size(noise)} rms={rms} log10(rms)={np.log10(rms)}')
-            np.copyto(h_doppler_delay, complex_prox_noise(h_doppler_delay, self.noise_threshold * rms)
+            np.copyto(h_doppler_delay, complex_prox_noise(h_doppler_delay, self.noise_threshold * rms))
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
