@@ -100,6 +100,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pickle
 import scipy, scipy.optimize
 from scipy.fft import fftshift, fft, rfft, ifft, irfft
+from scipy import signal
 import os
 
 
@@ -236,6 +237,7 @@ class CyclicSolver:
         self.enforce_orthogonal_real_imag = False
         self.reduce_phase_noise_time_delay = False
         self.reduce_phase_noise_time_delay_grad = False
+        self.low_pass_filter_alpha = None
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
@@ -263,6 +265,10 @@ class CyclicSolver:
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
+
+        self.low_pass_filter = None
+        if self.low_pass_filter_alpha is not None:
+            self.low_pass_filter = fftshift(signal.windows.tukey(self.nchan,self.low_pass_filter_alpha))
 
         if loadFile:
             if loadFile.endswith(".npy"):
@@ -322,6 +328,9 @@ class CyclicSolver:
         """
 
         nsubint = self.nspec
+
+        if self.low_pass_filter is not None:
+            np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
 
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
@@ -478,7 +487,7 @@ class CyclicSolver:
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
-        self.h_doppler_delay_grad[0,0] = 0.+0.j
+        # self.h_doppler_delay_grad[0,0] = 0.+0.j
 
     def loop(
         self,
@@ -583,6 +592,9 @@ class CyclicSolver:
             hf = _hf_prev.copy()
         ht = freq2time(hf)
 
+        if self.low_pass_filter is not None:
+            ht = ht * self.low_pass_filter
+
         if self.nopt == 0 or adjust_delay:
             if rindex is None:
                 rindex = np.abs(ht).argmax()
@@ -631,6 +643,10 @@ class CyclicSolver:
             cyclic_merit_lag, x0, m=20, args=(self,), iprint=iprint, maxfun=maxfun, factr=scipytol, bounds=bounds
         )
         ht = get_ht(x, rindex)
+
+        if self.low_pass_filter is not None:
+            ht = ht * self.low_pass_filter
+
         hf = time2freq(ht)
 
         self.hf_soln = hf[:]
