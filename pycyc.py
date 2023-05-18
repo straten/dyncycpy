@@ -367,7 +367,7 @@ class CyclicSolver:
             variance = np.sum(np.abs(noise)**2) / np.size(noise)
             rms = np.sqrt(variance)
             print(f'start={start_chan} end={end_chan} size={np.size(noise)} rms={rms} log10(rms)={np.log10(rms)}')
-            np.copyto(h_doppler_delay, complex_prox_noise(h_doppler_delay, self.noise_threshold * rms))
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold * rms))
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
@@ -1302,14 +1302,14 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
-def complex_prox_noise(x: np.ndarray, threshold: float):
+def apply_threshold(x: np.ndarray, threshold: float):
     """
-    Apply threshold to complex-valued data
+    Any value with abs(x) < threshold is set to zero
     """
-    out = np.maximum(np.abs(x) - threshold, 0) * np.exp(1j * np.angle(x))
+    out = np.heaviside(np.abs(x) - threshold, 1) * x
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    print(f"complex_prox_noise: zero={(sz-nonz)*100.0/sz} %")
+    print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
     
 def normalize_profile(ph):
