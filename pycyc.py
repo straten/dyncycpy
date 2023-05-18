@@ -227,9 +227,11 @@ class CyclicSolver:
             assert nbin == self.nbin
 
         self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
+        self.first_harmonic_spectrum = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
         self.save_cyclic_spectra = False
+        self.enforce_causality = False
         self.ml_profile = False
         self.enforce_orthogonal_real_imag = False
         self.reduce_phase_noise_time_delay = False
@@ -365,6 +367,7 @@ class CyclicSolver:
 
             if self.save_dynamic_spectrum:
                 self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
+                self.first_harmonic_spectrum[isub, :] = cs[:,1]
 
             self.ps = ps
             self.cs = cs
@@ -451,6 +454,10 @@ class CyclicSolver:
                 print(f"update filter isub={isub}/{nsubint}")
 
             _merit, grad = complex_cyclic_merit_lag (ht, self)
+
+            if self.enforce_causality:
+                half_nchan = self.nchan // 2
+                grad[half_nchan:] = 0
 
             self.merit += _merit
 
@@ -1503,8 +1510,6 @@ def complex_cyclic_merit_lag (ht, CS):
     # multiply
     # cs2cc
 
-    half_nchan = CS.nchan // 2
-    grad[half_nchan:] = 0
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
