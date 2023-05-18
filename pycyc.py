@@ -238,6 +238,7 @@ class CyclicSolver:
         self.reduce_phase_noise_time_delay = False
         self.reduce_phase_noise_time_delay_grad = False
         self.low_pass_filter_alpha = None
+        self.noise_threshold = None
 
     def initProfile(self, loadFile=None, ipol=0, maxinitharm=None, maxsubint=None):
         """
@@ -357,6 +358,16 @@ class CyclicSolver:
             ph = np.sqrt(ph)
             print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
             h_doppler_delay *= np.conj(ph)
+
+        if self.noise_threshold is not None:
+            # compute the rms at -ve delay, over all doppler shifts
+            start_chan = self.nchan*5//8
+            end_chan = self.nchan*7//8
+            noise = h_doppler_delay[:,start_chan:end_chan]
+            variance = np.sum(np.abs(noise)**2) / np.size(noise)
+            rms = np.sqrt(variance)
+            print(f'start={start_chan} end={end_chan} size={np.size(noise)} rms={rms} log10(rms)={np.log10(rms)}')
+            np.copyto(h_doppler_delay, complex_prox_noise(h_doppler_delay, self.noise_threshold * rms)
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
@@ -1291,7 +1302,16 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
-
+def complex_prox_noise(x: np.ndarray, threshold: float):
+    """
+    Apply threshold to complex-valued data
+    """
+    out = np.maximum(np.abs(x) - threshold, 0) * np.exp(1j * np.angle(x))
+    nonz = np.count_nonzero(out)
+    sz = np.size(out)
+    print(f"complex_prox_noise: zero={(sz-nonz)*100.0/sz} %")
+    return out
+    
 def normalize_profile(ph):
     """
     Normalize harmonic profile such that first harmonic has magnitude 1
