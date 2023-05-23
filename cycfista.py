@@ -28,11 +28,16 @@ print(f"cycfista: {CS.nspec} spectra loaded")
 CS.initProfile()
 
 plt.plot(CS.pp_int)
-plt.plot(CS.intrinsic_pp)
 plt.savefig('cycfista_init_profile.png')
 plt.clf()
 with open("cycfista_init_profile.pkl", "wb") as fh:
     pickle.dump(CS.pp_int, fh)
+
+plt.plot(CS.intrinsic_pp)
+plt.savefig('cycfista_intrinsic_profile.png')
+plt.clf()
+with open("cycfista_intrinsic_profile.pkl", "wb") as fh:
+    pickle.dump(CS.intrinsic_pp, fh)
 
 plt.plot(CS.cs_norm)
 plt.savefig('cycfista_cs_norm.png')
@@ -133,6 +138,18 @@ for i in range (1000):
         plt.clf()
         with open(base + '_wavefield.pkl', "wb") as fh:
             pickle.dump(x_n, fh)
+
+        try:
+            fig, ax = plt.subplots(figsize=(8,9))
+            ax.plot(CS.optimal_gains)
+            fig.savefig(base + '_optimal_gains.png')
+            fig.clf()
+        except:
+            print("##################################### optimal gains plot failed")
+            pass
+        plt.clf()
+        with open(base + '_optimal_gains.pkl', "wb") as fh:
+            pickle.dump(CS.optimal_gains, fh)
 
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
         plt.clf()
