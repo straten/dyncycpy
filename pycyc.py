@@ -119,14 +119,17 @@ class CyclicSolver:
         self.zap_edges = zap_edges
         self.pscrunch = pscrunch
         self.tscrunch = tscrunch
+        self.ipol = ipol
         self.offp = offp
         self.maxchan = maxchan
 
         self.save_cyclic_spectra = False
         self.filenames = []
         self.nspec = 0
-        self.iprint = 0
-        self.ipol = ipol
+
+        self.iprint = False
+        self.make_plots = False
+        self.niter = 0
 
         if filename:
             self.load(filename)

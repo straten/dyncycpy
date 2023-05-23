@@ -15,7 +15,6 @@ from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
 CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 CS.save_cyclic_spectra = True
-CS.iprint = True
 
 print(f"cycfista: loading files")
 
@@ -31,11 +30,6 @@ plt.savefig('cycfista_init_profile.png')
 plt.clf()
 
 pp_scattered = np.copy(CS.pp_ref)
-
-CS.iprint = False
-CS.make_plots = False
-CS.ml_profile = False
-CS.enforce_orthogonal_real_imag = False
 
 CS.niter = 0
 CS.initWavefield()
