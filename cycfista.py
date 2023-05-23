@@ -14,8 +14,8 @@ mpl.rcParams["image.aspect"] = "auto"
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
 CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
-CS.save_cyclic_spectra = True
 
+CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
 
 print(f"cycfista: loading files")
@@ -28,6 +28,7 @@ print(f"cycfista: {CS.nspec} spectra loaded")
 CS.initProfile()
 
 plt.plot(CS.pp_int)
+plt.plot(CS.intrinsic_pp)
 plt.savefig('cycfista_init_profile.png')
 plt.clf()
 with open("cycfista_init_profile.pkl", "wb") as fh:

@@ -126,6 +126,7 @@ class CyclicSolver:
         self.save_cyclic_spectra = False
         self.filenames = []
         self.nspec = 0
+        self.intrinsic_ph = None
 
         self.iprint = False
         self.make_plots = False
@@ -302,7 +303,7 @@ class CyclicSolver:
         self.h_time_delay[:,0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
-        self.pp_int = np.zeros((self.nphase))  # intrinsic profile
+        # self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
         self.low_pass_filter = None
         if self.low_pass_filter_alpha is not None:
@@ -393,7 +394,10 @@ class CyclicSolver:
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
+        self.optimal_gains = np.zeros(self.nspec)
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
+        self.ph_numer_int = np.zeros((self.nharm), dtype="complex")
+        self.ph_denom_int = np.zeros((self.nharm), dtype="complex")
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -412,7 +416,12 @@ class CyclicSolver:
             self.cs = cs
             ht = self.h_time_delay[isub]
             hf = time2freq(ht)
-            ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
+            ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
+
+            self.ph_numer_int += self.ph_numer
+            self.ph_denom_int += self.ph_denom
+            self.optimal_gains[isub] = self.gain
+
             ph[0] = 0.0
             if self.maxinitharm:
                 ph[self.maxinitharm:] = 0.0
@@ -425,6 +434,8 @@ class CyclicSolver:
             self.pp_int += pp
 
         self.pp_ref = self.pp_int
+        self.intrinsic_ph = self.ph_numer_int / self.ph_denom_int
+        self.intrinsic_pp = harm2phase(self.intrinsic_ph)
 
     def initWavefield (self, ipol=0):
         """
@@ -465,11 +476,8 @@ class CyclicSolver:
         nsubint = self.nspec
         self.merit = 0
 
-        self.ph_ref = phase2harm(self.pp_ref)
-        self.ph_ref = normalize_profile(self.ph_ref)
-        self.ph_ref[0] = 0
-        ph = self.ph_ref[:]
-        self.s0 = ph
+        self.s0 = self.intrinsic_ph
+        self.ph_ref = self.intrinsic_ph
         
         phasor = 1.+0.j
 
@@ -520,6 +528,39 @@ class CyclicSolver:
             self.h_doppler_delay_grad *= phasor
 
         # self.h_doppler_delay_grad[0,0] = 0.+0.j
+
+    def optimize_profile(self, cs, hf, bw, ref_freq):
+        nchan = cs.shape[0]
+        nharm = cs.shape[1]
+        # filter2cs
+        cs1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
+        csplus, plus_phases = cyclic_shear_cs(cs1, shear=0.5, bw=bw, ref_freq=ref_freq)
+        csminus, minus_phases = cyclic_shear_cs(cs1, shear=-0.5, bw=bw, ref_freq=ref_freq)
+
+        # cs H(-)H(+)*
+        cshmhp = cs * csminus * np.conj(csplus)
+        # |H(-)|^2 |H(+)|^2
+        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+
+        self.gain = 1.0
+
+        if self.model_gain_variations and self.intrinsic_ph is not None:
+            tmp = fscrunch_cs(cshmhp * self.intrinsic_ph, bw=bw, ref_freq=ref_freq)
+            gain_numer = tmp[1:].sum() # sum over all harmonics
+            tmp = fscrunch_cs(maghmhp * np.abs(self.intrinsic_ph)**2, bw=bw, ref_freq=ref_freq)
+            gain_denom = tmp[1:].sum() # sum over all harmonics
+            gain = gain_numer / gain_denom
+            print(f' gain={gain}')
+            self.gain = np.real(gain)
+            cshmhp *= self.gain
+            maghmhp *= self.gain**2
+
+        # fscrunch
+        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq)
+        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq)
+        s0 = self.ph_numer / self.ph_denom
+        s0[np.real(self.ph_denom) <= 0.0] = 0
+        return s0
 
     def loop(
         self,
@@ -684,7 +725,7 @@ class CyclicSolver:
         self.optimized_filters[isub, :] = hf
         self.hf_prev = hf.copy()
 
-        ph = optimize_profile(cs, hf, self.bw, self.ref_freq)
+        ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
         ph[0] = 0.0
         pp = harm2phase(ph)
 
@@ -849,7 +890,7 @@ class CyclicSolver:
         )
         for tl in ax2b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        sopt = optimize_profile(self.cs, hf, self.bw, self.ref_freq)
+        sopt = self.optimize_profile(self.cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
         sopt[0] = 0.0
         smeas = normalize_profile(self.cs.mean(0))
@@ -1429,27 +1470,6 @@ def make_model_cs(hf, s0, bw, ref_freq):
     return cs, csplus, csminus, minus_phases  # minus_phases has factor of 2*pi*tau*alpha
 
 
-def optimize_profile(cs, hf, bw, ref_freq):
-    nchan = cs.shape[0]
-    nharm = cs.shape[1]
-    # filter2cs
-    cs1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
-    csplus, plus_phases = cyclic_shear_cs(cs1, shear=0.5, bw=bw, ref_freq=ref_freq)
-
-    csminus, minus_phases = cyclic_shear_cs(cs1, shear=-0.5, bw=bw, ref_freq=ref_freq)
-
-    # cs H(-)H(+)*
-    cshmhp = cs * csminus * np.conj(csplus)
-    # |H(-)|^2 |H(+)|^2
-    maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
-    # fscrunch
-    denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq)
-    numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq)
-    s0 = numer / denom
-    s0[np.real(denom) <= 0.0] = 0
-    return s0
-
-
 def fscrunch_cs(cs, bw, ref_freq):
     cstmp = cs[:]
     cstmp = cyclic_padding(cstmp, bw, ref_freq)
@@ -1575,8 +1595,8 @@ def complex_cyclic_merit_lag (ht, CS):
     # cs2cc
 
     # 2*nonzero for re,im
-    merit /= 2*nonzero
-    grad /= 2*nonzero
+    # merit /= 2*nonzero
+    # grad /= 2*nonzero
 
     CS.grad = grad[:]
     CS.model = cs_model[:]
