@@ -121,9 +121,15 @@ for i in range (1000):
     if i % 10 == 0:
         base = 'cycfista_' + str(i)
         plotthis = np.log10(np.abs(fftshift(x_n))+ 1e-2)
-        plt.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-        plt.colorbar()
-        plt.savefig(base + '_wavefield.png')
+        try:
+            fig, ax = plt.subplots(figsize=(8,9))
+            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
+            fig.colorbar(img)
+            fig.savefig(base + '_wavefield.png')
+            fig.clf()
+        except:
+            print("##################################### wavefield plot failed")
+            pass
         plt.clf()
         with open(base + '_wavefield.pkl', "wb") as fh:
             pickle.dump(x_n, fh)

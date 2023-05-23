@@ -383,13 +383,8 @@ class CyclicSolver:
             h_doppler_delay *= np.conj(ph)
 
         if self.noise_threshold is not None:
-            # compute the rms at -ve delay, over all doppler shifts
-            start_chan = self.nchan*5//8
-            end_chan = self.nchan*7//8
-            noise = h_doppler_delay[:,start_chan:end_chan]
-            variance = np.sum(np.abs(noise)**2) / np.size(noise)
-            rms = np.sqrt(variance)
-            print(f'start={start_chan} end={end_chan} size={np.size(noise)} rms={rms} log10(rms)={np.log10(rms)}')
+            rms = rms_wavefield(h_doppler_delay)
+            print(f'noise_threshold rms={rms} log10(rms)={np.log10(rms)}')
             np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold * rms))
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
@@ -1387,6 +1382,15 @@ def normalize_pp(pp):
     ph[0] = 0
     return harm2phase(ph)
 
+
+def rms_wavefield(h):
+    # compute the rms at -ve delay, over all doppler shifts
+    nchan = h.shape[1]
+    start_chan = nchan*5//8
+    end_chan = nchan*7//8
+    noise = h[:,start_chan:end_chan]
+    variance = np.mean(np.abs(noise)**2)
+    return np.sqrt(variance)
 
 def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nchan = cs.shape[0]
