@@ -28,6 +28,14 @@ CS.initProfile()
 plt.plot(CS.pp_int)
 plt.savefig('cycfista_init_profile.png')
 plt.clf()
+with open("cycfista_init_profile.pkl", "wb") as fh:
+    pickle.dump(CS.pp_int, fh)
+
+plt.plot(CS.cs_norm)
+plt.savefig('cycfista_cs_norm.png')
+plt.clf()
+with open("cycfista_cs_norm.pkl", "wb") as fh:
+    pickle.dump(CS.cs_norm, fh)
 
 pp_scattered = np.copy(CS.pp_ref)
 
@@ -116,6 +124,9 @@ for i in range (1000):
         plt.colorbar()
         plt.savefig(base + '_wavefield.png')
         plt.clf()
+        with open(base + '_wavefield.pkl', "wb") as fh:
+            pickle.dump(x_n, fh)
+
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
         plot.clf()
 
