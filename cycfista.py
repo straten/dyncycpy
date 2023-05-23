@@ -13,14 +13,17 @@ import sys, time
 mpl.rcParams["image.aspect"] = "auto"
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
-CS = pycyc.CyclicSolver("P2067/chan07/53873.27864.07.15s.t2", zap_edges = 0.05556, pscrunch=True)
-CS.data.shape, CS.nspec
-
-CS.load("P2067/chan07/53873.31676.07.15s.t2")
-CS.data.shape, CS.nspec
-
+CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 CS.save_cyclic_spectra = True
-CS.iprint = False
+CS.iprint = True
+
+print(f"cycfista: loading files")
+
+CS.load("P2067/chan07/53873.27864.07.15s.t2")
+CS.load("P2067/chan07/53873.31676.07.15s.t2")
+
+print(f"cycfista: {CS.nspec} spectra loaded")
+
 CS.initProfile()
 
 plt.plot(CS.pp_int)
