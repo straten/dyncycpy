@@ -131,6 +131,33 @@ class CyclicSolver:
         self.make_plots = False
         self.niter = 0
 
+        # modelling options
+
+        # set the wavefield at all negative delays to zero
+        self.enforce_causality = False
+
+        # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
+        self.enforce_orthogonal_real_imag = False
+
+        # align the phases of time-adjacent frequency responses computed from the wavefield
+        self.reduce_phase_noise_time_delay = False
+
+        # align the phases of time-adjacent frequency responses computed from the wavefield gradient
+        self.reduce_phase_noise_time_delay_grad = False
+
+        # taper/apodize the wavefield around the largest delays
+        self.low_pass_filter_alpha = None
+
+        # set all wavefield components less than theshold*rms to zero
+        # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
+        self.noise_threshold = None
+
+        # simultaneously fit for the instrinsic cyclic spectrum (not recommended)
+        self.ml_profile = False
+
+        # include temporal variations in gain in the model
+        self.model_gain_variations = False
+
         if filename:
             self.load(filename)
 
@@ -249,13 +276,6 @@ class CyclicSolver:
         self.first_harmonic_spectrum = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
-        self.enforce_causality = False
-        self.enforce_orthogonal_real_imag = False
-        self.reduce_phase_noise_time_delay = False
-        self.reduce_phase_noise_time_delay_grad = False
-        self.low_pass_filter_alpha = None
-        self.noise_threshold = None
-        self.ml_profile = False
 
     def initProfile(self, loadFile=None, maxinitharm=None, maxsubint=None):
         """
@@ -435,7 +455,10 @@ class CyclicSolver:
 
     def get_cs(self, ps):
         cs = ps2cs(ps)
-        cs, cs_norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+        if self.model_gain_variations:
+            cs, cs_norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
+        else:
+            cs, cs_norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
         return cyclic_padding(cs, self.bw, self.ref_freq), cs_norm
 
     def updateWavefield (self):
@@ -1324,6 +1347,14 @@ def normalize_pp(pp):
     ph[0] = 0
     return harm2phase(ph)
 
+
+def normalize_cs_by_noise_rms(cs, bw, ref_freq):
+    nchan = cs.shape[0]
+    nharm = cs.shape[1]
+    cmin, cmax = chan_limits_cs(nharm-1, nchan, bw, ref_freq)
+    hmin = nharm*7//8
+    rms = np.sqrt((np.abs(cs[cmin:cmax, hmin:]) ** 2).mean())
+    return cs / rms, rms
 
 def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
