@@ -13,35 +13,40 @@ import sys, time
 mpl.rcParams["image.aspect"] = "auto"
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
-CS = pycyc.CyclicSolver("P2067/chan07/53873.27864.07.15s.t2", zap_edges = 0.05556, pscrunch=True)
-CS.data.shape, CS.nspec
-
-CS.load("P2067/chan07/53873.31676.07.15s.t2")
-CS.data.shape, CS.nspec
-
+CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 CS.save_cyclic_spectra = True
-CS.iprint = False
+
+CS.model_gain_variations = True
+
+print(f"cycfista: loading files")
+
+CS.load("P2067/chan07/53873.27864.07.15s.t2")
+CS.load("P2067/chan07/53873.31676.07.15s.t2")
+
+print(f"cycfista: {CS.nspec} spectra loaded")
+
 CS.initProfile()
 
 plt.plot(CS.pp_int)
 plt.savefig('cycfista_init_profile.png')
 plt.clf()
+with open("cycfista_init_profile.pkl", "wb") as fh:
+    pickle.dump(CS.pp_int, fh)
+
+plt.plot(CS.cs_norm)
+plt.savefig('cycfista_cs_norm.png')
+plt.clf()
+with open("cycfista_cs_norm.pkl", "wb") as fh:
+    pickle.dump(CS.cs_norm, fh)
 
 pp_scattered = np.copy(CS.pp_ref)
 
-CS.iprint = False
-CS.make_plots = False
-CS.ml_profile = False
-CS.enforce_orthogonal_real_imag = False
-
-CS.niter = 0
 CS.initWavefield()
 
 y_n = np.copy(CS.h_doppler_delay)
 x_n = np.copy(CS.h_doppler_delay)
 t_n = 1
 
-CS.iprint = 0
 demerits = np.array([])
 alpha = 20.0
 
@@ -125,6 +130,9 @@ for i in range (1000):
             print("##################################### wavefield plot failed")
             pass
         plt.clf()
+        with open(base + '_wavefield.pkl', "wb") as fh:
+            pickle.dump(x_n, fh)
+
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
         plt.clf()
 
