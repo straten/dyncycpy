@@ -445,7 +445,6 @@ class CyclicSolver:
         return self.h_doppler_delay_grad
     
     def get_func_val(self, wavefield):
-        # NEED TO MAKE THIS RECOMPUTE THE MERIT IN ORDER FOR BACKTRACKING TO WORK
         return self.merit
     
     def evaluate (self, wavefield):
@@ -1502,6 +1501,8 @@ def complex_cyclic_merit_lag (ht, CS):
     cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
     merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
+    nonzero = np.count_nonzero(cs_model[:, 1:])
+
     # gradient_lag
     diff = cs_model - CS.cs  # model - data
     phasors = np.exp(1j * phases)
@@ -1573,6 +1574,10 @@ def complex_cyclic_merit_lag (ht, CS):
     # multiply
     # cs2cc
 
+    # 2*nonzero for re,im
+    merit /= 2*nonzero
+    grad /= 2*nonzero
+
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
@@ -1582,7 +1587,6 @@ def complex_cyclic_merit_lag (ht, CS):
     if CS.make_plots:
         if CS.niter % CS.plot_every == 0:
             CS.plotCurrentSolution()
-
 
     CS.niter += 1
 
