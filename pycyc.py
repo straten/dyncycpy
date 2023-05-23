@@ -497,7 +497,7 @@ class CyclicSolver:
             if self.iprint:
                 print(f"update filter isub={isub}/{nsubint}")
 
-            _merit, grad = complex_cyclic_merit_lag (ht, self)
+            _merit, grad = complex_cyclic_merit_lag (ht, self, self.optimal_gains[isub])
 
             if self.enforce_causality:
                 half_nchan = self.nchan // 2
@@ -540,12 +540,14 @@ class CyclicSolver:
         self.gain = 1.0
 
         if self.model_gain_variations and self.intrinsic_ph is not None:
-            tmp = fscrunch_cs(cshmhp * self.intrinsic_ph, bw=bw, ref_freq=ref_freq)
+            # Equation A11 numerator
+            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph, bw=bw, ref_freq=ref_freq)
             gain_numer = tmp[1:].sum() # sum over all harmonics
+            # Equation A11 denominator
             tmp = fscrunch_cs(maghmhp * np.abs(self.intrinsic_ph)**2, bw=bw, ref_freq=ref_freq)
             gain_denom = tmp[1:].sum() # sum over all harmonics
             gain = gain_numer / gain_denom
-            print(f' gain={gain}')
+            # print(f' gain={gain}')
             self.gain = np.real(gain)
             cshmhp *= self.gain
             maghmhp *= self.gain**2
@@ -1510,7 +1512,7 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad = complex_cyclic_merit_lag (ht, CS)
+    merit, grad = complex_cyclic_merit_lag (ht, CS, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
@@ -1518,11 +1520,12 @@ def cyclic_merit_lag(x, CS):
     grad = get_params(2.0* grad, CS.rindex)
     return merit, grad
 
-def complex_cyclic_merit_lag (ht, CS):
+def complex_cyclic_merit_lag (ht, CS, gain):
     hf = time2freq(ht)
     CS.hf = hf
     CS.ht = ht
     cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
+    cs_model *= gain
     merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
     nonzero = np.count_nonzero(cs_model[:, 1:])
