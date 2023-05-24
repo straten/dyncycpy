@@ -430,6 +430,13 @@ class CyclicSolver:
 
         self.pp_ref = self.pp_int
         self.intrinsic_ph = self.ph_numer_int / self.ph_denom_int
+
+        # keep the gains from wandering
+        mean_gain = self.optimal_gains.mean()
+        print(f'updateProfile mean gain: {mean_gain}')
+        self.optimal_gains /= mean_gain
+        self.intrinsic_ph *= mean_gain
+
         self.intrinsic_pp = harm2phase(self.intrinsic_ph)
 
     def initWavefield (self, ipol=0):
@@ -1399,7 +1406,9 @@ def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nharm = cs.shape[1]
     cmin, cmax = chan_limits_cs(nharm-1, nchan, bw, ref_freq)
     hmin = nharm*7//8
-    rms = np.sqrt((np.abs(cs[cmin:cmax, hmin:]) ** 2).mean())
+    extracted_noise = cs[cmin:cmax, hmin:]
+    # print(f'normalize_cs_by_noise_rms nonzero={np.count_nonzero(noise)} size={noise.size}')
+    rms = np.sqrt((np.abs(extracted_noise) ** 2).mean())
     return cs / rms, rms
 
 def normalize_cs(cs, bw, ref_freq):
@@ -1528,7 +1537,9 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     cs_model *= gain
     merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
-    nonzero = np.count_nonzero(cs_model[:, 1:])
+    extract = cs_model[:, 1:]
+    nonzero = np.count_nonzero(extract)
+    # print(f'complex_cyclic_merit_lag nonzero={nonzero} size={extract.size}')
 
     # gradient_lag
     diff = cs_model - CS.cs  # model - data
