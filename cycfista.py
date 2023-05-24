@@ -140,7 +140,7 @@ for i in range (1000):
             pickle.dump(x_n, fh)
 
         try:
-            fig, ax = plt.subplots(figsize=(8,9))
+            fig, ax = plt.subplots(figsize=(12,8))
             ax.plot(CS.optimal_gains)
             fig.savefig(base + '_optimal_gains.png')
             fig.clf()
