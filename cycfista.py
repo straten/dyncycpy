@@ -17,6 +17,8 @@ CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
+CS.noise_shrinkage_threshold = 1.0
+CS.reduce_phase_noise_time_delay = True
 
 print(f"cycfista: loading files")
 
@@ -150,6 +152,15 @@ for i in range (1000):
         plt.clf()
         with open(base + '_optimal_gains.pkl', "wb") as fh:
             pickle.dump(CS.optimal_gains, fh)
+
+        try:
+            fig, ax = plt.subplots(figsize=(12,8))
+            ax.plot(np.log10(np.sum(np.abs(x_n)**2,axis=0)))
+            fig.savefig(base + '_impulse_response.png')
+            fig.clf()
+        except:
+            print("##################################### impulse response plot failed")
+            pass
 
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
         plt.clf()

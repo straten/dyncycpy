@@ -153,6 +153,10 @@ class CyclicSolver:
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
         self.noise_threshold = None
 
+        # set all wavefield components less than theshold*rms to zero, after shrinking them by the same amount
+        # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
+        self.noise_shrinkage_threshold = None
+
         # simultaneously fit for the instrinsic cyclic spectrum (not recommended)
         self.ml_profile = False
 
@@ -353,6 +357,17 @@ class CyclicSolver:
 
         nsubint = self.nspec
 
+        rms = rms_wavefield(h_doppler_delay)
+
+        if rms > 0 and self.noise_threshold is not None:
+            print(f'noise_threshold rms={rms}')
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold * rms))
+
+        if rms > 0 and self.noise_shrinkage_threshold is not None:
+            print(f'noise_shrinkage_threshold rms={rms}')
+            threshold = self.noise_shrinkage_threshold * rms
+            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, threshold))
+
         if self.low_pass_filter is not None:
             np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
 
@@ -381,11 +396,6 @@ class CyclicSolver:
             ph = np.sqrt(ph)
             print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
             h_doppler_delay *= np.conj(ph)
-
-        if self.noise_threshold is not None:
-            rms = rms_wavefield(h_doppler_delay)
-            print(f'noise_threshold rms={rms} log10(rms)={np.log10(rms)}')
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold * rms))
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
@@ -1374,7 +1384,20 @@ def apply_threshold(x: np.ndarray, threshold: float):
     sz = np.size(out)
     print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
-    
+
+def apply_shrinkage_threshold(x: np.ndarray, threshold: float):
+    """
+        abs(x) is decreased by threshold.
+        Any resulting value with abs(x) < threshold is set to zero
+    """
+    # add a small offset to absx to avoid division by zero in next step
+    absx = np.abs(x) + threshold * 1e-6
+    out = np.maximum(absx - threshold, 0) * x / absx
+    nonz = np.count_nonzero(out)
+    sz = np.size(out)
+    print(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    return out
+
 def normalize_profile(ph):
     """
     Normalize harmonic profile such that first harmonic has magnitude 1
