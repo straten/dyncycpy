@@ -141,10 +141,10 @@ class CyclicSolver:
         self.enforce_orthogonal_real_imag = False
 
         # align the phases of time-adjacent frequency responses computed from the wavefield
-        self.reduce_phase_noise_time_delay = False
+        self.reduce_temporal_phase_noise = False
 
         # align the phases of time-adjacent frequency responses computed from the wavefield gradient
-        self.reduce_phase_noise_time_delay_grad = False
+        self.reduce_temporal_phase_noise_grad = False
 
         # taper/apodize the wavefield around the largest delays
         self.low_pass_filter_alpha = None
@@ -213,6 +213,8 @@ class CyclicSolver:
             for k in range(1, self.tscrunch):
                 data[:-k, :, :, :] += data[k:, :, :, :]
 
+        self.cs_norm = None
+
         if self.nspec == 0:
 
             idx = 0  # only used to get parameters of integration, not data itself
@@ -245,7 +247,8 @@ class CyclicSolver:
                 for isub in range(self.nspec):
                     if self.iprint:
                         print(f"load calculating cyclic spectrum for isub={isub}/{self.nspec}")
-                    self.cyclic_spectra[isub], self.cs_norm[isub] = self.get_cs(data[isub, self.ipol])
+                    self.cyclic_spectra[isub] = self.get_cs(data[isub, self.ipol])
+                    self.cs_norm[isub] = self.get_cs_norm
                 self.data = None
                 data = None
             else:
@@ -269,18 +272,14 @@ class CyclicSolver:
                     jsub = isub + self.nspec
                     if self.iprint:
                         print(f"load calculating cyclic spectrum for isub={jsub}/{new_nspec}")
-                    self.cyclic_spectra[jsub], self.cs_norm[jsub] = self.get_cs(data[isub, self.ipol])
+                    self.cyclic_spectra[jsub] = self.get_cs(data[isub, self.ipol])
+                    self.cs_norm[jsub] = self.get_cs_norm
                 self.data = None
                 data = None
             else:
                 self.data = np.append(self.data, data, axis=0)
 
             self.nspec = new_nspec
-
-        self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
-        self.first_harmonic_spectrum = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
 
     def initProfile(self, loadFile=None, maxinitharm=None, maxsubint=None):
         """
@@ -306,6 +305,11 @@ class CyclicSolver:
         self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_time_delay[:,0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+
+        self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
+        self.first_harmonic_spectrum = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
 
         # self.pp_int = np.zeros((self.nphase))  # intrinsic profile
 
@@ -374,8 +378,8 @@ class CyclicSolver:
 
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
-        if self.reduce_phase_noise_time_delay:
-            print ("reduce_phase_noise_time_delay")
+        if self.reduce_temporal_phase_noise:
+            print ("reduce_temporal_phase_noise")
             for isub in range(nsubint):
                 ht = self.h_time_delay[isub]
                 if isub == 0:
@@ -400,10 +404,13 @@ class CyclicSolver:
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
-        self.optimal_gains = np.zeros(self.nspec)
+        self.optimal_gains = np.ones(self.nspec)
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
         self.ph_numer_int = np.zeros((self.nharm), dtype="complex")
         self.ph_denom_int = np.zeros((self.nharm), dtype="complex")
+
+        if self.cs_norm is None:
+            self.cs_norm = np.zeros(self.nspec)
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -414,8 +421,10 @@ class CyclicSolver:
             else:
                 ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
                 cs = self.get_cs(ps)
+                self.cs_norm[isub] = self.get_cs_norm
 
             if self.save_dynamic_spectrum:
+                self.dynamic_spectrum.shape
                 self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
                 self.first_harmonic_spectrum[isub, :] = cs[:,1]
 
@@ -446,7 +455,7 @@ class CyclicSolver:
         mean_gain = self.optimal_gains.mean()
         print(f'updateProfile mean gain: {mean_gain}')
         self.optimal_gains /= mean_gain
-        self.intrinsic_ph *= mean_gain
+        # self.intrinsic_ph *= mean_gain
 
         self.intrinsic_pp = harm2phase(self.intrinsic_ph)
 
@@ -479,10 +488,11 @@ class CyclicSolver:
     def get_cs(self, ps):
         cs = ps2cs(ps)
         if self.model_gain_variations:
-            cs, cs_norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
+            cs, norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
         else:
-            cs, cs_norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
-        return cyclic_padding(cs, self.bw, self.ref_freq), cs_norm
+            cs, norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+        self.get_cs_norm = norm
+        return cyclic_padding(cs, self.bw, self.ref_freq)
 
     def updateWavefield (self):
 
@@ -523,7 +533,7 @@ class CyclicSolver:
 
             self.merit += _merit
 
-            if self.reduce_phase_noise_time_delay_grad and isub > 0:
+            if self.reduce_temporal_phase_noise_grad and isub > 0:
                 prev_grad = self.h_time_delay_grad[0]
                 z = (np.conj(grad) * prev_grad).sum()
                 z /= np.abs(z)
