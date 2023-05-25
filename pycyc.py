@@ -127,6 +127,7 @@ class CyclicSolver:
         self.filenames = []
         self.nspec = 0
         self.intrinsic_ph = None
+        self.cs_norm = None
 
         self.iprint = False
         self.make_plots = False
@@ -212,8 +213,6 @@ class CyclicSolver:
         if self.tscrunch:
             for k in range(1, self.tscrunch):
                 data[:-k, :, :, :] += data[k:, :, :, :]
-
-        self.cs_norm = None
 
         if self.nspec == 0:
 
@@ -353,7 +352,7 @@ class CyclicSolver:
         self.nloop += 1
 
     def get_dof(self):
-        return self.merit_terms - self.nfree_parameters
+        return self.nterm_merit - self.nfree_parameters
 
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
@@ -509,7 +508,7 @@ class CyclicSolver:
 
         nsubint = self.nspec
         self.merit = 0
-        self.merit_terms = 0
+        self.nterm_merit = 0
 
         self.s0 = self.intrinsic_ph
         self.ph_ref = self.intrinsic_ph
@@ -544,6 +543,7 @@ class CyclicSolver:
                 grad[half_nchan:] = 0
 
             self.merit += _merit
+            self.nterm_merit += self.complex_cyclic_merit_terms
 
             if self.reduce_temporal_phase_noise_grad and isub > 0:
                 prev_grad = self.h_time_delay_grad[0]
@@ -1663,7 +1663,7 @@ def complex_cyclic_merit_lag (ht, CS, gain):
 
     # although re & im count as separate terms in sum, 
     # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
-    CS.merit_terms += nonzero
+    CS.complex_cyclic_merit_terms = nonzero
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
