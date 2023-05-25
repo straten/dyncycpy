@@ -352,6 +352,12 @@ class CyclicSolver:
         self.pp_ref = self.pp_int
         self.nloop += 1
 
+    def get_dof(self):
+        return self.merit_terms - self.nfree_parameters
+
+    def get_reduced_chisq(self):
+        return self.merit / self.get_dof()
+    
     def updateProfile(self, h_doppler_delay):
         """
         Update the reference profile
@@ -403,6 +409,11 @@ class CyclicSolver:
             h_doppler_delay *= np.conj(ph)
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
+
+        nonzero = np.count_nonzero(h_doppler_delay)
+        # although re & im count as separate terms in sum, 
+        # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
+        self.nfree_parameters = nonzero
 
         self.optimal_gains = np.ones(self.nspec)
         self.pp_int = np.zeros((self.nphase))  # intrinsic profile
@@ -498,6 +509,7 @@ class CyclicSolver:
 
         nsubint = self.nspec
         self.merit = 0
+        self.merit_terms = 0
 
         self.s0 = self.intrinsic_ph
         self.ph_ref = self.intrinsic_ph
@@ -1646,12 +1658,12 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     # multiply
     # cs2cc
 
-    # 2*nonzero for re,im
-    # merit /= 2*nonzero
-    # grad /= 2*nonzero
-
     CS.grad = grad[:]
     CS.model = cs_model[:]
+
+    # although re & im count as separate terms in sum, 
+    # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
+    CS.merit_terms += nonzero
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))

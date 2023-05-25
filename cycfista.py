@@ -52,7 +52,7 @@ t_n = 1
 demerits = np.array([])
 alpha = 20.0
 
-best_merit = CS.merit
+best_merit = CS.get_reduced_chisq()
 best_x = np.copy(x_n)
 L_max = 1.0 / alpha
 
@@ -89,13 +89,13 @@ for i in range (1000):
     if L > L_max:
       L_max = L
 
-    if CS.merit < best_merit:
-        best_merit = CS.merit
+    if CS.get_reduced_chisq() < best_merit:
+        best_merit = CS.get_reduced_chisq()
         best_x = np.copy(x_n)
     else:
         print (f"\n** greater than best={best_merit}")
 
-    if CS.merit > prev_merit:
+    if CS.get_reduced_chisq() > prev_merit:
         print ("**** bad step")
         reset = False
         if step_factor < min_step_factor:
@@ -111,9 +111,9 @@ for i in range (1000):
         step_factor = np.tanh( step_factor * acceleration )
 
     alpha = step_factor / L_max
-    prev_merit = CS.merit
+    prev_merit = CS.get_reduced_chisq()
     
-    print(f"\ndemerit={CS.merit} alpha={alpha} step_factor={step_factor} t_n={t_n}")
+    print(f"\ndemerit={CS.get_reduced_chisq()} alpha={alpha} step_factor={step_factor} t_n={t_n}")
     end_time = time.time()
 
     elapsed_time = end_time - start_time
@@ -127,11 +127,10 @@ for i in range (1000):
             img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
             fig.colorbar(img)
             fig.savefig(base + '_wavefield.png')
-            fig.close()
+            plt.close()
         except:
             print("##################################### wavefield plot failed")
             pass
-        plt.close()
         with open(base + '_wavefield.pkl', "wb") as fh:
             pickle.dump(x_n, fh)
 
@@ -139,11 +138,10 @@ for i in range (1000):
             fig, ax = plt.subplots(figsize=(12,8))
             ax.plot(CS.optimal_gains)
             fig.savefig(base + '_optimal_gains.png')
-            fig.close()
+            plt.close()
         except:
             print("##################################### optimal gains plot failed")
             pass
-        plt.close()
         with open(base + '_optimal_gains.pkl', "wb") as fh:
             pickle.dump(CS.optimal_gains, fh)
 
@@ -151,7 +149,7 @@ for i in range (1000):
             fig, ax = plt.subplots(figsize=(12,8))
             ax.plot(np.log10(np.sum(np.abs(x_n)**2,axis=0)))
             fig.savefig(base + '_impulse_response.png')
-            fig.close()
+            plt.close()
         except:
             print("##################################### impulse response plot failed")
             pass
