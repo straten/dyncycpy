@@ -32,21 +32,24 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     _int /= np.max(_int) / target_max
     _int = np.roll(_int, roll)
 
+    nbin = pp_ref.size
+    # print(f'plot_intrinsic_vs_observed nbin={nbin}')
+
     axs[0].plot(
-        np.arange(2048) / 1024,
+        np.arange(nbin*2) / nbin,
         np.array((ref, ref)).ravel() + 1,
         label="as usual",
         c="black",
     )
     axs[0].plot(
-        np.arange(2048) / 1024,
+        np.arange(nbin*2) / nbin,
         np.array((_int, _int)).ravel() + 1,
         label="intrinsic",
         c="red",
     )
 
     axs[0].set_xticks(
-        np.arange(offset / 1024, 2048 / 1024, 512 / 1024),
+        np.arange(offset / nbin, 2, 0.5),
         labels=("0.0", "0.5", "1.0", "1.5"),
     )
 
@@ -58,20 +61,20 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     axs[0].spines.top.set_visible(False)
 
     axs[1].plot(
-        np.arange(2048) / 1024,
+        np.arange(nbin*2) / nbin,
         np.array((ref, ref)).ravel() + 1,
         label="as usual",
         c="black",
     )
     axs[1].plot(
-        np.arange(2048) / 1024,
+        np.arange(nbin*2) / nbin,
         np.array((_int, _int)).ravel() + 1,
         label="intrinsic",
         c="red",
     )
 
     axs[1].set_xticks(
-        np.arange(offset / 1024, 2048 / 1024, 512 / 1024),
+        np.arange(offset / nbin, 2, 0.5),
         labels=("0.0", "0.5", "1.0", "1.5"),
     )
     axs[1].tick_params(which="both", direction="in")
