@@ -31,13 +31,13 @@ CS.initProfile()
 
 plt.plot(CS.intrinsic_pp)
 plt.savefig('cycfista_init_profile.png')
-plt.clf()
+plt.close()
 with open("cycfista_init_profile.pkl", "wb") as fh:
     pickle.dump(CS.intrinsic_pp, fh)
 
 plt.plot(CS.cs_norm)
 plt.savefig('cycfista_cs_norm.png')
-plt.clf()
+plt.close()
 with open("cycfista_cs_norm.pkl", "wb") as fh:
     pickle.dump(CS.cs_norm, fh)
 
@@ -127,11 +127,11 @@ for i in range (1000):
             img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
             fig.colorbar(img)
             fig.savefig(base + '_wavefield.png')
-            fig.clf()
+            fig.close()
         except:
             print("##################################### wavefield plot failed")
             pass
-        plt.clf()
+        plt.close()
         with open(base + '_wavefield.pkl', "wb") as fh:
             pickle.dump(x_n, fh)
 
@@ -139,11 +139,11 @@ for i in range (1000):
             fig, ax = plt.subplots(figsize=(12,8))
             ax.plot(CS.optimal_gains)
             fig.savefig(base + '_optimal_gains.png')
-            fig.clf()
+            fig.close()
         except:
             print("##################################### optimal gains plot failed")
             pass
-        plt.clf()
+        plt.close()
         with open(base + '_optimal_gains.pkl', "wb") as fh:
             pickle.dump(CS.optimal_gains, fh)
 
@@ -151,11 +151,11 @@ for i in range (1000):
             fig, ax = plt.subplots(figsize=(12,8))
             ax.plot(np.log10(np.sum(np.abs(x_n)**2,axis=0)))
             fig.savefig(base + '_impulse_response.png')
-            fig.clf()
+            fig.close()
         except:
             print("##################################### impulse response plot failed")
             pass
 
         plot_intrinsic_vs_observed(CS, pp_scattered, base + '_compare.png')
-        plt.clf()
+        plt.close()
 
