@@ -18,7 +18,6 @@ CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
 CS.noise_shrinkage_threshold = 1.0
-CS.reduce_temporal_phase_noise = True
 
 print(f"cycfista: loading files")
 
