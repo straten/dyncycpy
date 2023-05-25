@@ -18,27 +18,21 @@ CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
 CS.noise_shrinkage_threshold = 1.0
-CS.reduce_phase_noise_time_delay = True
+CS.reduce_temporal_phase_noise = True
 
 print(f"cycfista: loading files")
 
-CS.load("P2067/chan07/53873.27864.07.15s.t2")
-CS.load("P2067/chan07/53873.31676.07.15s.t2")
+CS.load("P2067/chan07/53873.27864.07.15s.pb2t2")
+CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
 
 print(f"cycfista: {CS.nspec} spectra loaded")
 
 CS.initProfile()
 
-plt.plot(CS.pp_int)
+plt.plot(CS.intrinsic_pp)
 plt.savefig('cycfista_init_profile.png')
 plt.clf()
 with open("cycfista_init_profile.pkl", "wb") as fh:
-    pickle.dump(CS.pp_int, fh)
-
-plt.plot(CS.intrinsic_pp)
-plt.savefig('cycfista_intrinsic_profile.png')
-plt.clf()
-with open("cycfista_intrinsic_profile.pkl", "wb") as fh:
     pickle.dump(CS.intrinsic_pp, fh)
 
 plt.plot(CS.cs_norm)
