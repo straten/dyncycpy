@@ -361,7 +361,8 @@ class CyclicSolver:
 
         if rms > 0 and self.noise_threshold is not None:
             print(f'noise_threshold rms={rms}')
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold * rms))
+            threshold = self.noise_threshold * rms
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, threshold))
 
         if rms > 0 and self.noise_shrinkage_threshold is not None:
             print(f'noise_shrinkage_threshold rms={rms}')
@@ -1428,7 +1429,7 @@ def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nchan = cs.shape[0]
     nharm = cs.shape[1]
     cmin, cmax = chan_limits_cs(nharm-1, nchan, bw, ref_freq)
-    hmin = nharm*7//8
+    hmin = nharm//2
     extracted_noise = cs[cmin:cmax, hmin:]
     # print(f'normalize_cs_by_noise_rms nonzero={np.count_nonzero(noise)} size={noise.size}')
     rms = np.sqrt((np.abs(extracted_noise) ** 2).mean())
