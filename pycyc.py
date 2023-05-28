@@ -420,7 +420,7 @@ class CyclicSolver:
         self.nfree_parameters = nonzero
 
         self.optimal_gains = np.ones(self.nspec)
-        self.pp_int = np.zeros((self.npol, self.nphase))  # intrinsic profile
+        self.pp_int = np.zeros(self.nphase)  # intrinsic profile
         self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype="complex")
         self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype="complex")
         self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype="complex")
@@ -470,7 +470,7 @@ class CyclicSolver:
                     print(f"update profile isub={isub}/{nsubint}")
 
                 self.intrinsic_profiles[isub, ipol, :] = pp
-                self.pp_int[ipol] += pp
+                self.pp_int += pp
 
         # keep the gains from wandering
         mean_gain = self.optimal_gains.mean()
@@ -694,7 +694,7 @@ class CyclicSolver:
         self.s0 = ph
 
         if self.nopt == 0 or not use_last_soln:
-            self.pp_int = np.zeros((self.nphase,))
+            self.pp_int = np.zeros(self.nphase)
             if ht0 is None:
                 if rindex is None:
                     delay = self.phase_gradient(cs)
