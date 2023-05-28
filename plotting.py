@@ -22,9 +22,9 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
 
     nbin = pp_ref.size
 
-    offset = 100 * nbin/1024
+    offset = 100 * nbin//1024
     off_start = 0
-    off_end = 200 * nbin/1024
+    off_end = 200 * nbin//1024
 
     base_ref = np.mean(pp_ref[off_start:off_end])
     ref = pp_ref - base_ref
