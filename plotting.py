@@ -15,13 +15,17 @@ mpl.rcParams["figure.figsize"] = [8.0, 6.0]
 
 def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     fig, axs = plt.subplots(nrows=2, ncols=1, figsize=(8, 12))
-    offset = 100
 
-    off_start = 0
-    off_end = 200
     target_max = 100
     if pp_ref is None:
         pp_ref = CS.pp_ref
+
+    nbin = pp_ref.size
+
+    offset = 100 * nbin/1024
+    off_start = 0
+    off_end = 200 * nbin/1024
+
     base_ref = np.mean(pp_ref[off_start:off_end])
     ref = pp_ref - base_ref
     ref /= np.max(ref) / target_max
@@ -32,8 +36,7 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     _int /= np.max(_int) / target_max
     _int = np.roll(_int, roll)
 
-    nbin = pp_ref.size
-    # print(f'plot_intrinsic_vs_observed nbin={nbin}')
+    print(f'plot_intrinsic_vs_observed nbin={nbin} ref.shape={pp_ref.shape}')
 
     axs[0].plot(
         np.arange(nbin*2) / nbin,
