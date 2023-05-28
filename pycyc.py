@@ -127,7 +127,11 @@ class CyclicSolver:
         self.filenames = []
         self.nspec = 0
         self.intrinsic_ph = None
+        self.intrinsic_ph_sum = None
+        self.intrinsic_ph_sumsq = None
+
         self.cs_norm = None
+        self.gain = 1.0
 
         self.iprint = False
         self.make_plots = False
@@ -163,6 +167,7 @@ class CyclicSolver:
 
         # include temporal variations in gain in the model
         self.model_gain_variations = False
+        self.update_gain = False
 
         if filename:
             self.load(filename)
@@ -241,13 +246,14 @@ class CyclicSolver:
             self.nharm = int(self.nphase / 2) + 1
 
             if self.save_cyclic_spectra:
-                self.cyclic_spectra = np.zeros((self.nspec, self.nchan, self.nharm), dtype="complex")
-                self.cs_norm = np.zeros(self.nspec)
+                self.cyclic_spectra = np.zeros((self.nspec, self.npol, self.nchan, self.nharm), dtype="complex")
+                self.cs_norm = np.zeros((self.nspec, self.npol))
                 for isub in range(self.nspec):
                     if self.iprint:
                         print(f"load calculating cyclic spectrum for isub={isub}/{self.nspec}")
-                    self.cyclic_spectra[isub] = self.get_cs(data[isub, self.ipol])
-                    self.cs_norm[isub] = self.get_cs_norm
+                    for ipol in range(self.npol):
+                        self.cyclic_spectra[isub, ipol] = self.get_cs(data[isub, ipol])
+                        self.cs_norm[isub, ipol] = self.get_cs_norm
                 self.data = None
                 data = None
             else:
@@ -265,18 +271,19 @@ class CyclicSolver:
             new_nspec = self.nspec + nspec
 
             if self.save_cyclic_spectra:
-                self.cyclic_spectra.resize(new_nspec, nchan, self.nharm)
-                self.cs_norm.resize(new_nspec)
+                self.cyclic_spectra.resize(new_nspec, self.npol, self.nchan, self.nharm)
+                self.cs_norm.resize(new_nspec, self.npol)
                 for isub in range(nspec):
                     jsub = isub + self.nspec
                     if self.iprint:
                         print(f"load calculating cyclic spectrum for isub={jsub}/{new_nspec}")
-                    self.cyclic_spectra[jsub] = self.get_cs(data[isub, self.ipol])
-                    self.cs_norm[jsub] = self.get_cs_norm
+                    for ipol in range(self.npol):
+                        self.cyclic_spectra[jsub, ipol] = self.get_cs(data[isub, ipol])
+                        self.cs_norm[jsub, ipol] = self.get_cs_norm
                 self.data = None
                 data = None
             else:
-                self.data = np.append(self.data, data, axis=0)
+                self.data = np.append(self.data, data, axis=1)
 
             self.nspec = new_nspec
 
@@ -305,12 +312,10 @@ class CyclicSolver:
         self.h_time_delay[:,0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
-        self.dynamic_spectrum = np.zeros((self.nspec, self.nchan))
-        self.first_harmonic_spectrum = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.dynamic_spectrum = np.zeros((self.nspec, self.npol, self.nchan))
+        self.first_harmonic_spectrum = np.zeros((self.nspec, self.npol, self.nchan), dtype="complex")
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.intrinsic_profiles = np.zeros((self.nspec, self.nbin))
-
-        # self.pp_int = np.zeros((self.nphase))  # intrinsic profile
+        self.intrinsic_profiles = np.zeros((self.nspec, self.npol, self.nbin))
 
         self.low_pass_filter = None
         if self.low_pass_filter_alpha is not None:
@@ -415,51 +420,57 @@ class CyclicSolver:
         self.nfree_parameters = nonzero
 
         self.optimal_gains = np.ones(self.nspec)
-        self.pp_int = np.zeros((self.nphase))  # intrinsic profile
-        self.ph_numer_int = np.zeros((self.nharm), dtype="complex")
-        self.ph_denom_int = np.zeros((self.nharm), dtype="complex")
+        self.pp_int = np.zeros((self.npol, self.nphase))  # intrinsic profile
+        self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype="complex")
+        self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype="complex")
+        self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype="complex")
 
         if self.cs_norm is None:
-            self.cs_norm = np.zeros(self.nspec)
+            self.cs_norm = np.zeros((self.nspec, self.npol))
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
         for isub in range(nsubint):
 
-            if self.save_cyclic_spectra:
-                cs = self.cyclic_spectra[isub]
-            else:
-                ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-                cs = self.get_cs(ps)
-                self.cs_norm[isub] = self.get_cs_norm
+            for ipol in range(self.npol):
 
-            if self.save_dynamic_spectrum:
-                self.dynamic_spectrum.shape
-                self.dynamic_spectrum[isub, :] = np.real_if_close(cs[:, 0])
-                self.first_harmonic_spectrum[isub, :] = cs[:,1]
+                if self.save_cyclic_spectra:
+                    cs = self.cyclic_spectra[isub, ipol]
+                else:
+                    ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+                    cs = self.get_cs(ps)
+                    self.cs_norm[isub, ipol] = self.get_cs_norm
 
-            self.cs = cs
-            ht = self.h_time_delay[isub]
-            hf = time2freq(ht)
-            ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
+                if self.save_dynamic_spectrum:
+                    self.dynamic_spectrum[isub, ipol, :] = np.real_if_close(cs[:, 0])
+                    self.first_harmonic_spectrum[isub, ipol, :] = cs[:,1]
 
-            self.ph_numer_int += self.ph_numer
-            self.ph_denom_int += self.ph_denom
-            self.optimal_gains[isub] = self.gain
+                self.cs = cs
+                ht = self.h_time_delay[isub]
+                hf = time2freq(ht)
 
-            ph[0] = 0.0
-            if self.maxinitharm:
-                ph[self.maxinitharm:] = 0.0
-            pp = harm2phase(ph)
+                if self.model_gain_variations and ipol == 0:
+                    self.update_gain = True;
 
-            if self.iprint:
-                print(f"update profile isub={isub}/{nsubint}")
+                ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
 
-            self.intrinsic_profiles[isub, :] = pp
-            self.pp_int += pp
+                self.ph_numer_int[ipol] += self.ph_numer
+                self.ph_denom_int[ipol] += self.ph_denom
 
-        self.pp_ref = self.pp_int
-        self.intrinsic_ph = self.ph_numer_int / self.ph_denom_int
+                if self.update_gain:
+                    self.optimal_gains[isub] = self.gain
+                self.update_gain = False;
+
+                ph[0] = 0.0
+                if self.maxinitharm:
+                    ph[self.maxinitharm:] = 0.0
+                pp = harm2phase(ph)
+
+                if self.iprint:
+                    print(f"update profile isub={isub}/{nsubint}")
+
+                self.intrinsic_profiles[isub, ipol, :] = pp
+                self.pp_int[ipol] += pp
 
         # keep the gains from wandering
         mean_gain = self.optimal_gains.mean()
@@ -467,7 +478,16 @@ class CyclicSolver:
         self.optimal_gains /= mean_gain
         # self.intrinsic_ph *= mean_gain
 
-        self.intrinsic_pp = harm2phase(self.intrinsic_ph)
+        self.intrinsic_ph_sum = np.zeros(self.nharm, dtype="complex")
+        self.intrinsic_ph_sumsq = np.zeros(self.nharm, dtype="complex")
+
+        for ipol in range(self.npol):
+            self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
+            self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
+            self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
+
+        self.pp_ref = self.pp_int
+        self.intrinsic_pp = harm2phase(self.intrinsic_ph_sum)
 
     def initWavefield (self, ipol=0):
         """
@@ -509,49 +529,53 @@ class CyclicSolver:
         nsubint = self.nspec
         self.merit = 0
         self.nterm_merit = 0
-
-        self.s0 = self.intrinsic_ph
-        self.ph_ref = self.intrinsic_ph
         
         phasor = 1.+0.j
 
-        for isub in range(nsubint):
+        self.h_time_delay_grad[:,:] = 0
 
-            if self.save_cyclic_spectra:
-                cs = self.cyclic_spectra[isub]
-            else:
-                ps = self.data[isub, self.ipol]  # dimensions will now be (nchan,nbin)
-                cs = self.get_cs(ps)
+        for ipol in range(self.npol):
 
-            self.cs = cs
-            ht = self.h_time_delay[isub]
+            self.s0 = self.intrinsic_ph[ipol]
+            self.ph_ref = self.intrinsic_ph[ipol]
 
-            rephase_origin = False
-            if rephase_origin:
-                if isub == 0:
-                    phasor = np.conj(ht[0])
-                    phasor /= np.abs(phasor)
-                ht = ht * phasor
+            for isub in range(self.nspec):
 
-            if self.iprint:
-                print(f"update filter isub={isub}/{nsubint}")
+                if self.save_cyclic_spectra:
+                    cs = self.cyclic_spectra[isub, ipol]
+                else:
+                    ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+                    cs = self.get_cs(ps)
 
-            _merit, grad = complex_cyclic_merit_lag (ht, self, self.optimal_gains[isub])
+                self.cs = cs
+                ht = self.h_time_delay[isub]
 
-            if self.enforce_causality:
-                half_nchan = self.nchan // 2
-                grad[half_nchan:] = 0
+                rephase_origin = False
+                if rephase_origin:
+                    if isub == 0:
+                        phasor = np.conj(ht[0])
+                        phasor /= np.abs(phasor)
+                    ht = ht * phasor
 
-            self.merit += _merit
-            self.nterm_merit += self.complex_cyclic_merit_terms
+                if self.iprint:
+                    print(f"update filter isub={isub}/{nsubint}")
 
-            if self.reduce_temporal_phase_noise_grad and isub > 0:
-                prev_grad = self.h_time_delay_grad[0]
-                z = (np.conj(grad) * prev_grad).sum()
-                z /= np.abs(z)
-                grad *= z
+                _merit, grad = complex_cyclic_merit_lag (ht, self, self.optimal_gains[isub])
 
-            self.h_time_delay_grad[isub,:] = grad
+                if self.enforce_causality:
+                    half_nchan = self.nchan // 2
+                    grad[half_nchan:] = 0
+
+                self.merit += _merit
+                self.nterm_merit += self.complex_cyclic_merit_terms
+
+                if self.reduce_temporal_phase_noise_grad and isub > 0:
+                    prev_grad = self.h_time_delay_grad[0]
+                    z = (np.conj(grad) * prev_grad).sum()
+                    z /= np.abs(z)
+                    grad *= z
+
+                self.h_time_delay_grad[isub,:] += grad
 
         np.copyto(self.h_doppler_delay_grad, time2freq(self.h_time_delay_grad, axis=0))
 
@@ -577,24 +601,19 @@ class CyclicSolver:
         # |H(-)|^2 |H(+)|^2
         maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
 
-        self.gain = 1.0
-
-        if self.model_gain_variations and self.intrinsic_ph is not None:
+        if self.update_gain and self.intrinsic_ph_sum is not None:
             # Equation A11 numerator
-            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph, bw=bw, ref_freq=ref_freq)
+            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph_sum, bw=bw, ref_freq=ref_freq)
             gain_numer = tmp[1:].sum() # sum over all harmonics
             # Equation A11 denominator
-            tmp = fscrunch_cs(maghmhp * np.abs(self.intrinsic_ph)**2, bw=bw, ref_freq=ref_freq)
+            tmp = fscrunch_cs(maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq)
             gain_denom = tmp[1:].sum() # sum over all harmonics
-            gain = gain_numer / gain_denom
-            # print(f' gain={gain}')
-            self.gain = np.real(gain)
-            cshmhp *= self.gain
-            maghmhp *= self.gain**2
+            self.gain = np.real(gain_numer) / np.real(gain_denom)
+            # print(f' gain={self.gain}')
 
         # fscrunch
-        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq)
-        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq)
+        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * self.gain
+        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * self.gain**2
         s0 = self.ph_numer / self.ph_denom
         s0[np.real(self.ph_denom) <= 0.0] = 0
         return s0

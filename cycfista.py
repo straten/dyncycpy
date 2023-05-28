@@ -13,7 +13,7 @@ import sys, time
 mpl.rcParams["image.aspect"] = "auto"
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
-CS = pycyc.CyclicSolver(zap_edges = 0.05556, pscrunch=True)
+CS = pycyc.CyclicSolver(zap_edges = 0.05556)
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
@@ -21,8 +21,8 @@ CS.noise_shrinkage_threshold = 1.0
 
 print(f"cycfista: loading files")
 
-CS.load("P2067/chan07/53873.27864.07.15s.pb2t2")
-CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
+CS.load("P2067/chan07/53873.27864.07.15s.b2t2")
+CS.load("P2067/chan07/53873.31676.07.15s.b2t2")
 
 print(f"cycfista: {CS.nspec} spectra loaded")
 
