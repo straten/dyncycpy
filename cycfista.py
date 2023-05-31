@@ -71,7 +71,8 @@ min_step_factor = 0.5
 for i in range (1000):
     
     CS.nopt += 1
-            
+    CS.updateProfile();
+    
     x_n, y_n, L, t_n, demerits = fista.take_fista_step(iter=i, func=CS, 
         backtrack=False, alpha=alpha, 
         eta=5, y_n=y_n, _lambda=None,
