@@ -105,7 +105,7 @@ import os
 
 
 class CyclicSolver:
-    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None, ipol=0):
+    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None, maxharm=None, ipol=0):
         """
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
@@ -122,7 +122,7 @@ class CyclicSolver:
         self.ipol = ipol
         self.offp = offp
         self.maxchan = maxchan
-
+        self.maxharm = maxharm
         self.save_cyclic_spectra = False
         self.filenames = []
         self.nspec = 0
@@ -244,6 +244,8 @@ class CyclicSolver:
             self.nlag = self.nchan
             self.nphase = self.nbin
             self.nharm = int(self.nphase / 2) + 1
+            if self.maxharm is not None:
+                print (f'zeroing all harmonics above {self.maxharm} in each cyclic spectrum')
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros((self.nspec, self.npol, self.nchan, self.nharm), dtype="complex")
@@ -357,7 +359,11 @@ class CyclicSolver:
         self.nloop += 1
 
     def get_dof(self):
-        return self.nterm_merit - self.nfree_parameters
+        # while experimenting with maxharm, nfree can be greater than nterm
+        if self.nfree_parameters < self.nterm_merit:
+            return self.nterm_merit - self.nfree_parameters
+        else:
+            return 1
 
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
@@ -368,8 +374,6 @@ class CyclicSolver:
 
         Resulting profile is assigned to self.pp_ref
         """
-
-        nsubint = self.nspec
 
         rms = rms_wavefield(h_doppler_delay)
 
@@ -390,7 +394,7 @@ class CyclicSolver:
 
         if self.reduce_temporal_phase_noise:
             print ("reduce_temporal_phase_noise")
-            for isub in range(nsubint):
+            for isub in range(self.nspec):
                 ht = self.h_time_delay[isub]
                 if isub == 0:
                     phasor = ht[0]
@@ -430,7 +434,7 @@ class CyclicSolver:
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
-        for isub in range(nsubint):
+        for isub in range(self.nspec):
 
             for ipol in range(self.npol):
 
@@ -467,7 +471,7 @@ class CyclicSolver:
                 pp = harm2phase(ph)
 
                 if self.iprint:
-                    print(f"update profile isub={isub}/{nsubint}")
+                    print(f"update profile isub={isub}/{self.nspec}")
 
                 self.intrinsic_profiles[isub, ipol, :] = pp
                 self.pp_int += pp
@@ -488,13 +492,13 @@ class CyclicSolver:
 
         self.pp_ref = self.pp_int
         self.intrinsic_pp = harm2phase(self.intrinsic_ph_sum)
+        print(f'updateProfile max pp_ref: {self.pp_ref.max()} intrinsic_pp: {self.intrinsic_pp.max()}')
+
 
     def initWavefield (self, ipol=0):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
-
-        nsubint = self.nspec
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -522,11 +526,13 @@ class CyclicSolver:
         else:
             cs, norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
         self.get_cs_norm = norm
-        return cyclic_padding(cs, self.bw, self.ref_freq)
+        cs = cyclic_padding(cs, self.bw, self.ref_freq)
+        if self.maxharm is not None:
+            cs[:,self.maxharm+1:] = 0.0
+        return cs
 
     def updateWavefield (self):
 
-        nsubint = self.nspec
         self.merit = 0
         self.nterm_merit = 0
         
@@ -558,7 +564,7 @@ class CyclicSolver:
                     ht = ht * phasor
 
                 if self.iprint:
-                    print(f"update filter isub={isub}/{nsubint}")
+                    print(f"update filter isub={isub}/{self.nspec}")
 
                 _merit, grad = complex_cyclic_merit_lag (ht, self, self.optimal_gains[isub])
 
@@ -1600,6 +1606,10 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     CS.ht = ht
     cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
     cs_model *= gain
+
+    if CS.maxharm is not None:
+        cs_model[:,CS.maxharm+1:] = 0.0
+
     merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
     extract = cs_model[:, 1:]
