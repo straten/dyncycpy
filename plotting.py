@@ -36,7 +36,7 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     _int /= np.max(_int) / target_max
     _int = np.roll(_int, roll)
 
-    print(f'plot_intrinsic_vs_observed nbin={nbin} ref.shape={pp_ref.shape}')
+    # print(f'plot_intrinsic_vs_observed nbin={nbin} ref.shape={pp_ref.shape}')
 
     axs[0].plot(
         np.arange(nbin*2) / nbin,
