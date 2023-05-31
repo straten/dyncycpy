@@ -183,9 +183,16 @@ def take_fista_step(
     func_val, func_grad = func.evaluate(x_np1)
 
     # Estimate minimum L using equation (12) from ow23
-    diff = x_np1 - y_n
-    gdiff = y_grad - func_grad
-    L_min = 2.0 * np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
+    z = np.vdot(x_np1, y_n)
+    z /= np.abs(z)
+    print(f'take_fista_step: optimal model difference phase z={z}')
+    diff = z*x_np1 - y_n
+
+    z = np.vdot(y_grad, func_grad)
+    z /= np.abs(z)
+    print(f'take_fista_step: optimal model gradient difference phase z={z}')
+    gdiff = z*y_grad - func_grad
+    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
 
     demerits = np.append(demerits, func_val)
     x_n = x_np1
