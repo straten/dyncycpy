@@ -335,7 +335,7 @@ class CyclicSolver:
         self.maxinitharm = maxinitharm
         self.save_dynamic_spectrum = True
         self.save_cs_norm = True
-        self.updateProfile (self.h_doppler_delay)
+        self.updateProfile ()
         self.save_dynamic_spectrum = False
         self.save_cs_norm = False
 
@@ -368,60 +368,12 @@ class CyclicSolver:
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
     
-    def updateProfile(self, h_doppler_delay):
+    def updateProfile(self):
         """
         Update the reference profile
 
         Resulting profile is assigned to self.pp_ref
         """
-
-        rms = rms_wavefield(h_doppler_delay)
-
-        if rms > 0 and self.noise_threshold is not None:
-            print(f'noise_threshold rms={rms}')
-            threshold = self.noise_threshold * rms
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, threshold))
-
-        if rms > 0 and self.noise_shrinkage_threshold is not None:
-            print(f'noise_shrinkage_threshold rms={rms}')
-            threshold = self.noise_shrinkage_threshold * rms
-            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, threshold))
-
-        if self.low_pass_filter is not None:
-            np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
-
-        self.h_time_delay = freq2time(h_doppler_delay, axis=0)
-
-        if self.reduce_temporal_phase_noise:
-            print ("reduce_temporal_phase_noise")
-            for isub in range(self.nspec):
-                ht = self.h_time_delay[isub]
-                if isub == 0:
-                    phasor = ht[0]
-                    phasor /= np.abs(phasor)
-                    ht *= np.conj(phasor)
-                hf = time2freq(ht)
-                if isub > 0:
-                    z = (np.conj(hf) * hf_prev).sum()
-                    z /= np.abs(z)
-                    hf *= z
-                hf_prev = hf
-                self.h_time_delay[isub] = freq2time(hf)
-            np.copyto(h_doppler_delay, time2freq(self.h_time_delay, axis=0))
-
-        if self.enforce_orthogonal_real_imag:
-            z = (h_doppler_delay * h_doppler_delay).sum()
-            ph = z / np.abs(z)
-            ph = np.sqrt(ph)
-            print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
-            h_doppler_delay *= np.conj(ph)
-
-        np.copyto(self.h_doppler_delay, h_doppler_delay)
-
-        nonzero = np.count_nonzero(h_doppler_delay)
-        # although re & im count as separate terms in sum, 
-        # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
-        self.nfree_parameters = nonzero
 
         self.optimal_gains = np.ones(self.nspec)
         self.pp_int = np.zeros(self.nphase)  # intrinsic profile
@@ -480,33 +432,31 @@ class CyclicSolver:
         mean_gain = self.optimal_gains.mean()
         print(f'updateProfile mean gain: {mean_gain}')
         self.optimal_gains /= mean_gain
-        # self.intrinsic_ph *= mean_gain
 
         self.intrinsic_ph_sum = np.zeros(self.nharm, dtype="complex")
         self.intrinsic_ph_sumsq = np.zeros(self.nharm, dtype="complex")
 
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
+            self.intrinsic_ph[ipol] *= mean_gain
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
 
         self.pp_ref = self.pp_int
         self.intrinsic_pp = harm2phase(self.intrinsic_ph_sum)
-        print(f'updateProfile max pp_ref: {self.pp_ref.max()} intrinsic_pp: {self.intrinsic_pp.max()}')
+        print(f'updateProfile intrinsic profile range: {np.ptp(self.intrinsic_pp)}')
 
 
-    def initWavefield (self, ipol=0):
+    def initWavefield (self):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
-
-        self.ipol = ipol
         self.nopt = 0
 
-        self.updateWavefield()
+        self.updateWavefield(self.h_doppler_delay)
 
     def get_derivative(self, wavefield):
         return self.h_doppler_delay_grad
@@ -515,8 +465,7 @@ class CyclicSolver:
         return self.merit
     
     def evaluate (self, wavefield):
-        self.updateProfile (wavefield)
-        self.updateWavefield ()
+        self.updateWavefield (wavefield)
         return self.merit, np.copy(self.h_doppler_delay_grad)
 
     def get_cs(self, ps):
@@ -531,7 +480,55 @@ class CyclicSolver:
             cs[:,self.maxharm+1:] = 0.0
         return cs
 
-    def updateWavefield (self):
+    def updateWavefield (self, h_doppler_delay):
+
+        rms = rms_wavefield(h_doppler_delay)
+
+        if rms > 0 and self.noise_threshold is not None:
+            print(f'noise_threshold rms={rms}')
+            threshold = self.noise_threshold * rms
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, threshold))
+
+        if rms > 0 and self.noise_shrinkage_threshold is not None:
+            print(f'noise_shrinkage_threshold rms={rms}')
+            threshold = self.noise_shrinkage_threshold * rms
+            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, threshold))
+
+        if self.low_pass_filter is not None:
+            np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
+
+        self.h_time_delay = freq2time(h_doppler_delay, axis=0)
+
+        if self.reduce_temporal_phase_noise:
+            print ("reduce_temporal_phase_noise")
+            for isub in range(self.nspec):
+                ht = self.h_time_delay[isub]
+                if isub == 0:
+                    phasor = ht[0]
+                    phasor /= np.abs(phasor)
+                    ht *= np.conj(phasor)
+                hf = time2freq(ht)
+                if isub > 0:
+                    z = (np.conj(hf) * hf_prev).sum()
+                    z /= np.abs(z)
+                    hf *= z
+                hf_prev = hf
+                self.h_time_delay[isub] = freq2time(hf)
+            np.copyto(h_doppler_delay, time2freq(self.h_time_delay, axis=0))
+
+        if self.enforce_orthogonal_real_imag:
+            z = (h_doppler_delay * h_doppler_delay).sum()
+            ph = z / np.abs(z)
+            ph = np.sqrt(ph)
+            print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
+            h_doppler_delay *= np.conj(ph)
+
+        np.copyto(self.h_doppler_delay, h_doppler_delay)
+
+        nonzero = np.count_nonzero(h_doppler_delay)
+        # although re & im count as separate terms in sum, 
+        # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
+        self.nfree_parameters = nonzero
 
         self.merit = 0
         self.nterm_merit = 0

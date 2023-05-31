@@ -124,6 +124,14 @@ def complex_phase_fix(x: np.ndarray, coords: list, value=0):
 
     return x
 
+def rms_wavefield(h):
+    # compute the rms at -ve delay, over all doppler shifts
+    nchan = h.shape[1]
+    start_chan = nchan*5//8
+    end_chan = nchan*7//8
+    noise = h[:,start_chan:end_chan]
+    variance = np.mean(np.abs(noise)**2)
+    return np.sqrt(variance)
 
 def take_fista_step(
     iter,
@@ -182,17 +190,29 @@ def take_fista_step(
 
     func_val, func_grad = func.evaluate(x_np1)
 
+    z = np.vdot(x_np1, x_n)
+    z /= np.abs(z)
+    print(f'take_fista_step: x_n x_np1 difference phase={np.angle(z)}')
+    print(f'take_fista_step: M(y_n)={y_val} Merit(x_np1)={func_val}')
+
     # Estimate minimum L using equation (12) from ow23
     z = np.vdot(x_np1, y_n)
     z /= np.abs(z)
-    print(f'take_fista_step: optimal model difference phase z={z}')
+    print(f'take_fista_step: optimal model difference phase={np.angle(z)}')
     diff = z*x_np1 - y_n
+    var_diff = np.vdot(diff,diff);
+
+    relative_difference = np.sqrt(np.real(var_diff / np.sqrt( np.vdot(x_np1,x_np1) * np.vdot(y_n,y_n) )))
+    print(f'take_fista_step: optimal model relative difference={relative_difference}')
+
+    difference_significance = np.sqrt(np.real(var_diff)) / rms_wavefield(diff)
+    print(f'take_fista_step: optimal model difference significance={difference_significance}')
 
     z = np.vdot(y_grad, func_grad)
     z /= np.abs(z)
-    print(f'take_fista_step: optimal model gradient difference phase z={z}')
+    print(f'take_fista_step: optimal model gradient difference phase={np.angle(z)}')
     gdiff = z*y_grad - func_grad
-    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / np.vdot( diff, diff ) ) )
+    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / var_diff ) )
 
     demerits = np.append(demerits, func_val)
     x_n = x_np1
