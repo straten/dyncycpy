@@ -441,7 +441,7 @@ class CyclicSolver:
 
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
-            self.intrinsic_ph[ipol] /= mean_gain  # mathematically, I think this should be a *= mean_gain, but the mode-switching indicates otherwise
+            self.intrinsic_ph[ipol] *= mean_gain
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
 
