@@ -1,0 +1,8 @@
+#!/bin/csh -f
+
+#SBATCH --ntasks=1 --cpus-per-task=2
+#SBATCH --mem=32GB
+#SBATCH -t 24:00:00
+
+poetry run python cycfista.py
+

@@ -17,12 +17,13 @@ CS = pycyc.CyclicSolver(zap_edges = 0.05556)
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
+# CS.enforce_causality = True
 # CS.noise_shrinkage_threshold = 1.0
 
 print(f"cycfista: loading files")
 
-CS.load("P2067/chan07/53873.27864.07.15s.pb2t2")
-CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
+CS.load("P2067/chan07/53873.27864.07.15s.b2")
+CS.load("P2067/chan07/53873.31676.07.15s.b2")
 
 print(f"cycfista: {CS.nspec} spectra loaded")
 
@@ -58,14 +59,14 @@ L_max = 1.0 / alpha
 print(f"starting merit={best_merit}")
 
 step_factor=1.0
-acceleration=2.0
+acceleration=1.2
 bad_step = 0
 
 prev_merit = best_merit
 
 # Start timer
 start_time = time.time()
-min_step_factor = 0.1
+min_step_factor = 0.5
 
 for i in range (1000):
     
@@ -97,16 +98,8 @@ for i in range (1000):
 
     if CS.get_reduced_chisq() > prev_merit:
         print ("**** bad step")
-        reset = False
-        if step_factor < min_step_factor:
-            if reset:
-                print ("****** reset")
-                x_n = np.copy(best_x)
-                y_n = np.copy(best_x)
-                t_n = 1
-                step_factor = min_step_factor
-            else:
-                step_factor /= acceleration
+        if step_factor > min_step_factor:
+            step_factor /= acceleration
     else:
         step_factor = np.tanh( step_factor * acceleration )
 
