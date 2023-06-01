@@ -71,7 +71,7 @@ for i in range (1000):
     
     CS.nopt += 1
     CS.updateProfile();
-    
+
     x_n, y_n, L, t_n, demerits = fista.take_fista_step(iter=i, func=CS, 
         backtrack=False, alpha=alpha, 
         eta=5, y_n=y_n, _lambda=None,
@@ -110,7 +110,7 @@ for i in range (1000):
     else:
         step_factor = np.tanh( step_factor * acceleration )
 
-    alpha = step_factor / L
+    alpha = step_factor / L_max
     prev_merit = CS.get_reduced_chisq()
     
     print(f"\ndemerit={CS.get_reduced_chisq()} alpha={alpha} step_factor={step_factor} t_n={t_n}")
