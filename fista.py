@@ -173,7 +173,7 @@ def take_fista_step(
         L = 1.0 / alpha
 
         y_val, y_grad = func.evaluate (y_n)
-        x_np1 = y_n - alpha * y_grad
+        x_np1 = func.normalize(y_n - alpha * y_grad)
         x_np1 = apply_prox_operators(
             _lambda,
             delay_for_inf,
@@ -186,7 +186,7 @@ def take_fista_step(
         )
 
     t_np1 = (1 + np.sqrt(1 + 4 * np.power(t_n, 2))) / 2.0
-    y_np1 = x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n)
+    y_np1 = func.normalize(x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n))
 
     func_val, func_grad = func.evaluate(x_np1)
 

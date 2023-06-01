@@ -139,6 +139,9 @@ class CyclicSolver:
 
         # modelling options
 
+        # maintain constant total power in the wavefield
+        self.conserve_wavefield_energy = True
+
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
 
@@ -438,7 +441,7 @@ class CyclicSolver:
 
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
-            self.intrinsic_ph[ipol] *= mean_gain
+            self.intrinsic_ph[ipol] /= mean_gain  # mathematically, I think this should be a *= mean_gain, but the mode-switching indicates otherwise
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
 
@@ -480,18 +483,29 @@ class CyclicSolver:
             cs[:,self.maxharm+1:] = 0.0
         return cs
 
+    def normalize(self, h_doppler_delay):
+        if self.conserve_wavefield_energy:
+            total_power = np.sum(np.abs(h_doppler_delay)**2)
+            expected_power = self.nchan**2
+            factor = np.sqrt(expected_power / total_power)
+            h_doppler_delay *= factor
+            # print(f'normalize factor={factor}')
+        return h_doppler_delay
+
     def updateWavefield (self, h_doppler_delay):
 
-        rms = rms_wavefield(h_doppler_delay)
+        self.normalize(h_doppler_delay)
 
-        if rms > 0 and self.noise_threshold is not None:
-            print(f'noise_threshold rms={rms}')
-            threshold = self.noise_threshold * rms
+        rms_noise = rms_wavefield(h_doppler_delay)
+
+        if rms_noise > 0 and self.noise_threshold is not None:
+            print(f'noise_threshold rms={rms_noise}')
+            threshold = self.noise_threshold * rms_noise
             np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, threshold))
 
-        if rms > 0 and self.noise_shrinkage_threshold is not None:
-            print(f'noise_shrinkage_threshold rms={rms}')
-            threshold = self.noise_shrinkage_threshold * rms
+        if rms_noise > 0 and self.noise_shrinkage_threshold is not None:
+            print(f'noise_shrinkage_threshold rms={rms_noise}')
+            threshold = self.noise_shrinkage_threshold * rms_noise
             np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, threshold))
 
         if self.low_pass_filter is not None:
