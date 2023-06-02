@@ -105,7 +105,7 @@ import os
 
 
 class CyclicSolver:
-    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None, maxharm=None, ipol=0):
+    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None, maxharm=None):
         """
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
@@ -119,7 +119,6 @@ class CyclicSolver:
         self.zap_edges = zap_edges
         self.pscrunch = pscrunch
         self.tscrunch = tscrunch
-        self.ipol = ipol
         self.offp = offp
         self.maxchan = maxchan
         self.maxharm = maxharm
@@ -164,6 +163,11 @@ class CyclicSolver:
         # set all wavefield components less than theshold*rms to zero, after shrinking them by the same amount
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
         self.noise_shrinkage_threshold = None
+
+        # when thresholding, smooth wavefield power using a Kaiser window with the specified duty cycle
+        self.noise_smoothing_duty_cycle = None
+        # default Kaiser smoothing beta factor (similar to Hann; see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
+        self.noise_smoothing_beta = 6
 
         # simultaneously fit for the instrinsic cyclic spectrum (not recommended)
         self.ml_profile = False
@@ -459,6 +463,14 @@ class CyclicSolver:
         self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.nopt = 0
 
+        self.noise_smoothing_kernel = None
+        if self.noise_smoothing_duty_cycle is not None:
+            ashape = np.asarray(self.h_time_delay_grad)
+            wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
+            print(f'noise smoothing kernel shape: {wshape}')
+            kernel = np.outer(kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta))
+            kernel /= np.sum(kernel)  # Normalize the kernel
+
         self.updateWavefield(self.h_doppler_delay)
 
     def get_derivative(self, wavefield):
@@ -500,13 +512,11 @@ class CyclicSolver:
 
         if rms_noise > 0 and self.noise_threshold is not None:
             print(f'noise_threshold rms={rms_noise}')
-            threshold = self.noise_threshold * rms_noise
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, threshold))
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold))
 
         if rms_noise > 0 and self.noise_shrinkage_threshold is not None:
             print(f'noise_shrinkage_threshold rms={rms_noise}')
-            threshold = self.noise_shrinkage_threshold * rms_noise
-            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, threshold))
+            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, self.noise_shrinkage_threshold))
 
         if self.low_pass_filter is not None:
             np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
@@ -690,7 +700,6 @@ class CyclicSolver:
             self.plotdir = plotdir
 
         self.isub = isub
-        self.ipol = ipol
         self.iprint = iprint
         ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
         cs = self.get_cs(ps)
@@ -1058,7 +1067,7 @@ class CyclicSolver:
         fname = self.filename[-50:]
         if len(self.filename) > 50:
             fname = "..." + fname
-        title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, self.isub, self.ipol, self.nopt)
+        title = "%s isub: %d nopt: %d\n" % (fname, self.isub, self.nopt)
         title += "Source: %s Freq: %s MHz Feval #%04d Merit: %.3e Grad: %.3e" % (
             self.source,
             self.rf,
