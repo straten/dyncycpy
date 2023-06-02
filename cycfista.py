@@ -19,7 +19,8 @@ CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
 CS.enforce_causality = False
 CS.noise_shrinkage_threshold = None
-CS.noise_threshold = None
+CS.noise_threshold = 1.0
+CS.noise_smoothing_duty_cycle = 0.05
 
 print(f"cycfista: loading files")
 

@@ -466,7 +466,7 @@ class CyclicSolver:
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
-            ashape = np.asarray(self.h_time_delay_grad)
+            ashape = np.asarray(self.h_time_delay_grad.shape)
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
             print(f'noise smoothing kernel shape: {wshape}')
             kernel = np.outer(kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta))
@@ -1448,12 +1448,16 @@ def apply_threshold(x: np.ndarray, threshold: float, kernel = None):
     """
         Any value with abs(x) < threshold is set to zero
     """
-    x_power = x * np.conj(x)
+    x_power = np.abs(x)**2
     if kernel is not None:
+        # var_noise_before = noise_power_wavefield(x_power)
+        print('apply threshold: smoothing power using supplied kernel')
         x_power = fftconvolve(x_power, kernel, mode='same')
+        # var_noise_after = noise_power_wavefield(x_power)
+        # print(f'smoothing: noise power before={var_noise_before} after={var_noise_after}')
     var_noise = noise_power_wavefield(x_power)
     limit = var_noise * threshold**2
-    out = np.heaviside(x_power * limit, 1) * x
+    out = np.heaviside(x_power - limit, 1) * x
     nonz = np.count_nonzero(out)
     sz = np.size(out)
     print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
@@ -1490,7 +1494,7 @@ def normalize_pp(pp):
 
 def noise_power_wavefield(h_power):
     # compute the mean wavefield power over all doppler shifts and a range of negative delays
-    nchan = h.shape[1]
+    nchan = h_power.shape[1]
     start_chan = nchan*5//8
     end_chan = nchan*7//8
     return np.mean(h_power[:,start_chan:end_chan])
@@ -1675,13 +1679,13 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
     if CS.ml_profile:
-        # |H(-)|^2 |H(+)|^2
-        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
-        denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
-
         # data H(-)H(+)*
         cshmhp = CS.cs * csminus * np.conj(csplus)
         numer = fscrunch_cs(cshmhp, bw=CS.bw, ref_freq=CS.ref_freq)
+
+        # |H(-)|^2 |H(+)|^2
+        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+        denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
 
         ddenom_dh = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
         ddenom_dh += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
