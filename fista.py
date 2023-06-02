@@ -191,27 +191,24 @@ def take_fista_step(
     func_val, func_grad = func.evaluate(x_np1)
 
     z = np.vdot(x_np1, x_n)
-    z /= np.abs(z)
-    print(f'take_fista_step: x_n x_np1 difference phase={np.angle(z)}')
-    print(f'take_fista_step: M(y_n)={y_val} Merit(x_np1)={func_val}')
+    # print(f'take_fista_step: x_n x_np1 difference phase={np.angle(z)}')
+    # print(f'take_fista_step: M(y_n)={y_val} Merit(x_np1)={func_val}')
 
     # Estimate minimum L using equation (12) from ow23
     z = np.vdot(x_np1, y_n)
+    print(f'take_fista_step: wavefield phase difference={np.angle(z)}')
     z /= np.abs(z)
-    print(f'take_fista_step: optimal model difference phase={np.angle(z)}')
     diff = z*x_np1 - y_n
     var_diff = np.vdot(diff,diff);
 
     relative_difference = np.sqrt(np.real(var_diff / np.sqrt( np.vdot(x_np1,x_np1) * np.vdot(y_n,y_n) )))
-    print(f'take_fista_step: optimal model relative difference={relative_difference}')
+    print(f'take_fista_step: wavefield relative difference={relative_difference}')
 
-    difference_significance = np.sqrt(np.real(var_diff)) / rms_wavefield(diff)
-    print(f'take_fista_step: optimal model difference significance={difference_significance}')
-
+    # TO-DO compute L/curvature only when the difference is significant
+    # if relative_difference > ???
     z = np.vdot(y_grad, func_grad)
-    z /= np.abs(z)
-    print(f'take_fista_step: optimal model gradient difference phase={np.angle(z)}')
-    gdiff = z*y_grad - func_grad
+    print(f'take_fista_step: wavefield gradient phase difference={np.angle(z)}')
+    gdiff = y_grad - func_grad
     L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / var_diff ) )
 
     demerits = np.append(demerits, func_val)
