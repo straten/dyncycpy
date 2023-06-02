@@ -17,14 +17,12 @@ from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 # reload a module to incorporate code changes
 import importlib
 import sys
-if "pycyc" in sys.modules.keys():
-    importlib.reload(sys.modules["pycyc"])
 import pycyc
 
-CS = pycyc.CyclicSolver("P2067/chan07/53873.27864.07.15s.cyc", zap_edges = 0.05556, pscrunch=True)
+CS = pycyc.CyclicSolver("P2067/chan07/53873.27864.07.15s.pb2", zap_edges = 0.05556, pscrunch=True)
 CS.data.shape, CS.nspec
 
-CS.load("P2067/chan07/53873.31676.07.15s.cyc")
+CS.load("P2067/chan07/53873.31676.07.15s.pb2")
 CS.data.shape, CS.nspec
 
 CS.initProfile()
