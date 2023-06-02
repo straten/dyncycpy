@@ -100,6 +100,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pickle
 import scipy, scipy.optimize
 from scipy.fft import fftshift, fft, rfft, ifft, irfft
+from scipy.signal import fftconvolve, kaiser
 from scipy import signal
 import os
 
@@ -469,7 +470,7 @@ class CyclicSolver:
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
             print(f'noise smoothing kernel shape: {wshape}')
             kernel = np.outer(kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta))
-            kernel /= np.sum(kernel)  # Normalize the kernel
+            self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
 
         self.updateWavefield(self.h_doppler_delay)
 
@@ -512,11 +513,11 @@ class CyclicSolver:
 
         if rms_noise > 0 and self.noise_threshold is not None:
             print(f'noise_threshold rms={rms_noise}')
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold))
+            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold, self.noise_smoothing_kernel))
 
         if rms_noise > 0 and self.noise_shrinkage_threshold is not None:
             print(f'noise_shrinkage_threshold rms={rms_noise}')
-            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, self.noise_shrinkage_threshold))
+            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, self.noise_shrinkage_threshold, self.noise_smoothing_kernel))
 
         if self.low_pass_filter is not None:
             np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
@@ -1443,17 +1444,22 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
-def apply_threshold(x: np.ndarray, threshold: float):
+def apply_threshold(x: np.ndarray, threshold: float, kernel = None):
     """
-    Any value with abs(x) < threshold is set to zero
+        Any value with abs(x) < threshold is set to zero
     """
-    out = np.heaviside(np.abs(x) - threshold, 1) * x
+    x_power = x * np.conj(x)
+    if kernel is not None:
+        x_power = fftconvolve(x_power, kernel, mode='same')
+    var_noise = noise_power_wavefield(x_power)
+    limit = var_noise * threshold**2
+    out = np.heaviside(x_power * limit, 1) * x
     nonz = np.count_nonzero(out)
     sz = np.size(out)
     print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
-def apply_shrinkage_threshold(x: np.ndarray, threshold: float):
+def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel = None):
     """
         abs(x) is decreased by threshold.
         Any resulting value with abs(x) < threshold is set to zero
@@ -1482,15 +1488,16 @@ def normalize_pp(pp):
     ph[0] = 0
     return harm2phase(ph)
 
-
-def rms_wavefield(h):
-    # compute the rms at -ve delay, over all doppler shifts
+def noise_power_wavefield(h_power):
+    # compute the mean wavefield power over all doppler shifts and a range of negative delays
     nchan = h.shape[1]
     start_chan = nchan*5//8
     end_chan = nchan*7//8
-    noise = h[:,start_chan:end_chan]
-    variance = np.mean(np.abs(noise)**2)
-    return np.sqrt(variance)
+    return np.mean(h_power[:,start_chan:end_chan])
+
+def rms_wavefield(h):
+    # compute rms wavefield rms over all doppler shifts and a range of negative delays
+    return np.sqrt(noise_power_wavefield(np.abs(h)**2))
 
 def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nchan = cs.shape[0]
