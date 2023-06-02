@@ -629,8 +629,8 @@ class CyclicSolver:
             # print(f' gain={self.gain}')
 
         # fscrunch
-        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * self.gain
-        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * self.gain**2
+        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * self.gain
+        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * self.gain**2
         s0 = self.ph_numer / self.ph_denom
         s0[np.real(self.ph_denom) <= 0.0] = 0
         return s0
