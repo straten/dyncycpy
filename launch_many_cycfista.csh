@@ -47,7 +47,7 @@ for bp in 0 1; do
         message3=$message2
       fi
 
-      ./launch_cycfista.py $job3 "$message3"
+      ./launch_cycfista.csh $job3 "$message3"
 
     done
   done
