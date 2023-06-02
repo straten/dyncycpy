@@ -445,7 +445,7 @@ class CyclicSolver:
 
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
-            self.intrinsic_ph[ipol] /= mean_gain  # mathematically, I think this should be a *= mean_gain, but the mode-switching indicates otherwise
+            self.intrinsic_ph[ipol] *= mean_gain
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
 
@@ -639,8 +639,8 @@ class CyclicSolver:
             # print(f' gain={self.gain}')
 
         # fscrunch
-        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * self.gain
-        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * self.gain**2
+        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * self.gain
+        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * self.gain**2
         s0 = self.ph_numer / self.ph_denom
         s0[np.real(self.ph_denom) <= 0.0] = 0
         return s0
