@@ -620,14 +620,14 @@ class CyclicSolver:
         nchan = cs.shape[0]
         nharm = cs.shape[1]
         # filter2cs
-        cs1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
-        csplus, plus_phases = cyclic_shear_cs(cs1, shear=0.5, bw=bw, ref_freq=ref_freq)
-        csminus, minus_phases = cyclic_shear_cs(cs1, shear=-0.5, bw=bw, ref_freq=ref_freq)
+        hf1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the hf1 model with the filter for each harmonic
+        hfplus, plus_phases = cyclic_shear_cs(hf1, shear=0.5, bw=bw, ref_freq=ref_freq)
+        hfminus, minus_phases = cyclic_shear_cs(hf1, shear=-0.5, bw=bw, ref_freq=ref_freq)
 
         # cs H(-)H(+)*
-        cshmhp = cs * csminus * np.conj(csplus)
+        cshmhp = cs * hfminus * np.conj(hfplus)
         # |H(-)|^2 |H(+)|^2
-        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+        maghmhp = (np.abs(hfminus) * np.abs(hfplus)) ** 2
 
         if self.update_gain and self.intrinsic_ph_sum is not None:
             # Equation A11 numerator
@@ -978,7 +978,7 @@ class CyclicSolver:
         sopt[0] = 0.0
         smeas = normalize_profile(self.cs.mean(0))
         smeas[0] = 0.0
-        #        cs_model0,csplus,csminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
+        #        cs_model0,hfplus,hfminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
 
         ax3 = fig.add_subplot(3, 3, 7)
         #        ax3.imshow(np.log(np.abs(cs_model0)[:,1:]),aspect='auto')
@@ -1573,18 +1573,17 @@ def make_model_cs(hf, s0, bw, ref_freq):
     # profile2cs
     cs = np.repeat(s0[np.newaxis, :], nchan, axis=0)  # fill the cs model with the harmonic profile for each freq chan
     # filter2cs
-    cs_tmp = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
+    hf1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the hf1 model with the filter for each harmonic
 
-    csplus, plus_phases = cyclic_shear_cs(cs_tmp, shear=0.5, bw=bw, ref_freq=ref_freq)
-    csminus, minus_phases = cyclic_shear_cs(
-        cs_tmp, shear=-0.5, bw=bw, ref_freq=ref_freq
-    )  # this is redundant, minus phases is just negative of plus phases
+    hfplus, plus_phases = cyclic_shear_cs(hf1, shear=0.5, bw=bw, ref_freq=ref_freq)
+    hfminus, minus_phases = cyclic_shear_cs(hf1, shear=-0.5, bw=bw, ref_freq=ref_freq)
+    # minus phases is just negative of plus phases
 
-    cs = cs * csplus * np.conj(csminus)
+    cs = cs * hfplus * np.conj(hfminus)
 
     cs = cyclic_padding(cs, bw, ref_freq)
 
-    return cs, csplus, csminus, minus_phases  # minus_phases has factor of 2*pi*tau*alpha
+    return cs, hfplus, hfminus, minus_phases  # minus_phases has factor of 2*pi*tau*alpha
 
 
 def fscrunch_cs(cs, bw, ref_freq):
@@ -1635,7 +1634,7 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     hf = time2freq(ht)
     CS.hf = hf
     CS.ht = ht
-    cs_model, csplus, csminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
+    cs_model, hfplus, hfminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -1666,37 +1665,39 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     #        }
     #     }
 
-    # we reuse phases and csminus, csplus from the make_model_cs call
+    # we reuse phases and hfminus, hfplus from the make_model_cs call
 
     cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
 
-    cc1 = cs2cc(diff * csminus)
+    cc1 = cs2cc(diff * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
     grad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-    cc1 = cs2cc(np.conj(diff) * csplus)
+    cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
     grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
     if CS.ml_profile:
         # data H(-)H(+)*
-        cshmhp = CS.cs * csminus * np.conj(csplus)
+        cshmhp = CS.cs * hfminus * np.conj(hfplus) * gain
         numer = fscrunch_cs(cshmhp, bw=CS.bw, ref_freq=CS.ref_freq)
 
         # |H(-)|^2 |H(+)|^2
-        maghmhp = (np.abs(csminus) * np.abs(csplus)) ** 2
+        maghmhp = (np.abs(hfminus) * np.abs(hfplus) * gain) ** 2
         denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
 
-        ddenom_dh = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
-        ddenom_dh += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
+        # Equation A21
+        ddenom_dh = cs2cc(hfminus * hfplus * np.conj(hfplus)) * np.conj(phasors)
+        ddenom_dh += cs2cc(hfminus * hfplus * np.conj(hfminus)) * phasors
         ddenom_dh /= denom ** 2
+        ddenom_dh *= gain ** 2
 
-        fscr = fscrunch_cs(csplus * np.conj(csminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) / CS.nchan
-        ds_dh = cs2cc(CS.cs*csminus) / denom * phasors - numer * ddenom_dh
+        fscr = fscrunch_cs(hfplus * np.conj(hfminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) * gain / CS.nchan
+        ds_dh = cs2cc(CS.cs*hfminus*gain) / denom * phasors - numer * ddenom_dh
         grad2 = fscr * ds_dh 
         dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-        ds_dh = cs2cc(np.conj(CS.cs)*csplus) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
+        ds_dh = cs2cc(np.conj(CS.cs)*hfplus*gain) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
         grad2 = np.conj(fscr) * ds_dh
         dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
