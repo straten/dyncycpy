@@ -93,20 +93,32 @@ try:
     import psrchive
 except:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
-import numpy as np
-from matplotlib import pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-import pickle
-import scipy, scipy.optimize
-from scipy.fft import fftshift, fft, rfft, ifft, irfft
-from scipy.signal import fftconvolve, kaiser
-from scipy import signal
 import os
+import pickle
+
+import numpy as np
+import scipy
+import scipy.optimize
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+from scipy import signal
+from scipy.fft import fft, fftshift, ifft, irfft, rfft
+from scipy.signal import fftconvolve, kaiser
 
 
 class CyclicSolver:
-    def __init__(self, filename=None, statefile=None, offp=None, tscrunch=None, zap_edges=None, pscrunch=False, maxchan=None, maxharm=None):
+    def __init__(
+        self,
+        filename=None,
+        statefile=None,
+        offp=None,
+        tscrunch=None,
+        zap_edges=None,
+        pscrunch=False,
+        maxchan=None,
+        maxharm=None,
+    ):
         """
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
@@ -165,6 +177,14 @@ class CyclicSolver:
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
         self.noise_shrinkage_threshold = None
 
+        # set all wavefield components less than theshold*delay_noise to zero, after shrinking them by the same amount
+        # for a given delay, delay_noise is the standard deviation over all doppler shifts below delay_noise_selection_threshold times the mean (corrected for bias)
+        self.delay_noise_shrinkage_threshold = None
+        self.delay_noise_selection_threshold = None
+
+        # exponential decay scale for the amount of shrinkage
+        self.noise_shrinkage_decay = None
+
         # when thresholding, smooth wavefield power using a Kaiser window with the specified duty cycle
         self.noise_smoothing_duty_cycle = None
         # default Kaiser smoothing beta factor (similar to Hann; see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
@@ -202,7 +222,7 @@ class CyclicSolver:
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
         """
 
-        self.filenames.append( filename )
+        self.filenames.append(filename)
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
             ar.pscrunch()
@@ -213,10 +233,10 @@ class CyclicSolver:
             data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
         elif self.maxchan:
-            bwfact = self,maxchan / (
+            bwfact = self, maxchan / (
                 1.0 * data.shape[2]
             )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
-            data = data[:, :, :self.maxchan, :]
+            data = data[:, :, : self.maxchan, :]
         else:
             bwfact = 1.0
 
@@ -228,9 +248,8 @@ class CyclicSolver:
                 data[:-k, :, :, :] += data[k:, :, :, :]
 
         if self.nspec == 0:
-
             idx = 0  # only used to get parameters of integration, not data itself
-            subint = ar.get_Integration(idx)            
+            subint = ar.get_Integration(idx)
             epoch = subint.get_epoch()
             try:
                 self.imjd = np.floor(epoch)
@@ -246,17 +265,19 @@ class CyclicSolver:
             self.source = ar.get_source()  # source name
             self.nopt = 0
             self.nloop = 0
-            ar = None;
+            ar = None
 
             self.nspec, self.npol, self.nchan, self.nbin = data.shape
             self.nlag = self.nchan
             self.nphase = self.nbin
             self.nharm = int(self.nphase / 2) + 1
             if self.maxharm is not None:
-                print (f'zeroing all harmonics above {self.maxharm} in each cyclic spectrum')
+                print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
 
             if self.save_cyclic_spectra:
-                self.cyclic_spectra = np.zeros((self.nspec, self.npol, self.nchan, self.nharm), dtype="complex")
+                self.cyclic_spectra = np.zeros(
+                    (self.nspec, self.npol, self.nchan, self.nharm), dtype="complex"
+                )
                 self.cs_norm = np.zeros((self.nspec, self.npol))
                 for isub in range(self.nspec):
                     if self.iprint:
@@ -270,7 +291,7 @@ class CyclicSolver:
                 self.data = data
 
         else:
-            ar = None;
+            ar = None
 
             nspec, npol, nchan, nbin = data.shape
 
@@ -319,7 +340,7 @@ class CyclicSolver:
         self.hf_prev = hf_prev
 
         self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.h_time_delay[:,0] = self.nchan
+        self.h_time_delay[:, 0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
         self.dynamic_spectrum = np.zeros((self.nspec, self.npol, self.nchan))
@@ -329,7 +350,7 @@ class CyclicSolver:
 
         self.low_pass_filter = None
         if self.low_pass_filter_alpha is not None:
-            self.low_pass_filter = fftshift(signal.windows.tukey(self.nchan,self.low_pass_filter_alpha))
+            self.low_pass_filter = fftshift(signal.windows.tukey(self.nchan, self.low_pass_filter_alpha))
 
         if loadFile:
             if loadFile.endswith(".npy"):
@@ -343,7 +364,7 @@ class CyclicSolver:
         self.maxinitharm = maxinitharm
         self.save_dynamic_spectrum = True
         self.save_cs_norm = True
-        self.updateProfile ()
+        self.updateProfile()
         self.save_dynamic_spectrum = False
         self.save_cs_norm = False
 
@@ -356,7 +377,7 @@ class CyclicSolver:
         savefile = kwargs.pop("savebase", os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop))
 
         if "savedir" in kwargs:
-            savedir = kwargs["savedir"]
+            kwargs["savedir"]
         for isub in range(self.nspec):
             kwargs["isub"] = isub
             self.loop(**kwargs)
@@ -375,7 +396,7 @@ class CyclicSolver:
 
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
-    
+
     def updateProfile(self):
         """
         Update the reference profile
@@ -395,9 +416,7 @@ class CyclicSolver:
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
         for isub in range(self.nspec):
-
             for ipol in range(self.npol):
-
                 if self.save_cyclic_spectra:
                     cs = self.cyclic_spectra[isub, ipol]
                 else:
@@ -407,14 +426,14 @@ class CyclicSolver:
 
                 if self.save_dynamic_spectrum:
                     self.dynamic_spectrum[isub, ipol, :] = np.real_if_close(cs[:, 0])
-                    self.first_harmonic_spectrum[isub, ipol, :] = cs[:,1]
+                    self.first_harmonic_spectrum[isub, ipol, :] = cs[:, 1]
 
                 self.cs = cs
                 ht = self.h_time_delay[isub]
                 hf = time2freq(ht)
 
                 if self.model_gain_variations and ipol == 0:
-                    self.update_gain = True;
+                    self.update_gain = True
 
                 ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
 
@@ -423,11 +442,11 @@ class CyclicSolver:
 
                 if self.update_gain:
                     self.optimal_gains[isub] = self.gain
-                self.update_gain = False;
+                self.update_gain = False
 
                 ph[0] = 0.0
                 if self.maxinitharm:
-                    ph[self.maxinitharm:] = 0.0
+                    ph[self.maxinitharm :] = 0.0
                 pp = harm2phase(ph)
 
                 if self.iprint:
@@ -438,7 +457,7 @@ class CyclicSolver:
 
         # keep the gains from wandering
         mean_gain = self.optimal_gains.mean()
-        print(f'updateProfile mean gain: {mean_gain}')
+        print(f"updateProfile mean gain: {mean_gain}")
         self.optimal_gains /= mean_gain
 
         self.intrinsic_ph_sum = np.zeros(self.nharm, dtype="complex")
@@ -447,15 +466,14 @@ class CyclicSolver:
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
             self.intrinsic_ph[ipol] *= mean_gain
-            self.intrinsic_ph_sum += self.intrinsic_ph[ipol];
-            self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol])**2;
+            self.intrinsic_ph_sum += self.intrinsic_ph[ipol]
+            self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol]) ** 2
 
         self.pp_ref = self.pp_int
         self.intrinsic_pp = harm2phase(self.intrinsic_ph_sum)
-        print(f'updateProfile intrinsic profile range: {np.ptp(self.intrinsic_pp)}')
+        print(f"updateProfile intrinsic profile range: {np.ptp(self.intrinsic_pp)}")
 
-
-    def initWavefield (self):
+    def initWavefield(self):
         """
         First draft of using FISTA to solve the 2D transfer function
         """
@@ -468,20 +486,22 @@ class CyclicSolver:
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_time_delay_grad.shape)
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
-            print(f'noise smoothing kernel shape: {wshape}')
-            kernel = np.outer(kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta))
+            print(f"noise smoothing kernel shape: {wshape}")
+            kernel = np.outer(
+                kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta)
+            )
             self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
 
         self.updateWavefield(self.h_doppler_delay)
 
     def get_derivative(self, wavefield):
         return self.h_doppler_delay_grad
-    
+
     def get_func_val(self, wavefield):
         return self.merit
-    
-    def evaluate (self, wavefield):
-        self.updateWavefield (wavefield)
+
+    def evaluate(self, wavefield):
+        self.updateWavefield(wavefield)
         return self.merit, np.copy(self.h_doppler_delay_grad)
 
     def get_cs(self, ps):
@@ -493,31 +513,50 @@ class CyclicSolver:
         self.get_cs_norm = norm
         cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
-            cs[:,self.maxharm+1:] = 0.0
+            cs[:, self.maxharm + 1 :] = 0.0
         return cs
 
     def normalize(self, h_doppler_delay):
         if self.conserve_wavefield_energy:
-            total_power = np.sum(np.abs(h_doppler_delay)**2)
+            total_power = np.sum(np.abs(h_doppler_delay) ** 2)
             expected_power = self.nchan**2
             factor = np.sqrt(expected_power / total_power)
             h_doppler_delay *= factor
             # print(f'normalize factor={factor}')
         return h_doppler_delay
 
-    def updateWavefield (self, h_doppler_delay):
-
+    def updateWavefield(self, h_doppler_delay):
         self.normalize(h_doppler_delay)
 
         rms_noise = rms_wavefield(h_doppler_delay)
 
         if rms_noise > 0 and self.noise_threshold is not None:
-            print(f'noise_threshold rms={rms_noise}')
-            np.copyto(h_doppler_delay, apply_threshold(h_doppler_delay, self.noise_threshold, self.noise_smoothing_kernel))
+            print(f"noise_threshold rms={rms_noise}")
+            np.copyto(
+                h_doppler_delay,
+                apply_threshold(h_doppler_delay, self.noise_threshold, self.noise_smoothing_kernel),
+            )
 
         if rms_noise > 0 and self.noise_shrinkage_threshold is not None:
-            print(f'noise_shrinkage_threshold rms={rms_noise}')
-            np.copyto(h_doppler_delay, apply_shrinkage_threshold(h_doppler_delay, self.noise_shrinkage_threshold, self.noise_smoothing_kernel))
+            print(f"noise_shrinkage_threshold rms={rms_noise}")
+            np.copyto(
+                h_doppler_delay,
+                apply_shrinkage_threshold(
+                    h_doppler_delay, self.noise_shrinkage_threshold, self.noise_smoothing_kernel
+                ),
+            )
+
+        if rms_noise > 0 and self.delay_noise_shrinkage_threshold is not None:
+            print(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
+            np.copyto(
+                h_doppler_delay,
+                apply_delay_shrinkage_threshold(
+                    h_doppler_delay,
+                    self.delay_noise_shrinkage_threshold,
+                    self.delay_noise_selection_threshold,
+                    self.noise_smoothing_kernel,
+                ),
+            )
 
         if self.low_pass_filter is not None:
             np.copyto(h_doppler_delay, h_doppler_delay * self.low_pass_filter)
@@ -525,7 +564,7 @@ class CyclicSolver:
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
         if self.reduce_temporal_phase_noise:
-            print ("reduce_temporal_phase_noise")
+            print("reduce_temporal_phase_noise")
             for isub in range(self.nspec):
                 ht = self.h_time_delay[isub]
                 if isub == 0:
@@ -537,7 +576,6 @@ class CyclicSolver:
                     z = (np.conj(hf) * hf_prev).sum()
                     z /= np.abs(z)
                     hf *= z
-                hf_prev = hf
                 self.h_time_delay[isub] = freq2time(hf)
             np.copyto(h_doppler_delay, time2freq(self.h_time_delay, axis=0))
 
@@ -545,30 +583,30 @@ class CyclicSolver:
             z = (h_doppler_delay * h_doppler_delay).sum()
             ph = z / np.abs(z)
             ph = np.sqrt(ph)
-            print (f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}")
+            print(
+                f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}"
+            )
             h_doppler_delay *= np.conj(ph)
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
         nonzero = np.count_nonzero(h_doppler_delay)
-        # although re & im count as separate terms in sum, 
+        # although re & im count as separate terms in sum,
         # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
         self.nfree_parameters = nonzero
 
         self.merit = 0
         self.nterm_merit = 0
-        
-        phasor = 1.+0.j
 
-        self.h_time_delay_grad[:,:] = 0
+        phasor = 1.0 + 0.0j
+
+        self.h_time_delay_grad[:, :] = 0
 
         for ipol in range(self.npol):
-
             self.s0 = self.intrinsic_ph[ipol]
             self.ph_ref = self.intrinsic_ph[ipol]
 
             for isub in range(self.nspec):
-
                 if self.save_cyclic_spectra:
                     cs = self.cyclic_spectra[isub, ipol]
                 else:
@@ -588,7 +626,7 @@ class CyclicSolver:
                 if self.iprint:
                     print(f"update filter isub={isub}/{self.nspec}")
 
-                _merit, grad = complex_cyclic_merit_lag (ht, self, self.optimal_gains[isub])
+                _merit, grad = complex_cyclic_merit_lag(ht, self, self.optimal_gains[isub])
 
                 if self.enforce_causality:
                     half_nchan = self.nchan // 2
@@ -603,24 +641,26 @@ class CyclicSolver:
                     z /= np.abs(z)
                     grad *= z
 
-                self.h_time_delay_grad[isub,:] += grad
+                self.h_time_delay_grad[isub, :] += grad
 
         np.copyto(self.h_doppler_delay_grad, time2freq(self.h_time_delay_grad, axis=0))
 
         align_phase_gradient = False
         if align_phase_gradient:
-            print (f"h_doppler_delay_grad[0,0]={self.h_doppler_delay_grad[0,0]}")
-            phasor = np.conj(self.h_doppler_delay_grad[0,0])
+            print(f"h_doppler_delay_grad[0,0]={self.h_doppler_delay_grad[0,0]}")
+            phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
         # self.h_doppler_delay_grad[0,0] = 0.+0.j
 
     def optimize_profile(self, cs, hf, bw, ref_freq):
-        nchan = cs.shape[0]
+        cs.shape[0]
         nharm = cs.shape[1]
         # filter2cs
-        cs1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
+        cs1 = np.repeat(
+            hf[:, np.newaxis], nharm, axis=1
+        )  # fill the cs_tmp model with the filter for each harmonic
         csplus, plus_phases = cyclic_shear_cs(cs1, shear=0.5, bw=bw, ref_freq=ref_freq)
         csminus, minus_phases = cyclic_shear_cs(cs1, shear=-0.5, bw=bw, ref_freq=ref_freq)
 
@@ -632,10 +672,10 @@ class CyclicSolver:
         if self.update_gain and self.intrinsic_ph_sum is not None:
             # Equation A11 numerator
             tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph_sum, bw=bw, ref_freq=ref_freq)
-            gain_numer = tmp[1:].sum() # sum over all harmonics
+            gain_numer = tmp[1:].sum()  # sum over all harmonics
             # Equation A11 denominator
             tmp = fscrunch_cs(maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq)
-            gain_denom = tmp[1:].sum() # sum over all harmonics
+            gain_denom = tmp[1:].sum()  # sum over all harmonics
             self.gain = np.real(gain_numer) / np.real(gain_denom)
             # print(f' gain={self.gain}')
 
@@ -785,7 +825,9 @@ class CyclicSolver:
 
         tol = 1e-1 / (dof)
         print("ftol     : %.5e" % (tol))
-        scipytol = tolfact * tol / 2.220e-16  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
+        scipytol = (
+            tolfact * tol / 2.220e-16
+        )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
         print("scipytol : %.5e" % scipytol)
         x0 = get_params(ht, rindex)
 
@@ -793,7 +835,14 @@ class CyclicSolver:
         self.objval = []
 
         x, f, d = scipy.optimize.fmin_l_bfgs_b(
-            cyclic_merit_lag, x0, m=20, args=(self,), iprint=iprint, maxfun=maxfun, factr=scipytol, bounds=bounds
+            cyclic_merit_lag,
+            x0,
+            m=20,
+            args=(self,),
+            iprint=iprint,
+            maxfun=maxfun,
+            factr=scipytol,
+            bounds=bounds,
         )
         ht = get_ht(x, rindex)
 
@@ -824,12 +873,13 @@ class CyclicSolver:
         writeProfile(fbase + ".pp_ref.txt", self.pp_ref)
         writeArray(fbase + ".hfs.txt", self.optimized_filters)
         writeArray(fbase + ".dynspec.txt", self.dynamic_spectrum)
-        pass
 
     def cyclic_variance(self, cs):
         ih = self.nharm - 1
 
-        imin, imax = chan_limits_cs(iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq)  # highest harmonic
+        imin, imax = chan_limits_cs(
+            iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq
+        )  # highest harmonic
         var = (np.abs(cs[imin:imax, ih]) ** 2).sum()
         nvalid = imax - imin
         var = var / nvalid
@@ -894,7 +944,9 @@ class CyclicSolver:
         fig = Figure()
         ax1 = fig.add_subplot(3, 3, 1)
         csextent = [1, mlag - 1, self.rf + self.bw / 2.0, self.rf - self.bw / 2.0]
-        im = ax1.imshow(np.log10(np.abs(self.cs[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+        im = ax1.imshow(
+            np.log10(np.abs(self.cs[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent
+        )
         # im = ax1.imshow(cs2ps(self.cs),aspect='auto',interpolation='nearest',extent=csextent)
         ax1.set_xlim(0, mlag)
         ax1.text(
@@ -934,7 +986,9 @@ class CyclicSolver:
         for tl in ax1b.yaxis.get_ticklabels():
             tl.set_visible(False)
         ax2 = fig.add_subplot(3, 3, 4)
-        im = ax2.imshow(np.log10(np.abs(cs_model[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+        im = ax2.imshow(
+            np.log10(np.abs(cs_model[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent
+        )
         # im = ax2.imshow(cs2ps(cs_model),aspect='auto',interpolation='nearest',extent=csextent)
         im.set_clim(-4, 2)
         ax2.set_xlim(0, mlag)
@@ -1041,13 +1095,33 @@ class CyclicSolver:
 
         ax4.set_ylim(0, 80)
         ax4.set_xlim(t[0], t[-1])
-        ax4.text(0.9, 0.9, "dB|h(t)|$^2$", fontdict=dict(size="small"), va="top", ha="right", transform=ax4.transAxes)
-        ax4.text(0.95, 0.01, "$\\mu$s", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4.transAxes)
+        ax4.text(
+            0.9,
+            0.9,
+            "dB|h(t)|$^2$",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax4.transAxes,
+        )
+        ax4.text(
+            0.95,
+            0.01,
+            "$\\mu$s",
+            fontdict=dict(size="small"),
+            va="bottom",
+            ha="right",
+            transform=ax4.transAxes,
+        )
         ax4b = fig.add_subplot(4, 3, 6)
         f = np.linspace(self.rf + self.bw / 2.0, self.rf - self.bw / 2.0, self.nchan)
         ax4b.plot(f, np.abs(hf))
-        ax4b.text(0.9, 0.9, "|H(f)|", fontdict=dict(size="small"), va="top", ha="right", transform=ax4b.transAxes)
-        ax4b.text(0.95, 0.01, "MHz", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4b.transAxes)
+        ax4b.text(
+            0.9, 0.9, "|H(f)|", fontdict=dict(size="small"), va="top", ha="right", transform=ax4b.transAxes
+        )
+        ax4b.text(
+            0.95, 0.01, "MHz", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4b.transAxes
+        )
         ax4b.set_xlim(f.min(), f.max())
         ax4b.xaxis.set_major_locator(plt.MaxNLocator(4))
         ax5 = fig.add_subplot(4, 3, 9)
@@ -1055,7 +1129,13 @@ class CyclicSolver:
             x = np.abs(np.diff(np.array(self.objval).flatten()))
             ax5.plot(np.arange(x.shape[0]), np.log10(x))
         ax5.text(
-            0.9, 0.9, "log($\\Delta$merit)", fontdict=dict(size="small"), va="top", ha="right", transform=ax5.transAxes
+            0.9,
+            0.9,
+            "log($\\Delta$merit)",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax5.transAxes,
         )
         ax6 = fig.add_subplot(4, 3, 12)
         pref = harm2phase(self.s0)
@@ -1085,7 +1165,7 @@ class CyclicSolver:
 def plotSimulation(CS, mlag=100):
     if CS.ht0 is None:
         print("Does not appear this is a simulation run")
-    grad = CS.grad
+    CS.grad
     hf = CS.hf
     ht = CS.ht  # [CS.isub,:]
     cs0 = CS.modelCS(ht)
@@ -1248,7 +1328,9 @@ def plotSimulation(CS, mlag=100):
     )
 
     ax7 = fig.add_subplot(3, 3, 7)
-    im = ax7.imshow(np.log10(np.abs(CS.cs[:, :mlag])), aspect="auto", interpolation="nearest", extent=csextent)
+    im = ax7.imshow(
+        np.log10(np.abs(CS.cs[:, :mlag])), aspect="auto", interpolation="nearest", extent=csextent
+    )
     ax7.text(
         0.9,
         0.9,
@@ -1263,7 +1345,9 @@ def plotSimulation(CS, mlag=100):
     ax7.set_ylabel("MHz")
 
     ax9 = fig.add_subplot(3, 3, 9)
-    im = ax9.imshow(np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent)
+    im = ax9.imshow(
+        np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent
+    )
 
     ax9.text(
         0.9,
@@ -1294,10 +1378,14 @@ def plotSimulation(CS, mlag=100):
         taustr = ""
 
     title = "%s isub: %d ipol: %d nopt: %d\n" % (fname, CS.isub, CS.ipol, CS.nopt)
-    title += harmstr + " " + taustr + " " + snrstr + " " + (" Feval #%04d Merit: %.3e" % (CS.niter, CS.objval[-1]))
+    title += (
+        harmstr + " " + taustr + " " + snrstr + " " + (" Feval #%04d Merit: %.3e" % (CS.niter, CS.objval[-1]))
+    )
     fig.suptitle(title, size="small")
     canvas = FigureCanvasAgg(fig)
-    fname = os.path.join(CS.plotdir, ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter)))
+    fname = os.path.join(
+        CS.plotdir, ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter))
+    )
     canvas.print_figure(fname)
 
 
@@ -1444,17 +1532,15 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
-def apply_threshold(x: np.ndarray, threshold: float, kernel = None):
+
+def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
-        Any value with abs(x) < threshold is set to zero
+    Any value with abs(x) < threshold is set to zero
     """
-    x_power = np.abs(x)**2
+    x_power = np.abs(x) ** 2
     if kernel is not None:
-        # var_noise_before = noise_power_wavefield(x_power)
-        print('apply threshold: smoothing power using supplied kernel')
-        x_power = fftconvolve(x_power, kernel, mode='same')
-        # var_noise_after = noise_power_wavefield(x_power)
-        # print(f'smoothing: noise power before={var_noise_before} after={var_noise_after}')
+        print("apply threshold: smoothing power using supplied kernel")
+        x_power = fftconvolve(x_power, kernel, mode="same")
     var_noise = noise_power_wavefield(x_power)
     limit = var_noise * threshold**2
     out = np.heaviside(x_power - limit, 1) * x
@@ -1463,18 +1549,54 @@ def apply_threshold(x: np.ndarray, threshold: float, kernel = None):
     print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
-def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel = None):
+
+def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, decay=None):
     """
-        abs(x) is decreased by threshold.
-        Any resulting value with abs(x) < threshold is set to zero
+    abs(x) is decreased by threshold.
+    Any resulting value with abs(x) < threshold is set to zero
     """
+    x_power = np.abs(x) ** 2
+    if kernel is not None:
+        print("apply shrinkage threshold: smoothing power using supplied kernel")
+        x_power = fftconvolve(x_power, kernel, mode="same")
+
+    var_noise = noise_power_wavefield(x_power)
+    limit = np.sqrt(var_noise) * threshold
+    shrinkage = limit
+
+    if decay is not None:
+        shrinkage = limit * np.exp(-(np.sqrt(x_power) - limit) / (decay * limit))
+
     # add a small offset to absx to avoid division by zero in next step
-    absx = np.abs(x) + threshold * 1e-6
-    out = np.maximum(absx - threshold, 0) * x / absx
+    absx = np.abs(x) + np.sqrt(limit) * 1e-6
+    out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)
     print(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
+
+
+def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_threshold: float, kernel=None):
+    """
+    abs(x) is decreased by threshold * delay_noise_power
+    Any resulting value with abs(x) < threshold * delay_noise_power is set to zero
+    """
+    x_power = np.abs(x) ** 2
+    if kernel is not None:
+        print("apply delay shrinkage threshold: smoothing power using supplied kernel")
+        x_power = fftconvolve(x_power, kernel, mode="same")
+
+    var_noise = delay_noise_power_wavefield(x_power, baseline_threshold)
+    shrinkage = np.sqrt(var_noise) * threshold
+
+    # add a small offset to absx to avoid division by zero in next step
+    absx = np.abs(x) + shrinkage * 1e-6
+    out = np.maximum(absx - shrinkage, 0) * x / absx
+    nonz = np.count_nonzero(out)
+    sz = np.size(out)
+    print(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    return out
+
 
 def normalize_profile(ph):
     """
@@ -1492,26 +1614,62 @@ def normalize_pp(pp):
     ph[0] = 0
     return harm2phase(ph)
 
+
 def noise_power_wavefield(h_power):
     # compute the mean wavefield power over all doppler shifts and a range of negative delays
     nchan = h_power.shape[1]
-    start_chan = nchan*5//8
-    end_chan = nchan*7//8
-    return np.mean(h_power[:,start_chan:end_chan])
+    start_chan = nchan * 5 // 8
+    end_chan = nchan * 7 // 8
+    noise_power = h_power[:, start_chan:end_chan]
+    norm = np.maximum(np.count_nonzero(noise_power), 1)
+    return np.sum(noise_power) / norm
+
+
+def delay_noise_power_wavefield(power, threshold):
+    ndoppler = power.shape[0]
+    ndelay = power.shape[1]
+    print(f"ndelay={ndelay} ndoppler={ndoppler}")
+
+    # extract two strips over all delays at extremes of doppler shift
+    width = 5
+    left_edge = power[0:width]
+    right_edge = power[(ndoppler - width) :]
+
+    sum_edge = np.sum(left_edge, axis=0) + np.sum(right_edge, axis=0)
+    count_edge = np.count_nonzero(left_edge, axis=0) + np.count_nonzero(right_edge, axis=0)
+    edge_power = sum_edge / count_edge
+
+    # in the following loop, only samples below threshold are used to estimate the mean
+    # this biases the estimated mean by a known amount for an exponential distribution (chisq with 2 d.o.f.)
+    bias = 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
+    print(f"bias={bias}")
+
+    # iteratively select points below threshold, then update threshold
+    masked_power = edge_power
+    for i in range(10):
+        masked = np.heaviside(threshold * masked_power - power, 1) * power
+        sum_masked = np.sum(masked, axis=0)
+        count_masked = np.count_nonzero(masked, axis=0)
+        masked_power = sum_masked / (bias * count_masked)
+
+    return masked_power
+
 
 def rms_wavefield(h):
     # compute rms wavefield rms over all doppler shifts and a range of negative delays
-    return np.sqrt(noise_power_wavefield(np.abs(h)**2))
+    return np.sqrt(noise_power_wavefield(np.abs(h) ** 2))
+
 
 def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nchan = cs.shape[0]
     nharm = cs.shape[1]
-    cmin, cmax = chan_limits_cs(nharm-1, nchan, bw, ref_freq)
-    hmin = nharm//2
+    cmin, cmax = chan_limits_cs(nharm - 1, nchan, bw, ref_freq)
+    hmin = nharm // 2
     extracted_noise = cs[cmin:cmax, hmin:]
     # print(f'normalize_cs_by_noise_rms nonzero={np.count_nonzero(noise)} size={noise.size}')
     rms = np.sqrt((np.abs(extracted_noise) ** 2).mean())
     return cs / rms, rms
+
 
 def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
@@ -1571,9 +1729,13 @@ def make_model_cs(hf, s0, bw, ref_freq):
     nchan = hf.shape[0]
     nharm = s0.shape[0]
     # profile2cs
-    cs = np.repeat(s0[np.newaxis, :], nchan, axis=0)  # fill the cs model with the harmonic profile for each freq chan
+    cs = np.repeat(
+        s0[np.newaxis, :], nchan, axis=0
+    )  # fill the cs model with the harmonic profile for each freq chan
     # filter2cs
-    cs_tmp = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the cs_tmp model with the filter for each harmonic
+    cs_tmp = np.repeat(
+        hf[:, np.newaxis], nharm, axis=1
+    )  # fill the cs_tmp model with the filter for each harmonic
 
     csplus, plus_phases = cyclic_shear_cs(cs_tmp, shear=0.5, bw=bw, ref_freq=ref_freq)
     csminus, minus_phases = cyclic_shear_cs(
@@ -1623,15 +1785,16 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad = complex_cyclic_merit_lag (ht, CS, 1.0)
+    merit, grad = complex_cyclic_merit_lag(ht, CS, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
     # multiply by 2 when going from Wertinger to real/imag derivatives
-    grad = get_params(2.0* grad, CS.rindex)
+    grad = get_params(2.0 * grad, CS.rindex)
     return merit, grad
 
-def complex_cyclic_merit_lag (ht, CS, gain):
+
+def complex_cyclic_merit_lag(ht, CS, gain):
     hf = time2freq(ht)
     CS.hf = hf
     CS.ht = ht
@@ -1639,7 +1802,7 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     cs_model *= gain
 
     if CS.maxharm is not None:
-        cs_model[:,CS.maxharm+1:] = 0.0
+        cs_model[:, CS.maxharm + 1 :] = 0.0
 
     merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
 
@@ -1671,7 +1834,7 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
 
     cc1 = cs2cc(diff * csminus)
-    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
+    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan  # [OvS] WDvS Equation 37
     grad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
     cc1 = cs2cc(np.conj(diff) * csplus)
@@ -1689,20 +1852,20 @@ def complex_cyclic_merit_lag (ht, CS, gain):
 
         ddenom_dh = cs2cc(csminus * csplus * np.conj(csplus)) * np.conj(phasors)
         ddenom_dh += cs2cc(csminus * csplus * np.conj(csminus)) * phasors
-        ddenom_dh /= denom ** 2
+        ddenom_dh /= denom**2
 
         fscr = fscrunch_cs(csplus * np.conj(csminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) / CS.nchan
-        ds_dh = cs2cc(CS.cs*csminus) / denom * phasors - numer * ddenom_dh
-        grad2 = fscr * ds_dh 
+        ds_dh = cs2cc(CS.cs * csminus) / denom * phasors - numer * ddenom_dh
+        grad2 = fscr * ds_dh
         dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-        ds_dh = cs2cc(np.conj(CS.cs)*csplus) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
+        ds_dh = cs2cc(np.conj(CS.cs) * csplus) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
         grad2 = np.conj(fscr) * ds_dh
         dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
 
-        agrad = np.vdot(grad,grad)
-        adgrad = np.vdot(dgrad,dgrad)
-        cosgrad = np.vdot(dgrad,grad) / np.sqrt(agrad * adgrad)
+        agrad = np.vdot(grad, grad)
+        adgrad = np.vdot(dgrad, dgrad)
+        cosgrad = np.vdot(dgrad, grad) / np.sqrt(agrad * adgrad)
 
         if CS.iprint:
             print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
@@ -1721,7 +1884,7 @@ def complex_cyclic_merit_lag (ht, CS, gain):
     CS.grad = grad[:]
     CS.model = cs_model[:]
 
-    # although re & im count as separate terms in sum, 
+    # although re & im count as separate terms in sum,
     # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
     CS.complex_cyclic_merit_terms = nonzero
 
