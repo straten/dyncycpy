@@ -29,8 +29,8 @@ CS.model_gain_variations = True
 
 print(f"cycfista: loading files")
 
-CS.load("P2067/chan07/53873.27864.07.15s.pb2t2")
-CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
+CS.load("P2067/chan07/53873.27864.07.15s.pb2")
+CS.load("P2067/chan07/53873.31676.07.15s.pb2")
 
 print(f"cycfista: {CS.nspec} spectra loaded")
 
