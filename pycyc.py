@@ -149,6 +149,8 @@ class CyclicSolver:
         self.make_plots = False
         self.niter = 0
 
+        self.mean_time_offset = 0
+
         # modelling options
 
         # maintain constant total power in the wavefield
@@ -250,13 +252,13 @@ class CyclicSolver:
         if self.nspec == 0:
             idx = 0  # only used to get parameters of integration, not data itself
             subint = ar.get_Integration(idx)
-            epoch = subint.get_epoch()
+            self.reference_epoch = subint.get_epoch()
             try:
-                self.imjd = np.floor(epoch)
-                self.fmjd = np.fmod(epoch, 1)
+                self.imjd = np.floor(self.reference_epoch)
+                self.fmjd = np.fmod(self.reference_epoch, 1)
             except:  # new version of psrchive has different kind of epoch
-                self.imjd = epoch.intday()
-                self.fmjd = epoch.fracday()
+                self.imjd = self.reference_epoch.intday()
+                self.fmjd = self.reference_epoch.fracday()
             self.ref_phase = 0.0
             self.ref_freq = 1.0 / subint.get_folding_period()
             self.bw = np.abs(subint.get_bandwidth()) * bwfact
@@ -265,7 +267,6 @@ class CyclicSolver:
             self.source = ar.get_source()  # source name
             self.nopt = 0
             self.nloop = 0
-            ar = None
 
             self.nspec, self.npol, self.nchan, self.nbin = data.shape
             self.nlag = self.nchan
@@ -273,6 +274,22 @@ class CyclicSolver:
             self.nharm = int(self.nphase / 2) + 1
             if self.maxharm is not None:
                 print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
+
+            self.time_offsets = np.zeros(self.nspec)
+            total_offset = 0
+            for isub in range(self.nspec):
+                subint = ar.get_Integration(isub)
+                epoch = subint.get_epoch()
+                diff = epoch - self.reference_epoch
+                self.time_offsets[isub] = diff.in_seconds()
+                if isub > 0:
+                    offset = self.time_offsets[isub] - self.time_offsets[isub-1]
+                    total_offset += offset
+            self.mean_time_offset = total_offset / (self.nspec-1)
+
+            ar = None
+
+            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
@@ -291,7 +308,17 @@ class CyclicSolver:
                 self.data = data
 
         else:
-            ar = None
+
+            last_offset = self.time_offsets[self.nspec-1]
+            subint = ar.get_Integration(0)
+            epoch = subint.get_epoch()
+            diff = epoch - self.reference_epoch
+            next_offset = diff.in_seconds()
+            
+            missing_subints = int(np.round((next_offset - last_offset) / self.mean_time_offset)) - 1
+
+            if missing_subints > 0:
+                print(f"missing {missing_subints} sub-integrations")
 
             nspec, npol, nchan, nbin = data.shape
 
@@ -299,13 +326,13 @@ class CyclicSolver:
             assert nchan == self.nchan
             assert nbin == self.nbin
 
-            new_nspec = self.nspec + nspec
+            new_nspec = self.nspec + nspec + missing_subints
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nspec, self.npol, self.nchan, self.nharm)
                 self.cs_norm.resize(new_nspec, self.npol)
                 for isub in range(nspec):
-                    jsub = isub + self.nspec
+                    jsub = isub + self.nspec + missing_subints
                     if self.iprint:
                         print(f"load calculating cyclic spectrum for isub={jsub}/{new_nspec}")
                     for ipol in range(self.npol):
@@ -313,7 +340,28 @@ class CyclicSolver:
                         self.cs_norm[jsub, ipol] = self.get_cs_norm
                 self.data = None
                 data = None
+                if missing_subints > 0:
+                    print("setting missing cyclic spectra to average of bounding spectra")
+                    for ipol in range(self.npol):
+                        previous_idx = self.nspec-1
+                        previous_cs = self.cyclic_spectra[previous_idx, ipol]
+                        previous_cs_norm = self.cs_norm[previous_idx, ipol]
+
+                        next_idx = self.nspec+missing_subints
+                        next_cs = self.cyclic_spectra[next_idx, ipol]
+                        next_cs_norm = self.cs_norm[next_idx, ipol]
+
+                        average_cs = 0.5 * (previous_cs + next_cs)
+                        average_cs_norm = 0.5 * (previous_cs_norm + next_cs_norm)
+
+                        for isub in range(missing_subints):
+                            jsub = isub + self.nspec
+                            self.cyclic_spectra[jsub, ipol] = average_cs
+                            self.cs_norm[jsub, ipol] = average_cs_norm
+
             else:
+                if missing_subints > 0:
+                    print("WARNING: patching up missing sub-integrations not implemented when not saving cyclic spectra")
                 self.data = np.append(self.data, data, axis=1)
 
             self.nspec = new_nspec
