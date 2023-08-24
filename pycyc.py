@@ -1672,33 +1672,31 @@ def noise_power_wavefield(h_power):
 
 
 def delay_noise_power_wavefield(power, threshold):
+
+    bias = 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
+    print(f"delay_noise_power_wavefield threshold={threshold} bias={bias}")
+
     ndoppler = power.shape[0]
     ndelay = power.shape[1]
-    print(f"ndelay={ndelay} ndoppler={ndoppler}")
+    print(f"delay_noise_power_wavefield ndelay={ndelay} ndoppler={ndoppler}")
 
-    # extract two strips over all delays at extremes of doppler shift
-    width = 5
-    left_edge = power[0:width]
-    right_edge = power[(ndoppler - width) :]
+    # extract a 10-doppler-shift-wide strip at extremes of doppler shift (where signal is expected to be low)
+    width=10
+    min=(ndoppler-width)//2
+    max=(ndoppler+width)//2
+    edge = power[min:max,:]
 
-    sum_edge = np.sum(left_edge, axis=0) + np.sum(right_edge, axis=0)
-    count_edge = np.count_nonzero(left_edge, axis=0) + np.count_nonzero(right_edge, axis=0)
-    edge_power = sum_edge / count_edge
+    sum_edge = np.sum(edge, axis=0)
+    count_edge = np.maximum(np.count_nonzero(edge, axis=0),1)
 
-    # in the following loop, only samples below threshold are used to estimate the mean
-    # this biases the estimated mean by a known amount for an exponential distribution (chisq with 2 d.o.f.)
-    bias = 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
-    print(f"bias={bias}")
-
-    # iteratively select points below threshold, then update threshold
-    masked_power = edge_power
+    masked_delay_power = sum_edge / count_edge
     for i in range(10):
-        masked = np.heaviside(threshold * masked_power - power, 1) * power
-        sum_masked = np.sum(masked, axis=0)
-        count_masked = np.count_nonzero(masked, axis=0)
-        masked_power = sum_masked / (bias * count_masked)
+        masked = np.heaviside(threshold * masked_delay_power - power, 1) * power
+        sum_masked = np.sum(masked,axis=0)
+        count_masked = np.maximum(np.count_nonzero(masked, axis=0),1)
+        masked_delay_power = sum_masked / (bias * count_masked)
 
-    return masked_power
+    return masked_delay_power
 
 
 def rms_wavefield(h):
