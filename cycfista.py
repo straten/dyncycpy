@@ -19,8 +19,9 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
 CS.save_cyclic_spectra = True
 CS.delay_noise_shrinkage_threshold = 1.0
-CS.delay_noise_selection_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
 CS.model_gain_variations = True
+CS.first_wavefield_from_best_harmonic = 10
 
 # CS.enforce_causality = True
 # CS.noise_shrinkage_threshold = 1.0
@@ -30,17 +31,17 @@ CS.model_gain_variations = True
 print(f"cycfista: loading files")
 
 CS.load("P2067/chan07/53873.27864.07.15s.pb2t2")
-CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
+# CS.load("P2067/chan07/53873.31676.07.15s.pb2t2")
 
 print(f"cycfista: {CS.nspec} spectra loaded")
 
 CS.initProfile()
 
-plt.plot(CS.intrinsic_pp)
+plt.plot(CS.pp_intrinsic)
 plt.savefig("cycfista_init_profile.png")
 plt.close()
 with open("cycfista_init_profile.pkl", "wb") as fh:
-    pickle.dump(CS.intrinsic_pp, fh)
+    pickle.dump(CS.pp_intrinsic, fh)
 
 plt.plot(CS.cs_norm)
 plt.savefig("cycfista_cs_norm.png")
@@ -48,7 +49,7 @@ plt.close()
 with open("cycfista_cs_norm.pkl", "wb") as fh:
     pickle.dump(CS.cs_norm, fh)
 
-pp_scattered = np.copy(CS.pp_ref)
+pp_scattered = np.copy(CS.pp_scattered)
 
 CS.initWavefield()
 

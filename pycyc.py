@@ -26,7 +26,7 @@ CS.initProfile(loadFile='/psr/gjones/pp_1713.npy') # start with a nice precomput
 # Note profile can be in .txt (filter_profile) format or .npy numpy.save format.
 
 # have a look at the profile:
-plot(CS.pp_int)
+plot(CS.pp_intrinsic)
 
 CS.data.shape
 Out: (1, 2, 256, 512)  # 1 subintegration, 2 polarizations, 256 freq channels, 512 phase bins
@@ -141,8 +141,11 @@ class CyclicSolver:
         self.intrinsic_ph = None
         self.intrinsic_ph_sum = None
         self.intrinsic_ph_sumsq = None
+        self.pp_scattered = None
+        self.pp_intrinsic = None
 
         self.cs_norm = None
+        
         self.gain = 1.0
 
         self.iprint = False
@@ -198,6 +201,9 @@ class CyclicSolver:
         # include temporal variations in gain in the model
         self.model_gain_variations = False
         self.update_gain = False
+
+        # derive a first guest for the wavefield using the harmonic with the highest S/N
+        self.first_wavefield_from_best_harmonic = 0
 
         if filename:
             self.load(filename)
@@ -374,7 +380,7 @@ class CyclicSolver:
         If loadFile ends with .txt, it is assumed to be a filter_profile output file
         If loadFile ends with .npy, it is assumed to be a numpy data file
 
-        Resulting profile is assigned to self.pp_ref
+        Resulting profile is assigned to self.pp_intrinsic
         The results of this routine have been checked to agree with filter_profile -i
 
         *maxinitharm* : zero harmonics above this one in the initial profile (acts to smooth/denoise) (optional)
@@ -391,6 +397,60 @@ class CyclicSolver:
         self.h_time_delay[:, 0] = self.nchan
         self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
 
+        if self.first_wavefield_from_best_harmonic:
+            initial_total_power = np.sum(np.abs(self.h_doppler_delay)**2)
+            maxharm=np.minimum(self.first_wavefield_from_best_harmonic,self.nharm)
+            sn = np.zeros(maxharm)
+
+            for harm in range(maxharm):
+                print(f"harmonic={harm}")
+                # extract the harmonic and sum over polarizations
+                time_freq = np.sum(self.cyclic_spectra[:,:,:,harm],axis=1)
+                trial_wavefield = time2freq(freq2time(time_freq,axis=1),axis=0)
+                power = np.abs(trial_wavefield)**2
+
+                # estimate the S/N for this trial wavefield
+
+                # first, take a slice of nice at extreme Doppler shift
+                width=10
+                min=(self.nspec-width)//2
+                max=(self.nspec+width)//2
+                noise_slice = power[min:max,:]
+
+                noise_power = np.mean(noise_slice)
+                total_power = np.mean(power)
+                sn[harm] = np.sqrt(total_power/noise_power)
+                print(f'harmonic={harm} S/N={sn[harm]}')
+
+            best_harmonic = np.argmax(sn)
+            print(f"best harmonic={best_harmonic}")
+
+            # extract the harmonic and sum over polarizations
+            time_freq = np.sum(self.cyclic_spectra[:,:,:,best_harmonic],axis=1)
+            self.h_doppler_delay = time2freq(freq2time(time_freq,axis=1),axis=0)
+            power = np.abs(self.h_doppler_delay)**2
+
+            # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
+            log_sum = 0
+            for i in {-1, 0, 1}:
+                for j in {-1, 0, 1}:
+                    if i != 0 or j != 0:
+                        log_sum += np.log10(power[i,j])
+            log_mean = log_sum / 8
+            mean_amp = pow(10,0.5*log_mean)
+            zero_amp = np.abs(self.h_doppler_delay[0,0])
+            print(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
+
+            self.h_doppler_delay[0,0] *= mean_amp / zero_amp
+            self.h_doppler_delay[:,self.nchan//2:]=0.0
+
+            power = np.abs(self.h_doppler_delay)**2
+            total_power = np.sum(power)
+            scale_factor = np.sqrt(initial_total_power/total_power)
+            print(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
+            self.h_doppler_delay *= scale_factor
+            self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
+
         self.dynamic_spectrum = np.zeros((self.nspec, self.npol, self.nchan))
         self.first_harmonic_spectrum = np.zeros((self.nspec, self.npol, self.nchan), dtype="complex")
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -402,9 +462,9 @@ class CyclicSolver:
 
         if loadFile:
             if loadFile.endswith(".npy"):
-                self.pp_ref = np.load(loadFile)
+                self.pp_intrinsic = np.load(loadFile)
             elif loadFile.endswith(".txt"):
-                self.pp_ref = loadProfile(loadFile)
+                self.pp_intrinsic = loadProfile(loadFile)
             else:
                 raise Exception("Filename must end with .txt or .npy to indicate type")
             return
@@ -432,7 +492,6 @@ class CyclicSolver:
             print("Saving after nopt:", self.nopt)
             self.saveState(savefile)
 
-        self.pp_ref = self.pp_int
         self.nloop += 1
 
     def get_dof(self):
@@ -449,11 +508,16 @@ class CyclicSolver:
         """
         Update the reference profile
 
-        Resulting profile is assigned to self.pp_ref
+        Resulting profile is assigned to self.pp_intrinsic
         """
 
+        compute_scattered_profile = False
+        if self.pp_scattered is None:
+            compute_scattered_profile = True
+            self.pp_scattered = np.zeros(self.nphase)  # intrinsic profile
+
         self.optimal_gains = np.ones(self.nspec)
-        self.pp_int = np.zeros(self.nphase)  # intrinsic profile
+        self.pp_intrinsic = np.zeros(self.nphase)  # intrinsic profile
         self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype="complex")
         self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype="complex")
         self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype="complex")
@@ -483,6 +547,11 @@ class CyclicSolver:
                 if self.model_gain_variations and ipol == 0:
                     self.update_gain = True
 
+                if compute_scattered_profile:
+                    ph = fscrunch_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+                    pp = harm2phase(ph)
+                    self.pp_scattered += pp
+
                 ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
 
                 self.ph_numer_int[ipol] += self.ph_numer
@@ -501,7 +570,7 @@ class CyclicSolver:
                     print(f"update profile isub={isub}/{self.nspec}")
 
                 self.intrinsic_profiles[isub, ipol, :] = pp
-                self.pp_int += pp
+                self.pp_intrinsic += pp
 
         # keep the gains from wandering
         mean_gain = self.optimal_gains.mean()
@@ -517,9 +586,8 @@ class CyclicSolver:
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol]
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol]) ** 2
 
-        self.pp_ref = self.pp_int
-        self.intrinsic_pp = harm2phase(self.intrinsic_ph_sum)
-        print(f"updateProfile intrinsic profile range: {np.ptp(self.intrinsic_pp)}")
+        self.pp_intrinsic = harm2phase(self.intrinsic_ph_sum)
+        print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
     def initWavefield(self):
         """
@@ -700,7 +768,6 @@ class CyclicSolver:
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
-        # self.h_doppler_delay_grad[0,0] = 0.+0.j
 
     def optimize_profile(self, cs, hf, bw, ref_freq):
         cs.shape[0]
@@ -731,6 +798,7 @@ class CyclicSolver:
         s0 = self.ph_numer / self.ph_denom
         s0[np.real(self.ph_denom) <= 0.0] = 0
         return s0
+
 
     def loop(
         self,
@@ -800,14 +868,14 @@ class CyclicSolver:
 
         self.dynamic_spectrum[isub, :] = np.real(cs[:, 0])
 
-        self.ph_ref = phase2harm(self.pp_ref)
+        self.ph_ref = phase2harm(self.pp_intrinsic)
         self.ph_ref = normalize_profile(self.ph_ref)
         self.ph_ref[0] = 0
         ph = self.ph_ref[:]
         self.s0 = ph
 
         if self.nopt == 0 or not use_last_soln:
-            self.pp_int = np.zeros(self.nphase)
+            self.pp_intrinsic = np.zeros(self.nphase)
             if ht0 is None:
                 if rindex is None:
                     delay = self.phase_gradient(cs)
@@ -908,15 +976,15 @@ class CyclicSolver:
         pp = harm2phase(ph)
 
         self.intrinsic_profiles[isub, :] = pp
-        self.pp_int += pp
+        self.pp_intrinsic += pp
 
         self.nopt += 1
 
     def saveResults(self, fbase=None):
         if fbase is None:
             fbase = self.filename
-        writeProfile(fbase + ".pp_int.txt", self.pp_int)
-        writeProfile(fbase + ".pp_ref.txt", self.pp_ref)
+        writeProfile(fbase + ".pp_intrinsic.txt", self.pp_intrinsic)
+        writeProfile(fbase + ".pp_scattered.txt", self.pp_scattered)
         writeArray(fbase + ".hfs.txt", self.optimized_filters)
         writeArray(fbase + ".dynspec.txt", self.dynamic_spectrum)
 
@@ -1268,7 +1336,7 @@ def plotSimulation(CS, mlag=100):
     #    im.set_clim(0.5,2)
     pt = 1e3 * np.linspace(0, 1, CS.nphase) / CS.ref_freq
     ax3.plot(pt, fftshift(CS.pp_meas), "r", label="measured")
-    ax3.plot(pt, fftshift(CS.pp_int), "cyan", alpha=0.7, label="deconvolved")
+    ax3.plot(pt, fftshift(CS.pp_intrinsic), "cyan", alpha=0.7, label="deconvolved")
     ax3.plot(pt, fftshift(harm2phase(CS.s0)), "k", label="original")
     ax3.errorbar([pt[len(pt) / 4]], [CS.pp_meas.max() / 2.0], xerr=CS.tau / 1e3, capsize=5, linewidth=2)
     ax3.text(pt[len(pt) / 4], CS.pp_meas.max() * 0.55, "tau", fontdict=dict(size="small"))
@@ -1963,6 +2031,6 @@ if __name__ == "__main__":
         CS.initProfile(loadFile=sys.argv[2])
     else:
         CS.initProfile()
-    np.save(("%s_profile.npy" % CS.source), CS.pp_ref)
+    np.save(("%s_profile.npy" % CS.source), CS.pp_intrinsic)
     CS.loop(make_plots=True, tolfact=20)
     CS.saveResults()
