@@ -31,8 +31,8 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     ref /= np.max(ref) / target_max
     roll = -np.argmax(ref) + offset
     ref = np.roll(ref, roll)
-    base_int = np.mean(CS.pp_int[off_start:off_end])
-    _int = CS.pp_int - base_int
+    base_int = np.mean(CS.pp_intrinsic[off_start:off_end])
+    _int = CS.pp_intrinsic - base_int
     _int /= np.max(_int) / target_max
     _int = np.roll(_int, roll)
 
