@@ -104,7 +104,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from scipy import signal
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
-from scipy.signal import fftconvolve, kaiser
+from scipy.signal import fftconvolve, kaiser, tukey
 
 
 class CyclicSolver:
@@ -204,6 +204,15 @@ class CyclicSolver:
 
         # derive a first guest for the wavefield using the harmonic with the highest S/N
         self.first_wavefield_from_best_harmonic = 0
+
+        # delay the initial wavefield estimate by this many pixels
+        self.first_wavefield_delay = 0
+
+        # taper in the frequency domain using a Tukey window with the specified alpha (see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.tukey.html)
+        self.spectral_taper_alpha = 0
+
+        # taper in the time domain using a Tukey window with the specified alpha 
+        self.temporal_taper_alpha = 0
 
         if filename:
             self.load(filename)
@@ -393,9 +402,32 @@ class CyclicSolver:
         hf_prev = np.ones((self.nchan,), dtype="complex")
         self.hf_prev = hf_prev
 
-        self.h_time_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.h_time_delay[:, 0] = self.nchan
-        self.h_doppler_delay = fft(self.h_time_delay, axis=0) / self.h_time_delay.shape[0]
+        self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
+
+        self.noise_smoothing_kernel = None
+        if self.noise_smoothing_duty_cycle is not None:
+            ashape = np.asarray(self.h_time_delay_grad.shape)
+            wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
+            print(f"noise smoothing kernel shape: {wshape}")
+            kernel = np.outer(
+                kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta)
+            )
+            self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
+
+        if self.spectral_taper_alpha > 0:
+            spectral_taper = tukey(self.nchan, self.spectral_taper_alpha)
+            for i in range(self.nspec):
+                for j in range(self.npol):
+                    for k in range(self.nharm):
+                        self.cyclic_spectra[i,j,:,k] *= spectral_taper
+
+        if self.temporal_taper_alpha > 0:
+            temporal_taper = tukey(self.nspec, self.temporal_taper_alpha)
+            for i in range(self.npol):
+                for j in range(self.nchan):
+                    for k in range(self.nharm):
+                        self.cyclic_spectra[:,i,j,k] *= temporal_taper
 
         if self.first_wavefield_from_best_harmonic:
             initial_total_power = np.sum(np.abs(self.h_doppler_delay)**2)
@@ -411,7 +443,7 @@ class CyclicSolver:
 
                 # estimate the S/N for this trial wavefield
 
-                # first, take a slice of nice at extreme Doppler shift
+                # first, take a slice of noise at extreme Doppler shift
                 width=10
                 min=(self.nspec-width)//2
                 max=(self.nspec+width)//2
@@ -441,6 +473,18 @@ class CyclicSolver:
             zero_amp = np.abs(self.h_doppler_delay[0,0])
             print(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
 
+            if self.delay_noise_shrinkage_threshold is not None:
+                print(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
+                np.copyto(
+                    self.h_doppler_delay,
+                    apply_delay_shrinkage_threshold(
+                        self.h_doppler_delay,
+                        self.delay_noise_shrinkage_threshold,
+                        self.delay_noise_selection_threshold,
+                        self.noise_smoothing_kernel,
+                    ),
+                )
+
             self.h_doppler_delay[0,0] *= mean_amp / zero_amp
             self.h_doppler_delay[:,self.nchan//2:]=0.0
 
@@ -449,8 +493,8 @@ class CyclicSolver:
             scale_factor = np.sqrt(initial_total_power/total_power)
             print(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
             self.h_doppler_delay *= scale_factor
-            self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
 
+        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
         self.dynamic_spectrum = np.zeros((self.nspec, self.npol, self.nchan))
         self.first_harmonic_spectrum = np.zeros((self.nspec, self.npol, self.nchan), dtype="complex")
         self.optimized_filters = np.zeros((self.nspec, self.nchan), dtype="complex")
@@ -597,16 +641,6 @@ class CyclicSolver:
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
         self.nopt = 0
-
-        self.noise_smoothing_kernel = None
-        if self.noise_smoothing_duty_cycle is not None:
-            ashape = np.asarray(self.h_time_delay_grad.shape)
-            wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
-            print(f"noise smoothing kernel shape: {wshape}")
-            kernel = np.outer(
-                kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta)
-            )
-            self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
 
         self.updateWavefield(self.h_doppler_delay)
 
