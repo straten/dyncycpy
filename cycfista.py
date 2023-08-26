@@ -17,12 +17,20 @@ from scipy.fft import fftshift
 
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
-CS.save_cyclic_spectra = True
-CS.delay_noise_shrinkage_threshold = 1.0
-CS.delay_noise_selection_threshold = 2.0
-CS.model_gain_variations = True
-CS.first_wavefield_from_best_harmonic = 10
+# Number of iterations between profile updates
+update_profile_period = 1
 
+CS.save_cyclic_spectra = True
+CS.model_gain_variations = True
+
+# CS.delay_noise_shrinkage_threshold = 1.0
+# CS.delay_noise_selection_threshold = 2.0
+
+# CS.temporal_taper_alpha = 0.25
+# CS.spectral_taper_alpha = 0.25
+CS.first_wavefield_delay = -500
+
+# CS.first_wavefield_from_best_harmonic = 10
 # CS.enforce_causality = True
 # CS.noise_shrinkage_threshold = 1.0
 # CS.noise_threshold = 1.0
@@ -78,7 +86,10 @@ min_step_factor = 0.5
 
 for i in range(1000):
     CS.nopt += 1
-    CS.updateProfile()
+
+    if (i % update_profile_period) == 0:
+        print("cycfista: update profile")
+        CS.updateProfile()
 
     x_n, y_n, L, t_n, demerits = fista.take_fista_step(
         iter=i,
