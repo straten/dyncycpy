@@ -26,9 +26,9 @@ CS.model_gain_variations = True
 # CS.delay_noise_shrinkage_threshold = 1.0
 # CS.delay_noise_selection_threshold = 2.0
 
-CS.temporal_taper_alpha = 0.25
-CS.spectral_taper_alpha = 0.25
-CS.first_wavefield_delay = 500
+# CS.temporal_taper_alpha = 0.25
+# CS.spectral_taper_alpha = 0.25
+CS.first_wavefield_delay = -500
 
 # CS.first_wavefield_from_best_harmonic = 10
 # CS.enforce_causality = True
@@ -88,6 +88,7 @@ for i in range(1000):
     CS.nopt += 1
 
     if (i % update_profile_period) == 0:
+        print("cycfista: update profile")
         CS.updateProfile()
 
     x_n, y_n, L, t_n, demerits = fista.take_fista_step(
