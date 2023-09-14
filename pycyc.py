@@ -209,11 +209,15 @@ class CyclicSolver:
         # delay the initial wavefield estimate by this many pixels
         self.first_wavefield_delay = 0
 
-        # taper in the frequency domain using a Tukey window with the specified alpha (see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.tukey.html)
-        self.spectral_taper_alpha = 0
+        # taper data (cyclic spectra) in the frequency domain using the specified window
+        # see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.get_window.html
+        # Examples:
+        #   spectral_window = ('kaiser', 8.0)
+        #   spectral_window = ('tukey' 0.25)
+        self.spectral_window = None
 
-        # taper in the time domain using a Tukey window with the specified alpha 
-        self.temporal_taper_alpha = 0
+        # taper data (cyclic spectra) in the time domain using the specified window 
+        self.temporal_window = None
 
         # divide the data into 'interleave' sets of interleaved time samples (1 = no interleaving)
         self.interleave = 1
@@ -335,7 +339,7 @@ class CyclicSolver:
             next_offset = diff.in_seconds()
             gap = next_offset - last_offset
 
-            missing_subints = int(np.round(gap / self.mean_time_offset))
+            missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
 
             if missing_subints > 0:
                 print(f"missing {missing_subints} sub-integrations across {gap} seconds")
@@ -417,7 +421,7 @@ class CyclicSolver:
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
-            ashape = np.asarray(self.h_time_delay_grad.shape)
+            ashape = np.asarray(self.h_doppler_delay.shape)
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
             print(f"noise smoothing kernel shape: {wshape}")
             kernel = np.outer(
@@ -425,13 +429,13 @@ class CyclicSolver:
             )
             self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
 
-        if self.spectral_taper_alpha > 0:
-            spectral_taper = tukey(self.nchan, self.spectral_taper_alpha)
+        if self.spectral_window is not None:
+            spectral_taper = scipy.signal.get_window(self.spectral_window, self.nchan)
             for ichan in range(self.nchan):
                 self.cyclic_spectra[:,:,ichan,:] *= spectral_taper[ichan]
 
-        if self.temporal_taper_alpha > 0:
-            temporal_taper = tukey(self.nsubint, self.temporal_taper_alpha)
+        if self.temporal_window is not None:
+            temporal_taper = scipy.signal.get_window(self.temporal_window, self.nchan)
             for ispec in range(self.nsubint):
                 self.cyclic_spectra[ispec] *= temporal_taper[ispec]
 
@@ -579,8 +583,12 @@ class CyclicSolver:
         # the results of this routine have been checked against filter_profile and they perform the same
         for leaf in range(self.interleave):
 
-            fracbin = leaf / self.interleave
-            self.h_time_delay = freq2time(shifted(self.h_doppler_delay, -fracbin, axis=0), axis=0)
+            fracbin = - leaf / self.interleave
+
+            if self.iprint and self.interleave > 1:
+                print(f"updateProfile: interleaf={leaf}/{self.interleave} fractional bin={fracbin}")
+
+            self.h_time_delay = freq2time(shifted(self.h_doppler_delay, fracbin))
 
             for subint in range(self.nspec):
 
@@ -775,7 +783,11 @@ class CyclicSolver:
 
                 # SHIFT h_time_delay by leaf/interleave bins in the Fourier domain
                 fracbin = leaf / self.interleave
-                self.h_time_delay = freq2time(shifted(self.h_doppler_delay, -fracbin, axis=0), axis=0)
+
+                if self.iprint and self.interleave > 1:
+                    print(f"updateWavefield: interleaf={leaf}/{self.interleave} fractional bin={fracbin}")                
+
+                self.h_time_delay = freq2time(shifted(self.h_doppler_delay, fracbin))
 
                 for subint in range(self.nspec):
                     isub = subint * self.interleave + leaf
@@ -810,7 +822,7 @@ class CyclicSolver:
 
                     self.h_time_delay_grad[subint, :] = grad
 
-                self.h_doppler_delay_grad += time2freq(shifted(self.h_time_delay_grad,fracbin,axis=0), axis=0)
+                self.h_doppler_delay_grad += shifted(time2freq(self.h_time_delay_grad),-fracbin)
 
         align_phase_gradient = False
         if align_phase_gradient:
@@ -2064,12 +2076,13 @@ def complex_cyclic_merit_lag(ht, CS, gain):
 
     return merit, grad
 
+
 def shifted(input_array, fraction_of_bin, axis=0):
 
     # Get the shape of the input array
     shape = input_array.shape
 
-    # Create a 2D frequency grid
+    # Create an array of sample frequencies
     frequency = np.fft.fftfreq(shape[axis])
 
     # Calculate the shift in radians based on the fraction of a bin
@@ -2081,6 +2094,7 @@ def shifted(input_array, fraction_of_bin, axis=0):
         return input_array * np.exp(1j * phase_shift * frequency[np.newaxis, :])
     else:
         raise ValueError("Invalid axis value. Must be 0 or 1.")
+
 
 def loadCyclicSolver(statefile):
     """
