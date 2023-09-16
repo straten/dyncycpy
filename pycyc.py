@@ -218,9 +218,11 @@ class CyclicSolver:
 
         # taper wavefield along Doppler axis using the specified window 
         self.doppler_window = None
+        self.doppler_taper = None
 
         # taper wavefield along delay axis using the specified window
         self.delay_window = None
+        self.delay_taper = None
 
         if filename:
             self.load(filename)
