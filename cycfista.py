@@ -3,6 +3,7 @@
 
 import pickle
 import time
+import sys
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -23,12 +24,14 @@ update_profile_period = 100
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
 
-CS.delay_noise_shrinkage_threshold = 1.0
-CS.delay_noise_selection_threshold = 2.0
+# CS.doppler_window = ('kaiser', 8.0)
+
+# CS.delay_noise_shrinkage_threshold = 1.0
+# CS.delay_noise_selection_threshold = 2.0
 
 # CS.temporal_taper_alpha = 0.25
 # CS.spectral_taper_alpha = 0.25
-CS.first_wavefield_delay = 0
+# CS.first_wavefield_delay = 0
 
 # CS.first_wavefield_from_best_harmonic = 10
 # CS.enforce_causality = True
@@ -36,12 +39,12 @@ CS.first_wavefield_delay = 0
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
 
-print(f"cycfista: loading files")
+inputArgs = sys.argv
+print(f"cycfista: loading {len(inputArgs)-1} files")
+for file in inputArgs[1:]:
+    CS.load(file)
 
-CS.load("P2067/chan07/53873.27864.07.15s.pb2")
-# CS.load("P2067/chan07/53873.31676.07.15s.pb2")
-
-print(f"cycfista: {CS.nspec} spectra loaded")
+print(f"cycfista: {CS.nsubint} spectra loaded")
 
 CS.initProfile()
 
@@ -87,7 +90,7 @@ min_step_factor = 0.5
 for i in range(1000):
     CS.nopt += 1
 
-    if (i+1) % update_profile_period == 0:
+    if i < 10 or (i+1) % update_profile_period == 0:
         print("cycfista: update profile")
         CS.updateProfile()
 

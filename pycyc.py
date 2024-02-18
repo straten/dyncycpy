@@ -310,11 +310,12 @@ class CyclicSolver:
                 if isub > 0:
                     offset = self.time_offsets[isub] - self.time_offsets[isub-1]
                     total_offset += offset
-            self.mean_time_offset = total_offset / (self.nsubint-1)
+            if self.nsubint > 1:
+                self.mean_time_offset = total_offset / (self.nsubint-1)
 
             ar = None
 
-            print(f"mean sub-integration duration={self.mean_time_offset}")
+            # print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
@@ -341,7 +342,9 @@ class CyclicSolver:
             next_offset = diff.in_seconds()
             gap = next_offset - last_offset
 
-            missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
+            missing_subints = 0
+            if self.mean_time_offset > 0:
+                missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
 
             if missing_subints > 0:
                 print(f"missing {missing_subints} sub-integrations across {gap} seconds")
@@ -354,9 +357,26 @@ class CyclicSolver:
 
             new_nsubint = self.nsubint + nsubint + missing_subints
 
+            self.time_offsets.resize(new_nsubint);
+            total_offset = 0
+            for isub in range(new_nsubint):
+                if isub >= self.nsubint:
+                  subint = ar.get_Integration(isub - self.nsubint)
+                  epoch = subint.get_epoch()
+                  diff = epoch - self.reference_epoch
+                  self.time_offsets[isub] = diff.in_seconds()
+                if isub > 0:
+                    offset = self.time_offsets[isub] - self.time_offsets[isub-1]
+                    total_offset += offset
+            if new_nsubint > 1:
+                self.mean_time_offset = total_offset / (new_nsubint-1)
+
+            # print(f"mean sub-integration duration={self.mean_time_offset}")
+
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nsubint, self.npol, self.nchan, self.nharm)
                 self.cs_norm.resize(new_nsubint, self.npol)
+                self.time_offsets.resize(new_nsubint);
                 for isub in range(nsubint):
                     jsub = isub + self.nsubint + missing_subints
                     if self.iprint:
