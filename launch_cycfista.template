@@ -4,5 +4,6 @@
 #SBATCH --mem=32GB
 #SBATCH -t 24:00:00
 
-poetry run python cycfista.py
+setenv PYTHONPATH ${PYTHONPATH}:..
+python cycfista.py $*
 
