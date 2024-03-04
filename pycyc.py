@@ -161,7 +161,7 @@ class CyclicSolver:
         self.conserve_wavefield_energy = True
 
         # set the wavefield at all negative delays to zero
-        self.enforce_causality = False
+        self.enforce_causality = 0
 
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
@@ -819,9 +819,11 @@ class CyclicSolver:
 
                 _merit, grad = complex_cyclic_merit_lag(ht, self, self.optimal_gains[isub])
 
-                if self.enforce_causality:
+                if self.enforce_causality > 0:
+                    print(f"enforcing causality for {self.enforce_causality} more iterations")
                     half_nchan = self.nchan // 2
                     grad[half_nchan:] = 0
+                    self.enforce_causality = self.enforce_causality - 1 
 
                 self.merit += _merit
                 self.nterm_merit += self.complex_cyclic_merit_terms
