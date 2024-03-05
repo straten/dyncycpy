@@ -465,7 +465,7 @@ class CyclicSolver:
             self.delay_taper = fftshift(scipy.signal.get_window(self.delay_window, self.nchan))
 
         if self.first_wavefield_from_best_harmonic:
-            self.compute_first_wavefield_from_best_harmonic();
+            self.compute_first_wavefield_from_best_harmonic()
 
         self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
@@ -489,7 +489,7 @@ class CyclicSolver:
         self.save_dynamic_spectrum = False
         self.save_cs_norm = False
 
-    def compute_first_wavefield_from_best_harmonic():
+    def compute_first_wavefield_from_best_harmonic(self):
 
         initial_total_power = np.sum(np.abs(self.h_doppler_delay)**2)
         maxharm=np.minimum(self.first_wavefield_from_best_harmonic,self.nharm)
@@ -820,10 +820,8 @@ class CyclicSolver:
                 _merit, grad = complex_cyclic_merit_lag(ht, self, self.optimal_gains[isub])
 
                 if self.enforce_causality > 0:
-                    print(f"enforcing causality for {self.enforce_causality} more iterations")
                     half_nchan = self.nchan // 2
                     grad[half_nchan:] = 0
-                    self.enforce_causality = self.enforce_causality - 1 
 
                 self.merit += _merit
                 self.nterm_merit += self.complex_cyclic_merit_terms
@@ -844,6 +842,10 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
+
+        if self.enforce_causality > 0:
+            self.enforce_causality = self.enforce_causality - 1
+            print(f"enforcing causality for {self.enforce_causality} more iterations")
 
 
     def optimize_profile(self, cs, hf, bw, ref_freq):
