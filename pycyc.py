@@ -645,7 +645,8 @@ class CyclicSolver:
                     self.optimal_gains[isub] = self.gain
                 self.update_gain = False
 
-                ph[0] = 0.0
+                # stop setting DC to zero
+                # ph[0] = 0.0
                 if self.maxinitharm:
                     ph[self.maxinitharm:] = 0.0
                 pp = harm2phase(ph)
@@ -944,7 +945,9 @@ class CyclicSolver:
 
         self.ph_ref = phase2harm(self.pp_intrinsic)
         self.ph_ref = normalize_profile(self.ph_ref)
-        self.ph_ref[0] = 0
+
+        # stop setting DC to zero
+        # self.ph_ref[0] = 0
         ph = self.ph_ref[:]
         self.s0 = ph
 
@@ -1046,7 +1049,9 @@ class CyclicSolver:
         self.hf_prev = hf.copy()
 
         ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
-        ph[0] = 0.0
+
+        # stop setting DC to zero
+        # ph[0] = 0.0
         pp = harm2phase(ph)
 
         self.intrinsic_profiles[isub, :] = pp
@@ -1217,9 +1222,12 @@ class CyclicSolver:
             tl.set_visible(False)
         sopt = self.optimize_profile(self.cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
-        sopt[0] = 0.0
+
+        # stop setting DC to zero
+        # sopt[0] = 0.0
         smeas = normalize_profile(self.cs.mean(0))
-        smeas[0] = 0.0
+        # stop setting DC to zero
+        # smeas[0] = 0.0
         #        cs_model0,hfplus,hfminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
 
         ax3 = fig.add_subplot(3, 3, 7)
@@ -1799,7 +1807,8 @@ def normalize_pp(pp):
     """
     ph = phase2harm(pp)
     ph = normalize_profile(ph)
-    ph[0] = 0
+    # stop setting DC to zero
+    # ph[0] = 0
     return harm2phase(ph)
 
 
@@ -1991,9 +2000,10 @@ def complex_cyclic_merit_lag(ht, CS, gain):
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
-    merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
+    # stop ignoring zeroth harmonic (dc term)
+    merit = (np.abs(cs_model[:,:] - CS.cs[:,:]) ** 2).sum()
 
-    extract = cs_model[:, 1:]
+    extract = cs_model[:,:]
     nonzero = np.count_nonzero(extract)
     # print(f'complex_cyclic_merit_lag nonzero={nonzero} size={extract.size}')
 
@@ -2022,11 +2032,11 @@ def complex_cyclic_merit_lag(ht, CS, gain):
 
     cc1 = cs2cc(diff * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
-    grad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+    grad = grad2[:,:].sum(1)  # sum over all harmonics to get function of lag
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
-    grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+    grad += grad2[:,:].sum(1)  # sum over all harmonics to get function of lag
 
     if CS.ml_profile:
         # data H(-)H(+)*
@@ -2046,11 +2056,11 @@ def complex_cyclic_merit_lag(ht, CS, gain):
         fscr = fscrunch_cs(hfplus * np.conj(hfminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) * gain / CS.nchan
         ds_dh = cs2cc(CS.cs*hfminus*gain) / denom * phasors - numer * ddenom_dh
         grad2 = fscr * ds_dh 
-        dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+        dgrad = grad2[:,:].sum(1)  # sum over all harmonics to get function of lag
 
         ds_dh = cs2cc(np.conj(CS.cs)*hfplus*gain) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
         grad2 = np.conj(fscr) * ds_dh
-        dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+        dgrad += grad2[:,:].sum(1)  # sum over all harmonics to get function of lag
 
         agrad = np.vdot(grad, grad)
         adgrad = np.vdot(dgrad, dgrad)
