@@ -302,20 +302,22 @@ class CyclicSolver:
 
             self.time_offsets = np.zeros(self.nsubint)
             total_offset = 0
+            count_offset = 0
             for isub in range(self.nsubint):
                 subint = ar.get_Integration(isub)
                 epoch = subint.get_epoch()
                 diff = epoch - self.reference_epoch
                 self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0:
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
                     offset = self.time_offsets[isub] - self.time_offsets[isub-1]
                     total_offset += offset
-            if self.nsubint > 1:
-                self.mean_time_offset = total_offset / (self.nsubint-1)
+                    count_offset += 1
+            if count_offset > 1:
+                self.mean_time_offset = total_offset / count_offset
 
             ar = None
 
-            # print(f"mean sub-integration duration={self.mean_time_offset}")
+            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
@@ -356,22 +358,25 @@ class CyclicSolver:
             assert nbin == self.nbin
 
             new_nsubint = self.nsubint + nsubint + missing_subints
+            start_isubint = self.nsubint + missing_subints
 
             self.time_offsets.resize(new_nsubint);
             total_offset = 0
+            count_offset = 0
             for isub in range(new_nsubint):
-                if isub >= self.nsubint:
-                  subint = ar.get_Integration(isub - self.nsubint)
-                  epoch = subint.get_epoch()
-                  diff = epoch - self.reference_epoch
-                  self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0:
+                if isub >= start_isubint:
+                    subint = ar.get_Integration(isub - start_isubint)
+                    epoch = subint.get_epoch()
+                    diff = epoch - self.reference_epoch
+                    self.time_offsets[isub] = diff.in_seconds()
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
                     offset = self.time_offsets[isub] - self.time_offsets[isub-1]
                     total_offset += offset
-            if new_nsubint > 1:
-                self.mean_time_offset = total_offset / (new_nsubint-1)
+                    count_offset += 1
+            if count_offset > 1:
+                self.mean_time_offset = total_offset / count_offset
 
-            # print(f"mean sub-integration duration={self.mean_time_offset}")
+            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nsubint, self.npol, self.nchan, self.nharm)
@@ -408,7 +413,8 @@ class CyclicSolver:
             else:
                 if missing_subints > 0:
                     print("WARNING: patching up missing sub-integrations not implemented when not saving cyclic spectra")
-                self.data = np.append(self.data, data, axis=1)
+                self.data = np.append(self.data, data, axis=0)
+                new_nsubint -= missing_subints
 
             self.nsubint = new_nsubint
 
@@ -656,6 +662,8 @@ class CyclicSolver:
 
                 self.intrinsic_profiles[isub, ipol, :] = pp
                 self.pp_intrinsic += pp
+
+        mean_gain = 1
 
         if self.model_gain_variations:
             # keep the gains from wandering
