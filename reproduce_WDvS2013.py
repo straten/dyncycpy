@@ -26,11 +26,9 @@ CS.load("P2067/chan07/53873.31676.07.15s.pb2")
 CS.data.shape, CS.nspec
 
 CS.initProfile()
-plt.plot(CS.pp_int)
+plt.plot(CS.pp_intrinsic)
 plt.savefig('initProfile.png')
 plt.clf()
-
-pp_scattered = np.copy(CS.pp_ref)
 
 filters = {}
 intrinsic_profiles = {}
@@ -50,8 +48,7 @@ with open("profiles_0.pkl", "wb") as fh:
 
 # three more passes through 20 minutes (80 15 sec subints):
 for ipass in range(1, 4):
-    CS.pp_ref = np.copy(CS.pp_int)
-    CS.pp_int = np.zeros((CS.nphase))
+    CS.pp_intrinsic = np.zeros((CS.nphase))
     for isub in range(0, 80):
         CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=np.copy(filters[ipass-1][isub]))
     
@@ -66,8 +63,7 @@ with open(f"profiles_{ipass}.pkl", "wb") as fh:
 
 # Now pass through all the data with intrinsic profile so far (output cleared)
 
-CS.pp_ref = np.copy(CS.pp_int)
-CS.pp_int = np.zeros((CS.nphase))
+CS.pp_intrinsic = np.zeros((CS.nphase))
 for isub in range(0, CS.data.shape[0]):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
