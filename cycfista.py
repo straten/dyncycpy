@@ -116,6 +116,9 @@ for i in range(1000):
         eps=None,
     )
 
+    if CS.enforce_causality:
+        CS.enforce_causality -= 1
+
     if i == 0 or L > L_max:
         L_max = L
 
