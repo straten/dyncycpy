@@ -253,6 +253,7 @@ class CyclicSolver:
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
             ar.pscrunch()
+        ar.remove_baseline()
 
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
         if self.zap_edges is not None:

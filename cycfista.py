@@ -19,23 +19,26 @@ from scipy.fft import fftshift
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
 # Number of iterations between profile updates
-update_profile_period = 100
+update_profile_period = 10
+update_profile_every_iteration_until = 10
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
+CS.enforce_causality = 23
+
+# CS.noise_shrinkage_threshold = 1.0
 
 # CS.doppler_window = ('kaiser', 8.0)
 
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+CS.delay_noise_shrinkage_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
 
 # CS.temporal_taper_alpha = 0.25
 # CS.spectral_taper_alpha = 0.25
-# CS.first_wavefield_delay = 0
 
+# CS.first_wavefield_delay = 0
 # CS.first_wavefield_from_best_harmonic = 10
-# CS.enforce_causality = True
-# CS.noise_shrinkage_threshold = 1.0
+
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
 
@@ -90,7 +93,7 @@ min_step_factor = 0.5
 for i in range(1000):
     CS.nopt += 1
 
-    if i < 10 or (i+1) % update_profile_period == 0:
+    if i < update_profile_every_iteration_until or (i+1) % update_profile_period == 0:
         print("cycfista: update profile")
         CS.updateProfile()
 
