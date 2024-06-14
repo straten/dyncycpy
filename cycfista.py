@@ -24,20 +24,22 @@ update_profile_every_iteration_until = 10
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
+CS.enforce_causality = 23
+
+# CS.noise_shrinkage_threshold = 1.0
 
 # CS.noise_shrinkage_threshold = 1.0
 
 # CS.doppler_window = ('kaiser', 8.0)
 
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+CS.delay_noise_shrinkage_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
 
 # CS.temporal_taper_alpha = 0.25
 # CS.spectral_taper_alpha = 0.25
-# CS.first_wavefield_delay = 0
 
+# CS.first_wavefield_delay = 0
 # CS.first_wavefield_from_best_harmonic = 10
-# CS.enforce_causality = 10
 
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
@@ -115,6 +117,9 @@ for i in range(1000):
         demerits=demerits,
         eps=None,
     )
+
+    if CS.enforce_causality:
+        CS.enforce_causality -= 1
 
     if i == 0 or L > L_max:
         L_max = L
