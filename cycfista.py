@@ -117,6 +117,7 @@ for i in range(1000):
 
     if CS.enforce_causality:
         CS.enforce_causality -= 1
+        print(f"enforcing causality for {CS.enforce_causality} more iterations")
 
     if i == 0 or L > L_max:
         L_max = L

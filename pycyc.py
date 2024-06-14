@@ -165,7 +165,7 @@ class CyclicSolver:
         self.conserve_wavefield_energy = True
 
         # set the wavefield at all negative delays to zero
-        self.enforce_causality = 0
+        self.enforce_causality = False
 
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
@@ -856,10 +856,6 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
-
-        if self.enforce_causality > 0:
-            self.enforce_causality = self.enforce_causality - 1
-            print(f"enforcing causality for {self.enforce_causality} more iterations")
 
 
     def optimize_profile(self, cs, hf, bw, ref_freq):
