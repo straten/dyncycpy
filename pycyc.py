@@ -157,6 +157,10 @@ class CyclicSolver:
 
         # modelling options
 
+        # omit the spin harmonic DC bin from the definition of the merit function
+        # set to 0 or 1; this flag is used as an integer
+        self.omit_dc = 1
+
         # maintain constant total power in the wavefield
         self.conserve_wavefield_energy = True
 
@@ -253,6 +257,7 @@ class CyclicSolver:
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
             ar.pscrunch()
+        ar.remove_baseline()
 
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
         if self.zap_edges is not None:
@@ -302,20 +307,22 @@ class CyclicSolver:
 
             self.time_offsets = np.zeros(self.nsubint)
             total_offset = 0
+            count_offset = 0
             for isub in range(self.nsubint):
                 subint = ar.get_Integration(isub)
                 epoch = subint.get_epoch()
                 diff = epoch - self.reference_epoch
                 self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0:
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
                     offset = self.time_offsets[isub] - self.time_offsets[isub-1]
                     total_offset += offset
-            if self.nsubint > 1:
-                self.mean_time_offset = total_offset / (self.nsubint-1)
+                    count_offset += 1
+            if count_offset > 1:
+                self.mean_time_offset = total_offset / count_offset
 
             ar = None
 
-            # print(f"mean sub-integration duration={self.mean_time_offset}")
+            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
@@ -356,22 +363,25 @@ class CyclicSolver:
             assert nbin == self.nbin
 
             new_nsubint = self.nsubint + nsubint + missing_subints
+            start_isubint = self.nsubint + missing_subints
 
             self.time_offsets.resize(new_nsubint);
             total_offset = 0
+            count_offset = 0
             for isub in range(new_nsubint):
-                if isub >= self.nsubint:
-                  subint = ar.get_Integration(isub - self.nsubint)
-                  epoch = subint.get_epoch()
-                  diff = epoch - self.reference_epoch
-                  self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0:
+                if isub >= start_isubint:
+                    subint = ar.get_Integration(isub - start_isubint)
+                    epoch = subint.get_epoch()
+                    diff = epoch - self.reference_epoch
+                    self.time_offsets[isub] = diff.in_seconds()
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
                     offset = self.time_offsets[isub] - self.time_offsets[isub-1]
                     total_offset += offset
-            if new_nsubint > 1:
-                self.mean_time_offset = total_offset / (new_nsubint-1)
+                    count_offset += 1
+            if count_offset > 1:
+                self.mean_time_offset = total_offset / count_offset
 
-            # print(f"mean sub-integration duration={self.mean_time_offset}")
+            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nsubint, self.npol, self.nchan, self.nharm)
@@ -408,7 +418,8 @@ class CyclicSolver:
             else:
                 if missing_subints > 0:
                     print("WARNING: patching up missing sub-integrations not implemented when not saving cyclic spectra")
-                self.data = np.append(self.data, data, axis=1)
+                self.data = np.append(self.data, data, axis=0)
+                new_nsubint -= missing_subints
 
             self.nsubint = new_nsubint
 
@@ -645,7 +656,8 @@ class CyclicSolver:
                     self.optimal_gains[isub] = self.gain
                 self.update_gain = False
 
-                ph[0] = 0.0
+                if self.omit_dc:
+                    ph[0] = 0.0
                 if self.maxinitharm:
                     ph[self.maxinitharm:] = 0.0
                 pp = harm2phase(ph)
@@ -655,6 +667,8 @@ class CyclicSolver:
 
                 self.intrinsic_profiles[isub, ipol, :] = pp
                 self.pp_intrinsic += pp
+
+        mean_gain = 1
 
         if self.model_gain_variations:
             # keep the gains from wandering
@@ -948,7 +962,10 @@ class CyclicSolver:
 
         self.ph_ref = phase2harm(self.pp_intrinsic)
         self.ph_ref = normalize_profile(self.ph_ref)
-        self.ph_ref[0] = 0
+
+        if self.omit_dc:
+            self.ph_ref[0] = 0
+
         ph = self.ph_ref[:]
         self.s0 = ph
 
@@ -1050,7 +1067,10 @@ class CyclicSolver:
         self.hf_prev = hf.copy()
 
         ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
-        ph[0] = 0.0
+
+        if self.omit_dc:
+            ph[0] = 0.0
+
         pp = harm2phase(ph)
 
         self.intrinsic_profiles[isub, :] = pp
@@ -1221,9 +1241,12 @@ class CyclicSolver:
             tl.set_visible(False)
         sopt = self.optimize_profile(self.cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
-        sopt[0] = 0.0
+
+        if self.omit_dc:
+            sopt[0] = 0.0
         smeas = normalize_profile(self.cs.mean(0))
-        smeas[0] = 0.0
+        if self.omit_dc:
+            smeas[0] = 0.0
         #        cs_model0,hfplus,hfminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
 
         ax3 = fig.add_subplot(3, 3, 7)
@@ -1803,7 +1826,8 @@ def normalize_pp(pp):
     """
     ph = phase2harm(pp)
     ph = normalize_profile(ph)
-    ph[0] = 0
+    if self.omit_dc:
+        ph[0] = 0
     return harm2phase(ph)
 
 
@@ -1995,9 +2019,10 @@ def complex_cyclic_merit_lag(ht, CS, gain):
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
-    merit = (np.abs(cs_model[:, 1:] - CS.cs[:, 1:]) ** 2).sum()  # ignore zeroth harmonic (dc term)
+    # ignores spin zero harmonic (dc term) if CS.omit_dc == 1
+    merit = (np.abs(cs_model[:,CS.omit_dc:] - CS.cs[:,CS.omit_dc:]) ** 2).sum()
 
-    extract = cs_model[:, 1:]
+    extract = cs_model[:,CS.omit_dc:]
     nonzero = np.count_nonzero(extract)
     # print(f'complex_cyclic_merit_lag nonzero={nonzero} size={extract.size}')
 
@@ -2026,11 +2051,11 @@ def complex_cyclic_merit_lag(ht, CS, gain):
 
     cc1 = cs2cc(diff * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
-    grad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+    grad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
-    grad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+    grad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
 
     if CS.ml_profile:
         # data H(-)H(+)*
@@ -2050,11 +2075,11 @@ def complex_cyclic_merit_lag(ht, CS, gain):
         fscr = fscrunch_cs(hfplus * np.conj(hfminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) * gain / CS.nchan
         ds_dh = cs2cc(CS.cs*hfminus*gain) / denom * phasors - numer * ddenom_dh
         grad2 = fscr * ds_dh 
-        dgrad = grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+        dgrad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
 
         ds_dh = cs2cc(np.conj(CS.cs)*hfplus*gain) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
         grad2 = np.conj(fscr) * ds_dh
-        dgrad += grad2[:, 1:].sum(1)  # sum over all harmonics to get function of lag
+        dgrad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
 
         agrad = np.vdot(grad, grad)
         adgrad = np.vdot(dgrad, dgrad)
