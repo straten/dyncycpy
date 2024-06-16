@@ -27,9 +27,6 @@ CS.model_gain_variations = True
 CS.enforce_causality = 23
 
 # CS.noise_shrinkage_threshold = 1.0
-
-# CS.noise_shrinkage_threshold = 1.0
-
 # CS.doppler_window = ('kaiser', 8.0)
 
 CS.delay_noise_shrinkage_threshold = 1.0
@@ -120,6 +117,7 @@ for i in range(1000):
 
     if CS.enforce_causality:
         CS.enforce_causality -= 1
+        print(f"enforcing causality for {CS.enforce_causality} more iterations")
 
     if i == 0 or L > L_max:
         L_max = L
