@@ -744,6 +744,36 @@ class CyclicSolver:
             # print(f'normalize factor={factor}')
         return h_doppler_delay
 
+    def updateWavefieldSubint(self, ipol, isub):
+
+        if self.save_cyclic_spectra:
+            cs = self.cyclic_spectra[isub, ipol]
+        else:
+            ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+            cs = self.get_cs(ps)
+
+        ht = self.h_time_delay[isub]
+
+        if self.iprint:
+            print(f"update filter isub={isub}/{self.nspec}")
+
+        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, cs, self.optimal_gains[isub])
+
+        if self.enforce_causality > 0:
+            half_nchan = self.nchan // 2
+            grad[half_nchan:] = 0
+
+        if self.reduce_temporal_phase_noise_grad and isub > 0:
+            prev_grad = self.h_time_delay_grad[0]
+            z = (np.conj(grad) * prev_grad).sum()
+            z /= np.abs(z)
+            grad *= z
+
+        self.h_time_delay_grad[isub, :] += grad
+
+        return _merit, _nterm
+
+        
     def updateWavefield(self, h_doppler_delay):
         self.normalize(h_doppler_delay)
 
@@ -830,35 +860,20 @@ class CyclicSolver:
 
             self.h_time_delay = freq2time(self.h_doppler_delay)
 
-            for isub in range(self.nspec):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
 
-                if self.save_cyclic_spectra:
-                    cs = self.cyclic_spectra[isub, ipol]
-                else:
-                    ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-                    cs = self.get_cs(ps)
+                future_subint = {executor.submit(self.updateWavefieldSubint,ipol,isub):
+                                    isub for isub in range(self.nspec)}
+                
+                for future in concurrent.futures.as_completed(future_subint):
+                    isub = future_subint[future]
+                    try:
+                        _merit, _nterm = future.result()
+                        self.merit += _merit
+                        self.nterm_merit += _nterm
 
-                ht = self.h_time_delay[isub]
-
-                if self.iprint:
-                    print(f"update filter isub={isub}/{self.nspec}")
-
-                _merit, grad = complex_cyclic_merit_lag(ht, self, cs, self.optimal_gains[isub])
-
-                if self.enforce_causality > 0:
-                    half_nchan = self.nchan // 2
-                    grad[half_nchan:] = 0
-
-                self.merit += _merit
-                self.nterm_merit += self.complex_cyclic_merit_terms
-
-                if self.reduce_temporal_phase_noise_grad and isub > 0:
-                    prev_grad = self.h_time_delay_grad[0]
-                    z = (np.conj(grad) * prev_grad).sum()
-                    z /= np.abs(z)
-                    grad *= z
-
-                self.h_time_delay_grad[isub, :] += grad
+                    except Exception as exc:
+                        print(f'updateWavefieldSubint isub={isub} exception: {exc}')
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
 
@@ -2020,8 +2035,6 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, cs_data, gain):
     hf = time2freq(ht)
-    CS.hf = hf
-    CS.ht = ht
     cs_model, hfplus, hfminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
     cs_model *= gain
 
@@ -2108,23 +2121,14 @@ def complex_cyclic_merit_lag(ht, CS, cs_data, gain):
     # multiply
     # cs2cc
 
-    CS.grad = grad[:]
-    CS.model = cs_model[:]
-
-    # although re & im count as separate terms in sum,
-    # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
-    CS.complex_cyclic_merit_terms = nonzero
-
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
 
-    if CS.make_plots:
-        if CS.niter % CS.plot_every == 0:
-            CS.plotCurrentSolution()
+    # although re & im count as separate terms in sum,
+    # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
+    # therefore, return nonzero as the number of terms in the merit function sum
 
-    CS.niter += 1
-
-    return merit, grad
+    return merit, grad, nonzero
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
