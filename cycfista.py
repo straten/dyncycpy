@@ -138,7 +138,7 @@ for i in range(1000):
     end_time = time.time()
 
     elapsed_time = end_time - start_time
-    print(f"Elapsed time: {elapsed_time/60} min")
+    print(f"Elapsed time: {elapsed_time/60} min", flush=True)
 
     if i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"

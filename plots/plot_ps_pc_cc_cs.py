@@ -110,7 +110,13 @@ mplot,count=scipy.stats.mode(toplot,axis=None,keepdims=False)
 max_plot=np.max(toplot,axis=None)
 range_plot = max_plot - mplot
 maxplot=mplot + 0.1*range_plot
-axs[1,0].imshow(toplot, vmin=mplot, vmax=maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[0, 1, min_delay_mus, delay_mus],)
+
+toplot=np.real(pc[min_delay:,:])
+minplot=np.min(toplot,axis=None)
+maxplot=np.max(toplot,axis=None)
+print(f'periodic correlation min={minplot} max={maxplot}')
+scale=0.05
+axs[1,0].imshow(toplot, vmin=scale*minplot, vmax=scale*maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[0, 1, min_delay_mus, delay_mus],)
 axs[1,0].set(ylabel="Delay ($\mu$s)", xlabel="Phase (turns)")
 
 toplot=np.log10(abs(cc[min_delay:,1:50]))
