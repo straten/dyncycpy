@@ -257,7 +257,9 @@ class CyclicSolver:
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
             ar.pscrunch()
-        ar.remove_baseline()
+
+        if not self.omit_dc:
+            ar.remove_baseline()
 
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
         if self.zap_edges is not None:
@@ -280,6 +282,9 @@ class CyclicSolver:
                 data[:-k, :, :, :] += data[k:, :, :, :]
 
         if self.nsubint == 0:
+
+            # print(f'input data have type={data.dtype}')
+
             idx = 0  # only used to get parameters of integration, not data itself
             subint = ar.get_Integration(idx)
             self.reference_epoch = subint.get_epoch()
@@ -322,11 +327,9 @@ class CyclicSolver:
 
             ar = None
 
-            print(f"mean sub-integration duration={self.mean_time_offset}")
-
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
-                    (self.nsubint, self.npol, self.nchan, self.nharm), dtype="complex"
+                    (self.nsubint, self.npol, self.nchan, self.nharm), dtype=np.complex128
                 )
                 self.cs_norm = np.zeros((self.nsubint, self.npol))
                 for isub in range(self.nsubint):
@@ -355,6 +358,7 @@ class CyclicSolver:
 
             if missing_subints > 0:
                 print(f"missing {missing_subints} sub-integrations across {gap} seconds")
+                print(f"mean sub-integration duration is {self.mean_time_offset} seconds")
 
             nsubint, npol, nchan, nbin = data.shape
 
@@ -380,8 +384,6 @@ class CyclicSolver:
                     count_offset += 1
             if count_offset > 1:
                 self.mean_time_offset = total_offset / count_offset
-
-            print(f"mean sub-integration duration={self.mean_time_offset}")
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nsubint, self.npol, self.nchan, self.nharm)
@@ -443,10 +445,10 @@ class CyclicSolver:
 
         self.nspec = self.nsubint
 
-        hf_prev = np.ones((self.nchan,), dtype="complex")
+        hf_prev = np.ones((self.nchan,), dtype=np.complex128)
         self.hf_prev = hf_prev
 
-        self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
         self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
 
         self.noise_smoothing_kernel = None
@@ -480,8 +482,8 @@ class CyclicSolver:
 
         self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
-        self.first_harmonic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan), dtype="complex")
-        self.optimized_filters = np.zeros((self.nsubint, self.nchan), dtype="complex")
+        self.first_harmonic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan), dtype=np.complex128)
+        self.optimized_filters = np.zeros((self.nsubint, self.nchan), dtype=np.complex128)
         self.intrinsic_profiles = np.zeros((self.nsubint, self.npol, self.nbin))
 
         if loadFile:
@@ -609,9 +611,9 @@ class CyclicSolver:
 
         self.optimal_gains = np.ones(self.nsubint)
         self.pp_intrinsic = np.zeros(self.nphase)  # intrinsic profile
-        self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype="complex")
-        self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype="complex")
-        self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype="complex")
+        self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype=np.complex128)
+        self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype=np.complex128)
+        self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
 
         if self.cs_norm is None:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
@@ -676,8 +678,8 @@ class CyclicSolver:
             print(f"updateProfile mean gain: {mean_gain}")
             self.optimal_gains /= mean_gain
 
-        self.intrinsic_ph_sum = np.zeros(self.nharm, dtype="complex")
-        self.intrinsic_ph_sumsq = np.zeros(self.nharm, dtype="complex")
+        self.intrinsic_ph_sum = np.zeros(self.nharm, dtype=np.complex128)
+        self.intrinsic_ph_sumsq = np.zeros(self.nharm, dtype=np.complex128)
 
         for ipol in range(self.npol):
             self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
@@ -693,8 +695,8 @@ class CyclicSolver:
         First draft of using FISTA to solve the 2D transfer function
         """
 
-        self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
-        self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype="complex")
+        self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
+        self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
         self.nopt = 0
 
         self.updateWavefield(self.h_doppler_delay)
@@ -710,7 +712,13 @@ class CyclicSolver:
         return self.merit, np.copy(self.h_doppler_delay_grad)
 
     def get_cs(self, ps):
-        cs = ps2cs(ps)
+
+        # cast single-precision input data to double-precision before computing the Fourier transform
+        tmp = np.zeros(ps.shape, dtype=np.float64)
+        tmp[:,:] = ps[:,:]
+
+        cs = ps2cs(tmp)
+
         if self.model_gain_variations:
             cs, norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
         else:
@@ -973,7 +981,7 @@ class CyclicSolver:
                 else:
                     delay = rindex
                 print("initial filter: delta function at delay = %d" % delay)
-                ht = np.zeros((self.nlag,), dtype="complex")
+                ht = np.zeros((self.nlag,), dtype=np.complex128)
                 ht[delay] = self.nlag
                 if use_minphase:
                     if onp is None:
@@ -1981,10 +1989,10 @@ def get_params(ht, rindex):
 
 def get_ht(params, rindex):
     nlag = int((params.shape[0] + 1) / 2)
-    ht = np.zeros((nlag,), dtype="complex")
-    ht[:rindex] = params[: 2 * rindex].view("complex")
+    ht = np.zeros((nlag,), dtype=np.complex128)
+    ht[:rindex] = params[: 2 * rindex].view(np.complex128)
     ht[rindex] = params[2 * rindex]
-    ht[rindex + 1 :] = params[2 * rindex + 1 :].view("complex")
+    ht[rindex + 1 :] = params[2 * rindex + 1 :].view(np.complex128)
     return ht
 
 

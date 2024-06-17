@@ -20,11 +20,11 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
 # Number of iterations between profile updates
 update_profile_period = 10
-update_profile_every_iteration_until = 10
+update_profile_every_iteration_until = 15
 
 CS.save_cyclic_spectra = True
 CS.model_gain_variations = True
-CS.enforce_causality = 23
+CS.enforce_causality = 8
 
 # CS.noise_shrinkage_threshold = 1.0
 # CS.doppler_window = ('kaiser', 8.0)
