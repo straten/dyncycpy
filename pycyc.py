@@ -662,7 +662,13 @@ class CyclicSolver:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
 
         if self.shear_phasors is None:
-            self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+            self.shear_phasors, A = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+            tmp, B = original_create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+            diff = np.abs(tmp - self.shear_phasors)
+            for i in range(self.nchan):
+                for j in range(self.nharm):
+                    if diff[i][j] > 0.01:
+                        print(f'ichan={i} iharm={j} diff={diff[i][j]} A={A[i][j]} B={B[i][j]}')
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -1948,7 +1954,18 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
 
-def create_shift_phasors(nchan, nharm, bw, ref_freq):
+def original_create_shift_phasors(nlag, nharm, bw, ref_freq):
+    dtau = 1 / (bw * 1e6)
+    dalpha = ref_freq
+    lags = np.arange(nlag)
+    lags[int(nlag / 2) + 1 :] = lags[int(nlag / 2) + 1 :] - nlag
+    tau1 = dtau * lags
+    alpha1 = dalpha * np.arange(nharm)
+    shear = -0.5 # produces the negative phases
+    phases = np.outer(shear * (-2.0 * np.pi) * tau1, alpha1)
+    return np.exp(1j * phases), phases
+
+def create_shift_phasors(nchan, nharm, bw, ref_freq_Hz):
     """Creates the phasors used to shift H(nu) -> H(nu +/- alpha/2)
 
     Parameters
@@ -1963,14 +1980,18 @@ def create_shift_phasors(nchan, nharm, bw, ref_freq):
         A two dimensional array of the phasors used to shift each column in the Fourier domain
     """
 
-    delta_frequency = (bw * 1e6) / nchan
-    relative_frequency = ref_freq / delta_frequency
+    channel_width_Hz = (bw * 1e6) / nchan
+    dimensionless_shift = ref_freq_Hz / channel_width_Hz
 
     # print(f'create_shift_phasors nchan={nchan} nharm={nharm} bw={bw} freq={ref_freq}')
 
     phase_gradient = 2.0 * np.pi * np.fft.fftfreq(nchan)
-    alpha = 0.5 * relative_frequency * np.arange(nharm)
-    return np.exp(1j * np.outer(phase_gradient, alpha))
+    # negate the Nyquist frequency - don't know why, but it is consistent with original
+    phase_gradient[nchan//2] *= -1.0
+
+    alphas = 0.5 * dimensionless_shift * np.arange(nharm)
+    phases = np.outer(phase_gradient, alphas)
+    return np.exp(1j * phases), phases
 
 
 def shift_spectrum(spectrum, phasors):
