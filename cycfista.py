@@ -21,7 +21,7 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 CS.nthread = 8
 
 # Number of iterations between profile updates
-update_profile_period = 10
+update_profile_period = 5 
 update_profile_every_iteration_until = 5
 
 CS.save_cyclic_spectra = True

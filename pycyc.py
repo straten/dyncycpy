@@ -1646,7 +1646,7 @@ def fold(v):
     return rw
 
 
-def minphase(v, workers=2):
+def minphase(v, workers=1):
     clipped = v.copy()
     thresh = 1e-5
     clipped[np.abs(v) < thresh] = thresh
@@ -1725,42 +1725,42 @@ def loadProfile(fname):
 # I've left the bug in for now to compare directly to filter_profile
 
 
-def cs2cc(cs, workers=2, axis=0):
+def cs2cc(cs, workers=1, axis=0):
     return cs.shape[axis] * ifft(cs, axis=axis, workers=workers)
 
 
-def cc2cs(cc, workers=2, axis=0):
+def cc2cs(cc, workers=1, axis=0):
     cs = fft(cc, axis=axis, workers=workers)
     # cc2cs_renorm
     return cs / cs.shape[axis]
 
 
-def ps2cs(ps, workers=2, axis=1):
+def ps2cs(ps, workers=1, axis=1):
     cs = rfft(ps, axis=axis, workers=workers)
     # ps2cs renorm
     return cs / cs.shape[axis]  # original version from Cyclic-modelling
     # return cs/(2*(cs.shape[1] - 1))
 
 
-def cs2ps(cs, workers=2, axis=1):
+def cs2ps(cs, workers=1, axis=1):
     return (cs.shape[axis] - 1) * 2 * irfft(cs, axis=axis, workers=workers)
 
 
-def time2freq(ht, workers=2, axis=0):
+def time2freq(ht, workers=1, axis=0):
     hf = fft(ht, axis=axis, workers=workers)
     # filter_freq_renorm
     return hf / hf.shape[axis]
 
 
-def freq2time(hf, workers=2, axis=0):
+def freq2time(hf, workers=1, axis=0):
     return hf.shape[axis] * ifft(hf, axis=axis, workers=workers)
 
 
-def harm2phase(ph, workers=2):
+def harm2phase(ph, workers=1):
     return (ph.shape[0] - 1) * 2 * irfft(ph, workers=workers)
 
 
-def phase2harm(pp, workers=2):
+def phase2harm(pp, workers=1):
     ph = rfft(pp, workers=workers)
     # profile_harm_renorm
     return ph / ph.shape[0]  # original version from Cyclic-modelling
