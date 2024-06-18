@@ -145,7 +145,7 @@ class CyclicSolver:
         self.intrinsic_ph_sumsq = None
         self.pp_scattered = None
         self.pp_intrinsic = None
-
+        self.shear_phasors = None
         self.cs_norm = None
 
         self.iprint = False
@@ -243,7 +243,7 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs, a, b, c = make_model_cs(hf, self.s0, self.bw, self.ref_freq)
+        cs, a, b = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shear_phasors)
 
         return cs
 
@@ -661,6 +661,9 @@ class CyclicSolver:
         if self.cs_norm is None:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
 
+        if self.shear_phasors is None:
+            self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
 
@@ -854,6 +857,9 @@ class CyclicSolver:
 
         self.h_time_delay_grad[:,:] = 0.0 + 0.0j
 
+        if self.shear_phasors is None:
+            self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+
         for ipol in range(self.npol):
             self.s0 = self.intrinsic_ph[ipol]
             self.ph_ref = self.intrinsic_ph[ipol]
@@ -886,11 +892,8 @@ class CyclicSolver:
 
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
-        nharm = cs.shape[1]
-        # filter2cs
-        hf1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)  # fill the hf1 model with the filter for each harmonic
-        hfplus, plus_phases = cyclic_shear_cs(hf1, shear=0.5, bw=bw, ref_freq=ref_freq)
-        hfminus, minus_phases = cyclic_shear_cs(hf1, shear=-0.5, bw=bw, ref_freq=ref_freq)
+
+        hfplus, hfminus = shift_spectrum(hf, self.shear_phasors)
 
         # cs H(-)H(+)*
         cshmhp = cs * hfminus * np.conj(hfplus)
@@ -1945,27 +1948,50 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
 
+def create_shift_phasors(nchan, nharm, bw, ref_freq):
+    """Creates the phasors used to shift H(nu) -> H(nu +/- alpha/2)
 
-def cyclic_shear_cs(cs, shear, bw, ref_freq):
-    nharm = cs.shape[1]
-    nlag = cs.shape[0]
-    dtau = 1 / (bw * 1e6)
-    dalpha = ref_freq
-    # cs2cc
-    cc = cs2cc(cs)
-    lags = np.arange(nlag)
-    lags[int(nlag / 2) + 1 :] = lags[int(nlag / 2) + 1 :] - nlag
-    tau1 = dtau * lags
-    alpha1 = dalpha * np.arange(nharm)
+    Parameters
+    ----------
+    nchan : number of frequency channels in spectra to be shifted
+    nharm : number of shifts to perform
+    bw : bandwidth spanned by spectra in MHz
+    ref_freq : shift frequency in Hz
 
-    phases = np.outer(shear * (-2.0 * np.pi) * tau1, alpha1)
+    Returns
+    ------
+        A two dimensional array of the phasors used to shift each column in the Fourier domain
+    """
 
-    cc = cc * np.exp(1j * phases)
+    delta_frequency = (bw * 1e6) / nchan
+    relative_frequency = ref_freq / delta_frequency
 
-    return cc2cs(cc), phases
+    # print(f'create_shift_phasors nchan={nchan} nharm={nharm} bw={bw} freq={ref_freq}')
+
+    phase_gradient = 2.0 * np.pi * np.fft.fftfreq(nchan)
+    alpha = 0.5 * relative_frequency * np.arange(nharm)
+    return np.exp(1j * np.outer(phase_gradient, alpha))
 
 
-def make_model_cs(hf, s0, bw, ref_freq):
+def shift_spectrum(spectrum, phasors):
+    """Shifts the spectrum for each column of phasors
+
+    Parameters
+    ----------
+    spectra : one-dimensional spectrum to be shifted
+    phasors : the phase gradients for each shift to be applied
+
+    """
+
+    tmp = fft(spectrum)
+    nharm = phasors.shape[1]
+
+    # copy the spectrum for each shift for each harmonic
+    spectra = np.repeat(tmp[:, np.newaxis], nharm, axis=1)
+    return ifft(spectra*phasors,axis=0), ifft(spectra*np.conj(phasors),axis=0)
+
+
+def make_model_cs(hf, s0, bw, ref_freq, phasors):
     nchan = hf.shape[0]
     nharm = s0.shape[0]
     # profile2cs
@@ -1973,19 +1999,13 @@ def make_model_cs(hf, s0, bw, ref_freq):
         s0[np.newaxis, :], nchan, axis=0
     )  # fill the cs model with the harmonic profile for each freq chan
 
-    # filter2cs
-    # fill the hf1 model with the filter for each harmonic
-    hf1 = np.repeat(hf[:, np.newaxis], nharm, axis=1)
-
-    hfplus, plus_phases = cyclic_shear_cs(hf1, shear=0.5, bw=bw, ref_freq=ref_freq)
-    hfminus, minus_phases = cyclic_shear_cs(hf1, shear=-0.5, bw=bw, ref_freq=ref_freq)
-    # minus phases is just negative of plus phases
+    hfplus, hfminus = shift_spectrum(hf,phasors)
 
     cs = cs * hfplus * np.conj(hfminus)
 
     cs = cyclic_padding(cs, bw, ref_freq)
 
-    return cs, hfplus, hfminus, minus_phases  # minus_phases has factor of 2*pi*tau*alpha
+    return cs, hfplus, hfminus
 
 
 def fscrunch_cs(cs, bw, ref_freq):
@@ -2035,13 +2055,14 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus, phases = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq)
+    cs_model, hfplus, hfminus = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq, CS.shear_phasors)
     cs_model *= gain
 
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
     # ignores spin zero harmonic (dc term) if CS.omit_dc == 1
+    # WDvS13 Equation 19 and eqn:merit_function of appendix
     merit = (np.abs(cs_model[:,CS.omit_dc:] - cs_data[:,CS.omit_dc:]) ** 2).sum()
 
     extract = cs_model[:,CS.omit_dc:]
@@ -2050,7 +2071,7 @@ def complex_cyclic_merit_lag(ht, CS, cs_data, gain):
 
     # gradient_lag
     diff = cs_model - cs_data  # model - data
-    phasors = np.exp(1j * phases)
+    phasors = CS.shear_phasors
 
     # original c code for reference:
     #    for (ilag=0; ilag<cc1.nlag; ilag++) {
