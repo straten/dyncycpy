@@ -145,7 +145,7 @@ class CyclicSolver:
         self.intrinsic_ph_sumsq = None
         self.pp_scattered = None
         self.pp_intrinsic = None
-        self.shear_phasors = None
+        self.shift_phasors = None
         self.cs_norm = None
 
         self.iprint = False
@@ -246,7 +246,7 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs, a, b = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shear_phasors)
+        cs, a, b = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shift_phasors)
 
         return cs
 
@@ -663,8 +663,8 @@ class CyclicSolver:
         if self.cs_norm is None:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
 
-        if self.shear_phasors is None:
-            self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+        if self.shift_phasors is None:
+            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -761,8 +761,8 @@ class CyclicSolver:
             cs = self.get_cs(ps)
 
         if not self.use_integrated_profile:
-            ph_numer = self.ph_numer[ipol,isub] 
-            ph_denom = self.ph_denom[ipol,isub] 
+            ph_numer = self.ph_numer[ipol,isub]
+            ph_denom = self.ph_denom[ipol,isub]
             s0 = ph_numer / ph_denom
 
         ht = self.h_time_delay[isub]
@@ -867,8 +867,8 @@ class CyclicSolver:
 
         self.h_time_delay_grad[:,:] = 0.0 + 0.0j
 
-        if self.shear_phasors is None:
-            self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+        if self.shift_phasors is None:
+            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
 
         for ipol in range(self.npol):
 
@@ -904,7 +904,7 @@ class CyclicSolver:
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
 
-        hfplus, hfminus = shift_spectrum(hf, self.shear_phasors)
+        hfplus, hfminus = shift_spectrum(hf, self.shift_phasors)
 
         # cs H(-)H(+)*
         cshmhp = cs * hfminus * np.conj(hfplus)
@@ -2066,100 +2066,37 @@ def cyclic_merit_lag(x, CS):
 
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
+
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors)
+    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shift_phasors)
     cs_model *= gain
 
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
-    # ignores spin zero harmonic (dc term) if CS.omit_dc == 1
-    # WDvS13 Equation 19 and eqn:merit_function of appendix
-    merit = (np.abs(cs_model[:,CS.omit_dc:] - cs_data[:,CS.omit_dc:]) ** 2).sum()
-
     extract = cs_model[:,CS.omit_dc:]
     nonzero = np.count_nonzero(extract)
-    # print(f'complex_cyclic_merit_lag nonzero={nonzero} size={extract.size}')
 
-    # gradient_lag
-    diff = cs_model - cs_data  # model - data
-    phasors = CS.shear_phasors
+    # WDvS13 Equation 19 and eqn:merit_function of appendix
+    merit = (np.abs(extract - cs_data[:,CS.omit_dc:]) ** 2).sum()
 
-    # original c code for reference:
-    #    for (ilag=0; ilag<cc1.nlag; ilag++) {
-    #        gradient->data[ilag] = 0.0 + I * 0.0;
-    #        int lag = (ilag<=cc1.nlag/2) ? ilag : ilag-cc1.nlag;
-    #        tau = (double)lag * (double)cs->nchan /
-    #        ( (double)cc1.nlag * cc1.bw*1.e6 );
-    #        for (ih=1; ih<cc1.nharm; ih++) {
-    #            phs = M_PI * tau * (double)ih * cc1.ref_freq;
-    #            phasor = cos(phs)+I*sin(phs);
-    #            fftwf_complex *ccval = get_cc(&cc1,ih,ip,ilag);
-    #            gradient->data[ilag] += 4.0 * (*ccval) * phasor
-    #            * conj(s0->data[ih]) / (float)cs->nchan;
-    #        }
-    #     }
+    # residual, R = model - data
+    diff = cs_model - cs_data
+    phasors = CS.shift_phasors
 
-    # we reuse phases and hfminus, hfplus from the make_model_cs call
-
-    cs0 = np.repeat(CS.s0[np.newaxis, :], CS.nlag, axis=0)  # filter2cs
+    # make nchan / nlag copies of the intrinsic profile
+    cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
 
     cc1 = cs2cc(diff * hfminus)
-    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # [OvS] WDvS Equation 37
-    grad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
+    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # WDvS Equation 37
+    grad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
-    grad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
-
-    if CS.ml_profile:
-        # data H(-)H(+)*
-        cshmhp = cs_data * hfminus * np.conj(hfplus) * gain
-        numer = fscrunch_cs(cshmhp, bw=CS.bw, ref_freq=CS.ref_freq)
-
-        # |H(-)|^2 |H(+)|^2
-        maghmhp = (np.abs(hfminus) * np.abs(hfplus) * gain) ** 2
-        denom = fscrunch_cs(maghmhp, bw=CS.bw, ref_freq=CS.ref_freq)
-
-        # Equation A21
-        ddenom_dh = cs2cc(hfminus * hfplus * np.conj(hfplus)) * np.conj(phasors)
-        ddenom_dh += cs2cc(hfminus * hfplus * np.conj(hfminus)) * phasors
-        ddenom_dh /= denom ** 2
-        ddenom_dh *= gain ** 2
-
-        fscr = fscrunch_cs(hfplus * np.conj(hfminus * diff), bw=CS.bw, ref_freq=CS.ref_freq) * gain / CS.nchan
-        ds_dh = cs2cc(cs_data*hfminus*gain) / denom * phasors - numer * ddenom_dh
-        grad2 = fscr * ds_dh 
-        dgrad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
-
-        ds_dh = cs2cc(np.conj(cs_data)*hfplus*gain) / denom * np.conj(phasors) - np.conj(numer) * ddenom_dh
-        grad2 = np.conj(fscr) * ds_dh
-        dgrad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics to get function of lag
-
-        agrad = np.vdot(grad, grad)
-        adgrad = np.vdot(dgrad, dgrad)
-        cosgrad = np.vdot(dgrad, grad) / np.sqrt(agrad * adgrad)
-
-        if CS.iprint:
-            print(f"grad: {agrad} new dgrad: {adgrad} c: {cosgrad}")
-
-        grad += dgrad
-
-    # s0 = numer / denom
-    # s0[np.real(denom) <= 0.0] = 0
-    # return s0
-
-    # conjugate(res)
-    # calc positive shear
-    # multiply
-    # cs2cc
+    grad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
-
-    # although re & im count as separate terms in sum,
-    # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im
-    # therefore, return nonzero as the number of terms in the merit function sum
 
     return merit, grad, nonzero
 
