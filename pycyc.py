@@ -451,7 +451,7 @@ class CyclicSolver:
         self.hf_prev = hf_prev
 
         self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-        self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
+        self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.nchan)
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
@@ -760,7 +760,9 @@ class CyclicSolver:
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
             cs = self.get_cs(ps)
 
-        if not self.use_integrated_profile:
+        if self.use_integrated_profile:
+            s0 = self.s0
+        else:
             ph_numer = self.ph_numer[ipol,isub]
             ph_denom = self.ph_denom[ipol,isub]
             s0 = ph_numer / ph_denom
@@ -1736,35 +1738,31 @@ def loadProfile(fname):
 # I've left the bug in for now to compare directly to filter_profile
 
 
-def cs2cc(cs, workers=1, axis=0):
-    return cs.shape[axis] * ifft(cs, axis=axis, workers=workers)
 
+def ps2cs(ps, workers=2, axis=1):
+    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ps.shape[axis])
 
-def cc2cs(cc, workers=1, axis=0):
-    cs = fft(cc, axis=axis, workers=workers)
-    # cc2cs_renorm
-    return cs / cs.shape[axis]
+def ps2pc(ps, workers=2, axis=0):
+    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ps.shape[axis])
 
+def cc2cs(cs, workers=2, axis=0):
+    return fft(cs, axis=axis, workers=workers) / np.sqrt(cs.shape[axis])
 
-def ps2cs(ps, workers=1, axis=1):
-    cs = rfft(ps, axis=axis, workers=workers)
-    # ps2cs renorm
-    return cs / cs.shape[axis]  # original version from Cyclic-modelling
-    # return cs/(2*(cs.shape[1] - 1))
+def cs2cc(cc, workers=2, axis=0):
+    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
 
+def cc2pc(cc, workers=2, axis=1):
+    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
 
-def cs2ps(cs, workers=1, axis=1):
-    return (cs.shape[axis] - 1) * 2 * irfft(cs, axis=axis, workers=workers)
+def pc2cc(pc,workers=2, axis=1):
+    return fft(pc, axis=axis, workers=workers) / np.sqrt(pc.shape[axis])
 
 
 def time2freq(ht, workers=1, axis=0):
-    hf = fft(ht, axis=axis, workers=workers)
-    # filter_freq_renorm
-    return hf / hf.shape[axis]
-
+    return fft(ht, axis=axis, workers=workers) / np.sqrt(ht.shape[axis])
 
 def freq2time(hf, workers=1, axis=0):
-    return hf.shape[axis] * ifft(hf, axis=axis, workers=workers)
+    return ifft(hf, axis=axis, workers=workers) * np.sqrt(hf.shape[axis])
 
 
 def harm2phase(ph, workers=1):
