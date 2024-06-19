@@ -760,7 +760,9 @@ class CyclicSolver:
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
             cs = self.get_cs(ps)
 
-        if not self.use_integrated_profile:
+        if self.use_integrated_profile:
+            s0 = self.s0
+        else:
             ph_numer = self.ph_numer[ipol,isub]
             ph_denom = self.ph_denom[ipol,isub]
             s0 = ph_numer / ph_denom
