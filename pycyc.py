@@ -157,6 +157,9 @@ class CyclicSolver:
 
         # modelling options
 
+        # By default, use the integrated pulse profile for all sub-integrations
+        self.use_integrated_profile = True
+
         # omit the spin harmonic DC bin from the definition of the merit function
         # set to 0 or 1; this flag is used as an integer
         self.omit_dc = 1
@@ -621,10 +624,10 @@ class CyclicSolver:
                 pp = harm2phase(ph)
                 self.scattered_profiles[isub, :] += pp
 
-            ph, gain = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
+            ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
 
-            self.ph_numer_int[ipol] += self.ph_numer
-            self.ph_denom_int[ipol] += self.ph_denom
+            self.ph_numer[ipol,isub] = ph_numer
+            self.ph_denom[ipol,isub] = ph_denom
 
             if update_gain:
                 self.optimal_gains[isub] = gain
@@ -653,9 +656,8 @@ class CyclicSolver:
             self.pp_scattered = np.zeros(self.nphase)  # scattered profile
 
         self.optimal_gains = np.ones(self.nsubint)
-        self.pp_intrinsic = np.zeros(self.nphase)  # intrinsic profile
-        self.ph_numer_int = np.zeros((self.npol, self.nharm), dtype=np.complex128)
-        self.ph_denom_int = np.zeros((self.npol, self.nharm), dtype=np.complex128)
+        self.ph_numer = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
+        self.ph_denom = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
         self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
 
         if self.cs_norm is None:
@@ -673,12 +675,10 @@ class CyclicSolver:
             for isub in range(self.nspec):
                 executor.submit(self.updateProfileSubint, isub)
 
-        for isub in range(self.nspec):
-            for ipol in range(self.npol):
-                self.pp_intrinsic += self.intrinsic_profiles[isub, ipol, :] 
+        self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0,1))
 
-            if self.compute_scattered_profile:
-                self.pp_scattered += self.scattered_profiles[isub,:]
+        if self.compute_scattered_profile:
+            self.pp_scattered = np.average(self.scattered_profiles, axis=0)
 
         mean_gain = 1
 
@@ -692,12 +692,17 @@ class CyclicSolver:
         self.intrinsic_ph_sumsq = np.zeros(self.nharm, dtype=np.complex128)
 
         for ipol in range(self.npol):
-            self.intrinsic_ph[ipol] = self.ph_numer_int[ipol] / self.ph_denom_int[ipol]
+            ph_numer = np.average(self.ph_numer[ipol], axis=0)
+            ph_denom = np.average(self.ph_denom[ipol], axis=0)
+            self.intrinsic_ph[ipol] = ph_numer / ph_denom
             self.intrinsic_ph[ipol] *= mean_gain
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol]
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol]) ** 2
 
-        self.pp_intrinsic = harm2phase(self.intrinsic_ph_sum)
+        # sum over all polarizations and sub-integrations
+        ph_numer = np.average(self.ph_numer, axis=(0,1))
+        ph_denom = np.average(self.ph_denom, axis=(0,1))
+        self.pp_intrinsic = harm2phase(ph_numer / ph_denom) * mean_gain
         print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
     def initWavefield(self):
@@ -755,12 +760,17 @@ class CyclicSolver:
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
             cs = self.get_cs(ps)
 
+        if not self.use_integrated_profile:
+            ph_numer = self.ph_numer[ipol,isub] 
+            ph_denom = self.ph_denom[ipol,isub] 
+            s0 = ph_numer / ph_denom
+
         ht = self.h_time_delay[isub]
 
         if self.iprint:
             print(f"update filter isub={isub}/{self.nspec}")
 
-        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, cs, self.optimal_gains[isub])
+        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
 
         if self.enforce_causality > 0:
             half_nchan = self.nchan // 2
@@ -861,9 +871,10 @@ class CyclicSolver:
             self.shear_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
 
         for ipol in range(self.npol):
+
             self.s0 = self.intrinsic_ph[ipol]
             self.ph_ref = self.intrinsic_ph[ipol]
-
+        
             self.h_time_delay = freq2time(self.h_doppler_delay)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
@@ -913,11 +924,11 @@ class CyclicSolver:
             gain = 1
 
         # fscrunch
-        self.ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * gain
-        self.ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * gain**2
-        s0 = self.ph_numer / self.ph_denom
-        s0[np.real(self.ph_denom) <= 0.0] = 0
-        return s0, gain
+        ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * gain
+        ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * gain**2
+        s0 = ph_numer / ph_denom
+        s0[np.real(ph_denom) <= 0.0] = 0
+        return s0, gain, ph_numer, ph_denom
 
 
     def loop(
@@ -2045,7 +2056,7 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad = complex_cyclic_merit_lag(ht, CS, CS.cs, 1.0)
+    merit, grad = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
@@ -2054,9 +2065,9 @@ def cyclic_merit_lag(x, CS):
     return merit, grad
 
 
-def complex_cyclic_merit_lag(ht, CS, cs_data, gain):
+def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, CS.s0, CS.bw, CS.ref_freq, CS.shear_phasors)
+    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors)
     cs_model *= gain
 
     if CS.maxharm is not None:
