@@ -2004,12 +2004,12 @@ def shift_spectrum(spectrum, phasors):
 
     """
 
-    tmp = fft(spectrum)
+    tmp = ifft(spectrum)
     nharm = phasors.shape[1]
 
     # copy the spectrum for each shift for each harmonic
     spectra = np.repeat(tmp[:, np.newaxis], nharm, axis=1)
-    return ifft(spectra*phasors,axis=0), ifft(spectra*np.conj(phasors),axis=0)
+    return fft(spectra*np.conj(phasors),axis=0), fft(spectra*phasors,axis=0)
 
 
 def make_model_cs(hf, s0, bw, ref_freq, phasors):
