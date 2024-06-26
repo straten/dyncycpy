@@ -964,7 +964,7 @@ class CyclicSolver:
             uses convergence criteria from original filter_profile.
             Try 10 for less stringent (faster) convergence
         iprint: int
-            Passed to scipy.optimize.fmin_l_bfgs (see docs)
+            Passed to scipy.optimize.fmin_l_bfgs_b (see docs)
             use 0 for silent, 1 for verbose, 2 for more log info
 
         max_plot_lag: highest lag to plot in diagnostic plots.

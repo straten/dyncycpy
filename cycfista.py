@@ -21,8 +21,8 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 CS.nthread = 8
 CS.save_cyclic_spectra = True
 
-CS.use_integrated_profile = False
-CS.model_gain_variations = False
+CS.use_integrated_profile = True
+CS.model_gain_variations = True
 
 CS.enforce_causality = 8
 
