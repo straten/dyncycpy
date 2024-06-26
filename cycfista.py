@@ -149,9 +149,7 @@ for i in range(1000):
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:
             fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(
-                plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1
-            )
+            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
             fig.colorbar(img)
             fig.savefig(base + "_wavefield.png")
             plt.close()
