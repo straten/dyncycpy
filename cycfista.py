@@ -2,8 +2,8 @@
 # coding: utf-8
 
 import pickle
-import time
 import sys
+import time
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -96,7 +96,7 @@ min_step_factor = 0.5
 for i in range(1000):
     CS.nopt += 1
 
-    if i < update_profile_every_iteration_until or (i+1) % update_profile_period == 0:
+    if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
         print("cycfista: update profile")
         CS.updateProfile()
 
@@ -149,7 +149,9 @@ for i in range(1000):
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:
             fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
+            img = ax.imshow(
+                plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1
+            )
             fig.colorbar(img)
             fig.savefig(base + "_wavefield.png")
             plt.close()

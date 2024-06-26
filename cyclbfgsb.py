@@ -50,27 +50,23 @@ pp_scattered = np.copy(CS.pp_scattered)
 filters = {}
 intrinsic_profiles = {}
 
-# For first pass, either loop:
+# four passes through first 80 files (20 minutes assuming 15 sec subints):
+hf_prev=None
+nsub = 80
+for ipass in range(4):
+    for isub in range(0, nsub):
+        if ipass > 0:
+            hf_prev=np.copy(filters[ipass-1][isub])
 
-for isub in range(0, 80):
-    CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
-filters[0] = copy.deepcopy(CS.optimized_filters)
-intrinsic_profiles[0] = copy.deepcopy(CS.intrinsic_profiles)
-
-with open("filters_0.pkl", "wb") as fh:
-    pickle.dump(filters[0], fh)
-
-with open("profiles_0.pkl", "wb") as fh:
-    pickle.dump(intrinsic_profiles[0], fh)
-
-# three more passes through 20 minutes (80 15 sec subints):
-for ipass in range(1, 4):
-    CS.pp_intrinsic = np.zeros((CS.nphase))
-    for isub in range(0, 80):
-        CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=np.copy(filters[ipass-1][isub]))
+        print(f'cyclbfgsb: pass={ipass} sub-integratin={isub}', flush=True)
+        CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=hf_prev)
     
+    print(f'cyclbfgsb: pass {ipass} finished', flush=True)
+
     filters[ipass] = copy.deepcopy(CS.optimized_filters)
     intrinsic_profiles[ipass] = copy.deepcopy(CS.intrinsic_profiles)
+
+    CS.pp_intrinsic /= nsub
 
     with open(f"filters_{ipass}.pkl", "wb") as fh:
         pickle.dump(filters[ipass], fh)
@@ -80,7 +76,7 @@ for ipass in range(1, 4):
 
 # Now pass through all the data with intrinsic profile so far (output cleared)
 
-CS.pp_intrinsic = np.zeros((CS.nphase))
+# CS.pp_intrinsic = np.zeros((CS.nphase))
 for isub in range(0, CS.data.shape[0]):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
