@@ -9,14 +9,10 @@ import numpy as np
 import psrchive
 
 def ps2cs(ps, workers=2, axis=1):
-    ndim = ps.shape[axis]
-    tmp = rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ndim)
-    return tmp[:,:ndim//2]
+    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*(ps.shape[axis]))
 
 def ps2pc(ps, workers=2, axis=0):
-    ndim = ps.shape[axis]
-    tmp = rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ndim)
-    return tmp[:ndim//2,:]
+    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*(ps.shape[axis]))
 
 def cs2cc(cs, workers=2, axis=0):
     return fft(cs, axis=axis, workers=workers) / np.sqrt(cs.shape[axis])
@@ -62,7 +58,7 @@ def plot_four(ps,bw,cf,clockwise):
     MEDIUM_SIZE = 22
     BIGGER_SIZE = 32
 
-    plt.rc('figure', figsize=[20,15])
+    plt.rc('figure', figsize=[16,12])
 
     plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
     plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
@@ -76,12 +72,25 @@ def plot_four(ps,bw,cf,clockwise):
 
     fmin=cf-bw/2
     fmax=cf+bw/2
-    delay_mus = nchan / (bw*2)
 
-    min_delay = 10
-    min_delay_mus = min_delay / bw
+    positive_delays = True
+
+    if positive_delays:
+        min_delay = 0
+        max_delay = nchan//8
+        min_delay_mus = min_delay / bw
+        max_delay_mus = max_delay / bw
+    else:
+        min_delay = nchan//2 - nchan//16
+        max_delay = nchan//2 + nchan//16
+        pc = fftshift(pc,axes=0)
+        cc = fftshift(cc,axes=0)
+        max_delay_mus = (max_delay - nchan//2) / bw
+        min_delay_mus = (min_delay - nchan//2) / bw
 
     cmap="bwr"
+
+    print(f'min_delay={min_delay} max_delay={max_delay}')
 
     toplot=ps
     tostat=ps[(nchan//4):(3*nchan//4),:]
@@ -104,20 +113,19 @@ def plot_four(ps,bw,cf,clockwise):
 
     scale=0.05
 
-    toplot=np.real(pc[min_delay:nchan//2,:])
+    toplot=np.real(pc[min_delay:max_delay,:])
     minplot=np.min(toplot,axis=None)
     maxplot=np.abs(minplot)
-    print(f'periodic correlation min={minplot} max={maxplot}')
-    axs[1,0].imshow(toplot, vmin=scale*minplot, vmax=scale*maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[0, 1, min_delay_mus, delay_mus],)
+    axs[1,0].imshow(toplot, vmin=scale*minplot, vmax=scale*maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[0, 1, min_delay_mus, max_delay_mus],)
     axs[1,0].set(ylabel="Delay ($\mu$s)", xlabel="Phase (turns)")
 
     scale=0.05
 
-    toplot=np.real(cc[min_delay:nchan//2,1:50])
+    toplot=np.real(cc[min_delay:max_delay,1:50])
     minplot=np.min(toplot,axis=None)
     maxplot=np.abs(minplot)
     mplot,count=scipy.stats.mode(toplot,axis=None,keepdims=False)
-    axs[1,1].imshow(toplot, vmin=scale*minplot, vmax=scale*maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[1, 50, min_delay_mus, delay_mus])
+    axs[1,1].imshow(toplot, vmin=scale*minplot, vmax=scale*maxplot, aspect="auto", origin="lower", cmap=cmap, extent=[1, 50, min_delay_mus, max_delay_mus])
     axs[1,1].set(ylabel="Delay ($\mu$s)", xlabel="Spin Harmonic")
 
     if clockwise:
@@ -136,9 +144,24 @@ def plot_spectra(filename) -> None:
     data=ar.get_data()
     slice = data[0,0,:,:]
 
-    nchan=slice.shape[0]
-    halfchan=nchan//2
+    nchan = slice.shape[0]
     nbin=slice.shape[1]
+
+    zap_edges = 0.05556
+    if zap_edges > 0:
+        zap_chan = int(zap_edges * nchan)
+        slice = slice[zap_chan:-zap_chan,:]
+        bw *= slice.shape[0] / nchan
+        nchan = slice.shape[0]
+
+    spectral_window = None
+    # spectral_window = ('kaiser', 8.6)
+    # spectral_window = ('tukey', 0.05556)
+
+    if spectral_window is not None:
+        spectral_taper = scipy.signal.get_window(spectral_window, nchan)
+        for ichan in range(nchan):
+            slice[ichan,:] *= spectral_taper[ichan]
 
     ps = np.zeros((nchan,nbin),dtype=np.float64)
     ps[:,:] = slice[:,:]
