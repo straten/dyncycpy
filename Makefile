@@ -8,7 +8,7 @@ PYTHON_LINE_LENGTH ?= 110
 PYTHON_SWITCHES_FOR_BLACK ?= --line-length $(PYTHON_LINE_LENGTH) --exclude .+\.ipynb
 PYTHON_SWITCHES_FOR_ISORT ?= --profile black --line-length $(PYTHON_LINE_LENGTH)
 PYTHON_SWITCHES_FOR_PYLINT ?= --max-line-length $(PYTHON_LINE_LENGTH)
-PYTHON_SWITCHES_FOR_FLAKE8 ?= --show-source --statistics --max-line-length $(PYTHON_LINE_LENGTH)
+PYTHON_SWITCHES_FOR_FLAKE8 ?= --show-source --statistics --max-line-length $(PYTHON_LINE_LENGTH) --ignore E203
 PYTHON_SWITCHES_FOR_AUTOFLAKE ?= --in-place --remove-unused-variables --remove-all-unused-imports --recursive --ignore-init-module-imports
 
 PYTHON_LINT_TARGET ?= $(PYTHON_SRC)

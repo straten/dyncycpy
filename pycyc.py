@@ -20,7 +20,8 @@ $ ipython -pylab
 
 import pycyc
 
-CS = pycyc.CyclicSolver(filename='/psr/gjones/2011-09-19-21:50:00.ar') # some 1713 data  at 430 MHz Nipuni processed
+# load some 1713 data at 430 MHz that Nipuni processed
+CS = pycyc.CyclicSolver(filename='/psr/gjones/2011-09-19-21:50:00.ar')
 
 CS.initProfile(loadFile='/psr/gjones/pp_1713.npy') # start with a nice precomputed profile.
 # Note profile can be in .txt (filter_profile) format or .npy numpy.save format.
@@ -91,7 +92,7 @@ CS.loop(make_plots=True, tolfact=10, maxneg=10, maxlen = 110)
 """
 try:
     import psrchive
-except:
+except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures
 import os
@@ -122,10 +123,11 @@ class CyclicSolver:
         """
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
-        *offp*: tuple (start,end) with start and end bin numbers to use as off pulse region for normalizing the bandpass
-        *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
-                    subbands
-        *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
+        *offp*: tuple (start,end) off-pulse phase bin range for normalizing the bandpass
+        *maxchan*: Top channel index to use.
+            Can be used to pull out one subband from a file which contains multiple subbands
+        *tscrunch* : average down by a factor of 1/tscrunch
+            (e.g. if tscrunch = 2, average every pair of subints)
         *pscrunch* : average the polarisations
         """
 
@@ -186,8 +188,9 @@ class CyclicSolver:
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
         self.noise_shrinkage_threshold = None
 
-        # set all wavefield components less than theshold*delay_noise to zero, after shrinking them by the same amount
-        # for a given delay, delay_noise is the standard deviation over all doppler shifts below delay_noise_selection_threshold times the mean (corrected for bias)
+        # set all wavefield components less than theshold*delay_noise to zero,
+        # after shrinking them by the same amount.  For a given delay, delay_noise is the standard deviation
+        # over all doppler shifts below delay_noise_selection_threshold times the mean (corrected for bias)
         self.delay_noise_shrinkage_threshold = None
         self.delay_noise_selection_threshold = None
 
@@ -196,7 +199,8 @@ class CyclicSolver:
 
         # when thresholding, smooth wavefield power using a Kaiser window with the specified duty cycle
         self.noise_smoothing_duty_cycle = None
-        # default Kaiser smoothing beta factor (similar to Hann; see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
+        # default Kaiser smoothing beta factor (6 = similar to Hann)
+        # see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
         self.noise_smoothing_beta = 6
 
         # simultaneously fit for the instrinsic cyclic spectrum (not recommended - introduces degeneracies)
@@ -268,9 +272,8 @@ class CyclicSolver:
             data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
         elif self.maxchan:
-            bwfact = self, maxchan / (
-                1.0 * data.shape[2]
-            )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
+            # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
+            bwfact = self.maxchan / (1.0 * data.shape[2])
             data = data[:, :, : self.maxchan, :]
         else:
             bwfact = 1.0
@@ -291,7 +294,7 @@ class CyclicSolver:
             try:
                 self.imjd = np.floor(self.reference_epoch)
                 self.fmjd = np.fmod(self.reference_epoch, 1)
-            except:  # new version of psrchive has different kind of epoch
+            except Exception:  # new version of psrchive has different kind of epoch
                 self.imjd = self.reference_epoch.intday()
                 self.fmjd = self.reference_epoch.fracday()
             self.ref_phase = 0.0
@@ -419,9 +422,8 @@ class CyclicSolver:
 
             else:
                 if missing_subints > 0:
-                    print(
-                        "WARNING: patching up missing sub-integrations not implemented when not saving cyclic spectra"
-                    )
+                    print("WARNING: patching up missing sub-integrations not implemented")
+                    print("WARNING: when not saving cyclic spectra")
                 self.data = np.append(self.data, data, axis=0)
                 new_nsubint -= missing_subints
 
@@ -438,7 +440,8 @@ class CyclicSolver:
         Resulting profile is assigned to self.pp_intrinsic
         The results of this routine have been checked to agree with filter_profile -i
 
-        *maxinitharm* : zero harmonics above this one in the initial profile (acts to smooth/denoise) (optional)
+        *maxinitharm* : zero harmonics above this one in the initial profile
+            (acts to smooth/denoise) (optional)
 
         """
 
@@ -840,8 +843,10 @@ class CyclicSolver:
                     phasor /= np.abs(phasor)
                     ht *= np.conj(phasor)
                 hf = time2freq(ht)
-                if isub > 0:
-                    z = (np.conj(hf) * hf_prev).sum()
+                if isub == 0:
+                    hf0 = np.copy(hf)
+                else:
+                    z = (np.conj(hf) * hf0).sum()
                     z /= np.abs(z)
                     hf *= z
                 self.h_time_delay[isub] = freq2time(hf)
@@ -851,9 +856,8 @@ class CyclicSolver:
             z = (h_doppler_delay * h_doppler_delay).sum()
             ph = z / np.abs(z)
             ph = np.sqrt(ph)
-            print(
-                f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}"
-            )
+            abs_origin = np.abs(h_doppler_delay[0, 0])
+            print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
             h_doppler_delay *= np.conj(ph)
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
@@ -980,7 +984,7 @@ class CyclicSolver:
             if not os.path.exists(plotdir):
                 try:
                     os.mkdir(plotdir)
-                except:
+                except Exception:
                     print("Warning: couldn't make", plotdir, "not plotting")
                     self.make_plots = False
             self.plotdir = plotdir
@@ -1326,7 +1330,6 @@ class CyclicSolver:
             interpolation="nearest",
             extent=csextent,
         )
-        # im = ax3b.imshow((plot_cs[:,:mlag]-cs_model[:,:mlag]).imag,aspect='auto',interpolation='nearest',extent=csextent)
         im.set_clim(-np.pi / 2.0, np.pi / 2.0)
         ax3b.set_xlim(0, mlag)
         ax3b.text(
@@ -1418,8 +1421,8 @@ class CyclicSolver:
         ax6.plot(pref, label="Reference", linewidth=2)
         ax6.plot(harm2phase(sopt), "r", label="Intrinsic")
         ax6.plot(harm2phase(smeas), "g", label="Measured")
-        l = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
-        l.get_frame().set_alpha(0.5)
+        legend = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
+        legend.get_frame().set_alpha(0.5)
         ax6.set_xlim(0, pref.shape[0])
         fname = self.filename[-50:]
         if len(self.filename) > 50:
@@ -1456,8 +1459,8 @@ def plotSimulation(CS, mlag=100):
     ax1 = fig.add_subplot(3, 3, 1)
     ax1.plot(f, np.abs(hf), label=r"|$\hat{H}(f)$|")
     ax1.plot(f, np.abs(hf0), label="|$H$(f)|")
-    l = ax1.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax1.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax1.text(
         0.9,
         0.1,
@@ -1479,8 +1482,8 @@ def plotSimulation(CS, mlag=100):
         alpha=0.7,
         label=r"$\angle\left(\frac{\hat{H}(f)}{H(f)}\right)$",
     )
-    l = ax2.legend(loc="lower left", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax2.legend(loc="lower left", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax2.text(
         0.9,
         0.1,
@@ -1514,8 +1517,8 @@ def plotSimulation(CS, mlag=100):
     )
     ax3.text(pt[len(pt) / 4], CS.pp_meas.max() * 0.55, "tau", fontdict=dict(size="small"))
     ax3.set_xlim(0, pt[-1])
-    l = ax3.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax3.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax3.text(
         0.9,
         0.1,
@@ -1564,8 +1567,8 @@ def plotSimulation(CS, mlag=100):
     )
     ax5.set_ylim(-80.0, 0)
     ax5.set_xlim(0, t[-1] / 1e3)
-    l = ax5.legend(loc="upper left", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax5.legend(loc="upper left", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax5.text(
         0.9,
         0.1,
@@ -1599,8 +1602,8 @@ def plotSimulation(CS, mlag=100):
     if right > t[-1] - maxt:
         right = t[-1] - maxt
     ax8.set_xlim(left, right)
-    l = ax8.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax8.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax8.set_xlabel(r"$\mu$s")
 
     ax6 = fig.add_subplot(3, 3, 6)
@@ -1723,11 +1726,11 @@ def loadArray(fname):
     fh = open(fname, "r")
     try:
         x = int(fh.readline())
-    except:
+    except Exception:
         raise Exception("couldn't read first dimension")
     try:
         y = int(fh.readline())
-    except:
+    except Exception:
         raise Exception("couldn't read second dimension")
     raw = np.loadtxt(fh)
     if raw.shape[0] != x * y:
@@ -1921,8 +1924,7 @@ def normalize_pp(pp):
     """
     ph = phase2harm(pp)
     ph = normalize_profile(ph)
-    if self.omit_dc:
-        ph[0] = 0
+    ph[0] = 0
     return harm2phase(ph)
 
 
@@ -2030,7 +2032,10 @@ def create_shift_phasors(nchan, nharm, bw_MHz, freq_Hz):
 
     Returns
     ------
-        $\exp(i pi \tau_j \alpha_k)$, where i=sqrt(-1), j = row index and k = column index
+    .. math::
+        exp(i pi \tau_j \alpha_k)
+
+    where i=sqrt(-1), j = row index, and k = column index
     """
 
     # tau[j] in seconds
