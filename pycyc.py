@@ -758,7 +758,7 @@ class CyclicSolver:
             cs = self.cyclic_spectra[isub, ipol]
         else:
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-            cs = self.get_cs(ps)
+            cs, norm = self.get_cs(ps)
 
         if self.use_integrated_profile:
             s0 = self.s0
@@ -989,8 +989,12 @@ class CyclicSolver:
 
         self.isub = isub
         self.iprint = iprint
-        ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-        cs = self.get_cs(ps)
+
+        if self.save_cyclic_spectra:
+            cs = self.cyclic_spectra[isub, ipol]
+        else:
+            ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+            cs, norm = self.get_cs(ps)
 
         if hf_prev is None:
             _hf_prev = self.hf_prev
@@ -2058,7 +2062,7 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
+    merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
