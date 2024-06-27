@@ -30,14 +30,24 @@ def power(x):
     return np.sum(abs(x)**2)/x.size
 
 
-def plot_four(ps,bw,cf,clockwise):
+def plot_four(ps,bw,cf,clockwise,analytic):
 
     if clockwise:
         cs = ps2cs(ps)
+        if not analytic:
+            cs_symm = np.zeros(ps.shape, dtype=np.complex128)
+            cs_symm[:,:cs.shape[1]] = cs
+            cs_symm[:,cs.shape[1]:] = np.flip(np.conj(cs[:,1:-1]),axis=1)
+            cs = cs_symm
         cc = cs2cc(cs)
         pc = cc2pc(cc)
     else:
         pc = ps2pc(ps)
+        if not analytic:
+            pc_symm = np.zeros(ps.shape, dtype=np.complex128)
+            pc_symm[:pc.shape[0],:] = pc
+            pc_symm[pc.shape[0]:,:] = np.flip(np.conj(pc[1:-1,:]),axis=0)
+            pc = pc_symm        
         cc = pc2cc(pc)
         cs = cc2cs(cc)
 
@@ -129,10 +139,14 @@ def plot_four(ps,bw,cf,clockwise):
     axs[1,1].set(ylabel="Delay ($\mu$s)", xlabel="Spin Harmonic")
 
     if clockwise:
-        plt.savefig('ps_cs_cc_pc.png')
+        filename = 'ps_cs_cc_pc.png'
     else:
-        plt.savefig('ps_pc_cc_cs.png')
+        filename = 'ps_pc_cc_cs.png'
 
+    if analytic:
+        filename = f'analytic_{filename}.png'
+
+    plt.savefig(filename)
     plt.close()
 
 def plot_spectra(filename) -> None:
@@ -166,8 +180,9 @@ def plot_spectra(filename) -> None:
     ps = np.zeros((nchan,nbin),dtype=np.float64)
     ps[:,:] = slice[:,:]
 
-    plot_four(ps,bw,cf,clockwise=True)
-    plot_four(ps,bw,cf,clockwise=False)
+    for clockwise in (True,False):
+        for analytic in (True,False):
+            plot_four(ps,bw,cf,clockwise,analytic)
 
 def main() -> None:
     """Plot the cyclic spectrum in four different ways."""

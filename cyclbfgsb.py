@@ -58,7 +58,7 @@ for ipass in range(4):
         if ipass > 0:
             hf_prev=np.copy(filters[ipass-1][isub])
 
-        print(f'cyclbfgsb: pass={ipass} sub-integratin={isub}', flush=True)
+        print(f'cyclbfgsb: pass={ipass} sub-integration={isub}', flush=True)
         CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=hf_prev)
     
     print(f'cyclbfgsb: pass {ipass} finished', flush=True)
