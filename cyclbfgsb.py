@@ -77,7 +77,7 @@ for ipass in range(4):
 # Now pass through all the data with intrinsic profile so far (output cleared)
 
 # CS.pp_intrinsic = np.zeros((CS.nphase))
-for isub in range(0, CS.data.shape[0]):
+for isub in range(0, CS.nsubint):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
 filters_full = {}
@@ -94,7 +94,7 @@ with open(f"profiles_full_{ipass}.pkl", "wb") as fh:
     pickle.dump(intrinsic_profiles_full[ipass], fh)
 
 # Reproduce Figure 2 of WDvS13
-plot_intrinsic_vs_observed(CS, np.average(CS.data, axis=(0, 1, 2)), savefig='intrinsic_vs_observed.png')
+plot_intrinsic_vs_observed(CS, pp_scattered, savefig='intrinsic_vs_observed.png')
 plt.clf()
 
 # Reproduce the bottom panel of Figure 7 of WDvS13

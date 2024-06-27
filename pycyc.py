@@ -1113,7 +1113,7 @@ class CyclicSolver:
         self.hf_prev = hf.copy()
 
         update_gain = False
-        ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
+        ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
 
         if self.omit_dc:
             ph[0] = 0.0
@@ -1292,7 +1292,7 @@ class CyclicSolver:
         )
         for tl in ax2b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        sopt = self.optimize_profile(plot_cs, hf, self.bw, self.ref_freq)
+        sopt, gain, ph_numer, ph_denom = self.optimize_profile(plot_cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
 
         if self.omit_dc:
