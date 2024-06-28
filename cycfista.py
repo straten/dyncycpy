@@ -21,10 +21,10 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 CS.nthread = 8
 CS.save_cyclic_spectra = True
 
-CS.use_integrated_profile = True
-CS.model_gain_variations = True
+# CS.use_integrated_profile = True
+# CS.model_gain_variations = True
 
-CS.enforce_causality = 0
+# CS.enforce_causality = 0
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -138,13 +138,13 @@ for i in range(1000):
     alpha = 1.0 / L_max
     prev_merit = CS.get_reduced_chisq()
 
-    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} t_n={t_n}")
+    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} t_n={t_n} last alpha={1.0/L}")
     end_time = time.time()
 
     elapsed_time = end_time - start_time
     print(f"Elapsed time: {elapsed_time/60} min", flush=True)
 
-    if i % 10 == 0:
+    if i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:

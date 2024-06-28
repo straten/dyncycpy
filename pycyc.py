@@ -453,8 +453,9 @@ class CyclicSolver:
         hf_prev = np.ones((self.nchan,), dtype=np.complex128)
         self.hf_prev = hf_prev
 
+        self.expected_power = self.nchan * self.nspec
         self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-        self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.nchan * self.nspec)
+        self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.expected_power)
         self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
 
         # ensure that delta-function yields expected frequency response at all times
@@ -758,8 +759,8 @@ class CyclicSolver:
     def normalize(self, h_doppler_delay):
         if self.conserve_wavefield_energy:
             total_power = np.sum(np.abs(h_doppler_delay) ** 2)
-            expected_power = self.nchan * self.nspec
-            factor = np.sqrt(expected_power / total_power)
+            self.expected_power = self.nchan * self.nspec
+            factor = np.sqrt(self.expected_power / total_power)
             h_doppler_delay *= factor
             # print(f'normalize factor={factor}')
         return h_doppler_delay
@@ -800,6 +801,7 @@ class CyclicSolver:
         return _merit, _nterm
 
     def updateWavefield(self, h_doppler_delay):
+
         self.normalize(h_doppler_delay)
 
         rms_noise = rms_wavefield(h_doppler_delay)
