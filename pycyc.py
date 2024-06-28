@@ -1795,43 +1795,35 @@ def loadProfile(fname):
 # input array.
 # I've left the bug in for now to compare directly to filter_profile
 
-
-
 def ps2cs(ps, workers=2, axis=1):
-    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ps.shape[axis])
+    return rfft(ps, axis=axis, workers=workers, norm="ortho")
 
 def ps2pc(ps, workers=2, axis=0):
-    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*ps.shape[axis])
+    return rfft(ps, axis=axis, workers=workers, norm="ortho")
 
 def cc2cs(cs, workers=2, axis=0):
-    return fft(cs, axis=axis, workers=workers) / np.sqrt(cs.shape[axis])
+    return fft(cs, axis=axis, workers=workers, norm="ortho")
 
 def cs2cc(cc, workers=2, axis=0):
-    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
+    return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
 def cc2pc(cc, workers=2, axis=1):
-    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
+    return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
 def pc2cc(pc,workers=2, axis=1):
-    return fft(pc, axis=axis, workers=workers) / np.sqrt(pc.shape[axis])
-
+    return fft(pc, axis=axis, workers=workers, norm="ortho")
 
 def time2freq(ht, workers=1, axis=0):
-    return fft(ht, axis=axis, workers=workers) / np.sqrt(ht.shape[axis])
+    return fft(ht, axis=axis, workers=workers, norm="ortho")
 
 def freq2time(hf, workers=1, axis=0):
-    return ifft(hf, axis=axis, workers=workers) * np.sqrt(hf.shape[axis])
-
+    return ifft(hf, axis=axis, workers=workers, norm="ortho")
 
 def harm2phase(ph, workers=1):
-    return (ph.shape[0] - 1) * 2 * irfft(ph, workers=workers)
-
+    return irfft(ph, workers=workers, norm="ortho")
 
 def phase2harm(pp, workers=1):
-    ph = rfft(pp, workers=workers)
-    # profile_harm_renorm
-    return ph / ph.shape[0]  # original version from Cyclic-modelling
-    # return ph/(2*(ph.shape[0]-1))
+    return rfft(pp, workers=workers, norm="ortho")
 
 
 def match_two_filters(hf1, hf2):
@@ -2144,11 +2136,11 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
 
     cc1 = cs2cc(diff * hfminus)
-    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan  # WDvS Equation 37
+    grad2 = cc1 * phasors * np.conj(cs0)  # WDvS Equation 37
     grad = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
-    grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
+    grad2 = cc1 * np.conj(phasors) * cs0
     grad += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     if CS.iprint:

@@ -9,22 +9,22 @@ import numpy as np
 import psrchive
 
 def ps2cs(ps, workers=2, axis=1):
-    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*(ps.shape[axis]))
+    return rfft(ps, axis=axis, workers=workers, norm="ortho")
 
 def ps2pc(ps, workers=2, axis=0):
-    return rfft(ps, axis=axis, workers=workers) / np.sqrt(2*(ps.shape[axis]))
+    return rfft(ps, axis=axis, workers=workers, norm="ortho")
 
 def cs2cc(cs, workers=2, axis=0):
-    return fft(cs, axis=axis, workers=workers) / np.sqrt(cs.shape[axis])
+    return fft(cs, axis=axis, workers=workers, norm="ortho")
 
 def cc2cs(cc, workers=2, axis=0):
-    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
+    return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
 def cc2pc(cc, workers=2, axis=1):
-    return ifft(cc, axis=axis, workers=workers) * np.sqrt(cc.shape[axis])
+    return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
 def pc2cc(pc,workers=2, axis=1):
-    return fft(pc, axis=axis, workers=workers) /  np.sqrt(pc.shape[axis])
+    return fft(pc, axis=axis, workers=workers, norm="ortho")
 
 def power(x):
     return np.sum(abs(x)**2)/x.size
