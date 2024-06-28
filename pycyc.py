@@ -20,7 +20,8 @@ $ ipython -pylab
 
 import pycyc
 
-CS = pycyc.CyclicSolver(filename='/psr/gjones/2011-09-19-21:50:00.ar') # some 1713 data  at 430 MHz Nipuni processed
+# load some 1713 data at 430 MHz that Nipuni processed
+CS = pycyc.CyclicSolver(filename='/psr/gjones/2011-09-19-21:50:00.ar')
 
 CS.initProfile(loadFile='/psr/gjones/pp_1713.npy') # start with a nice precomputed profile.
 # Note profile can be in .txt (filter_profile) format or .npy numpy.save format.
@@ -91,8 +92,9 @@ CS.loop(make_plots=True, tolfact=10, maxneg=10, maxlen = 110)
 """
 try:
     import psrchive
-except:
+except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
+import concurrent.futures
 import os
 import pickle
 
@@ -102,11 +104,9 @@ import scipy.optimize
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from scipy import signal
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
-from scipy.signal import fftconvolve, kaiser, tukey
+from scipy.signal import fftconvolve, kaiser
 
-import concurrent.futures
 
 class CyclicSolver:
     def __init__(
@@ -123,10 +123,11 @@ class CyclicSolver:
         """
         *offp* : passed to the load method for selecting an off pulse region (optional).
         *tscrunch* : passed to the load method for averaging subintegrations
-        *offp*: tuple (start,end) with start and end bin numbers to use as off pulse region for normalizing the bandpass
-        *maxchan*: Top channel index to use. Quick and dirty way to pull out one subband from a file which contains multiple
-                    subbands
-        *tscrunch* : average down by a factor of 1/tscrunch (i.e. if tscrunch = 2, average every pair of subints)
+        *offp*: tuple (start,end) off-pulse phase bin range for normalizing the bandpass
+        *maxchan*: Top channel index to use.
+            Can be used to pull out one subband from a file which contains multiple subbands
+        *tscrunch* : average down by a factor of 1/tscrunch
+            (e.g. if tscrunch = 2, average every pair of subints)
         *pscrunch* : average the polarisations
         """
 
@@ -187,8 +188,9 @@ class CyclicSolver:
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
         self.noise_shrinkage_threshold = None
 
-        # set all wavefield components less than theshold*delay_noise to zero, after shrinking them by the same amount
-        # for a given delay, delay_noise is the standard deviation over all doppler shifts below delay_noise_selection_threshold times the mean (corrected for bias)
+        # set all wavefield components less than theshold*delay_noise to zero,
+        # after shrinking them by the same amount.  For a given delay, delay_noise is the standard deviation
+        # over all doppler shifts below delay_noise_selection_threshold times the mean (corrected for bias)
         self.delay_noise_shrinkage_threshold = None
         self.delay_noise_selection_threshold = None
 
@@ -197,7 +199,8 @@ class CyclicSolver:
 
         # when thresholding, smooth wavefield power using a Kaiser window with the specified duty cycle
         self.noise_smoothing_duty_cycle = None
-        # default Kaiser smoothing beta factor (similar to Hann; see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
+        # default Kaiser smoothing beta factor (6 = similar to Hann)
+        # see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.kaiser.html)
         self.noise_smoothing_beta = 6
 
         # simultaneously fit for the instrinsic cyclic spectrum (not recommended - introduces degeneracies)
@@ -219,10 +222,10 @@ class CyclicSolver:
         #   spectral_window = ('tukey' 0.25)
         self.spectral_window = None
 
-        # taper data (cyclic spectra) in time using the specified window 
+        # taper data (cyclic spectra) in time using the specified window
         self.temporal_window = None
 
-        # taper wavefield along Doppler axis using the specified window 
+        # taper wavefield along Doppler axis using the specified window
         self.doppler_window = None
         self.doppler_taper = None
 
@@ -269,9 +272,8 @@ class CyclicSolver:
             data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
         elif self.maxchan:
-            bwfact = self, maxchan / (
-                1.0 * data.shape[2]
-            )  # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
+            # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
+            bwfact = self.maxchan / (1.0 * data.shape[2])
             data = data[:, :, : self.maxchan, :]
         else:
             bwfact = 1.0
@@ -284,7 +286,6 @@ class CyclicSolver:
                 data[:-k, :, :, :] += data[k:, :, :, :]
 
         if self.nsubint == 0:
-
             # print(f'input data have type={data.dtype}')
 
             idx = 0  # only used to get parameters of integration, not data itself
@@ -293,7 +294,7 @@ class CyclicSolver:
             try:
                 self.imjd = np.floor(self.reference_epoch)
                 self.fmjd = np.fmod(self.reference_epoch, 1)
-            except:  # new version of psrchive has different kind of epoch
+            except Exception:  # new version of psrchive has different kind of epoch
                 self.imjd = self.reference_epoch.intday()
                 self.fmjd = self.reference_epoch.fracday()
             self.ref_phase = 0.0
@@ -320,8 +321,8 @@ class CyclicSolver:
                 epoch = subint.get_epoch()
                 diff = epoch - self.reference_epoch
                 self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
-                    offset = self.time_offsets[isub] - self.time_offsets[isub-1]
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub - 1] > 0:
+                    offset = self.time_offsets[isub] - self.time_offsets[isub - 1]
                     total_offset += offset
                     count_offset += 1
             if count_offset > 1:
@@ -331,7 +332,8 @@ class CyclicSolver:
 
             if self.save_cyclic_spectra:
                 self.cyclic_spectra = np.zeros(
-                    (self.nsubint, self.npol, self.nchan, self.nharm), dtype=np.complex128
+                    (self.nsubint, self.npol, self.nchan, self.nharm),
+                    dtype=np.complex128,
                 )
                 self.cs_norm = np.zeros((self.nsubint, self.npol))
                 for isub in range(self.nsubint):
@@ -346,8 +348,7 @@ class CyclicSolver:
                 self.data = data
 
         else:
-
-            last_offset = self.time_offsets[self.nsubint-1]
+            last_offset = self.time_offsets[self.nsubint - 1]
             subint = ar.get_Integration(0)
             epoch = subint.get_epoch()
             diff = epoch - self.reference_epoch
@@ -371,7 +372,7 @@ class CyclicSolver:
             new_nsubint = self.nsubint + nsubint + missing_subints
             start_isubint = self.nsubint + missing_subints
 
-            self.time_offsets.resize(new_nsubint);
+            self.time_offsets.resize(new_nsubint)
             total_offset = 0
             count_offset = 0
             for isub in range(new_nsubint):
@@ -380,8 +381,8 @@ class CyclicSolver:
                     epoch = subint.get_epoch()
                     diff = epoch - self.reference_epoch
                     self.time_offsets[isub] = diff.in_seconds()
-                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub-1] > 0:
-                    offset = self.time_offsets[isub] - self.time_offsets[isub-1]
+                if isub > 0 and self.time_offsets[isub] > 0 and self.time_offsets[isub - 1] > 0:
+                    offset = self.time_offsets[isub] - self.time_offsets[isub - 1]
                     total_offset += offset
                     count_offset += 1
             if count_offset > 1:
@@ -390,7 +391,7 @@ class CyclicSolver:
             if self.save_cyclic_spectra:
                 self.cyclic_spectra.resize(new_nsubint, self.npol, self.nchan, self.nharm)
                 self.cs_norm.resize(new_nsubint, self.npol)
-                self.time_offsets.resize(new_nsubint);
+                self.time_offsets.resize(new_nsubint)
                 for isub in range(nsubint):
                     jsub = isub + self.nsubint + missing_subints
                     if self.iprint:
@@ -403,11 +404,11 @@ class CyclicSolver:
                 if missing_subints > 0:
                     print("setting missing cyclic spectra to average of bounding spectra")
                     for ipol in range(self.npol):
-                        previous_idx = self.nsubint-1
+                        previous_idx = self.nsubint - 1
                         previous_cs = self.cyclic_spectra[previous_idx, ipol]
                         previous_cs_norm = self.cs_norm[previous_idx, ipol]
 
-                        next_idx = self.nsubint+missing_subints
+                        next_idx = self.nsubint + missing_subints
                         next_cs = self.cyclic_spectra[next_idx, ipol]
                         next_cs_norm = self.cs_norm[next_idx, ipol]
 
@@ -421,7 +422,8 @@ class CyclicSolver:
 
             else:
                 if missing_subints > 0:
-                    print("WARNING: patching up missing sub-integrations not implemented when not saving cyclic spectra")
+                    print("WARNING: patching up missing sub-integrations not implemented")
+                    print("WARNING: when not saving cyclic spectra")
                 self.data = np.append(self.data, data, axis=0)
                 new_nsubint -= missing_subints
 
@@ -438,7 +440,8 @@ class CyclicSolver:
         Resulting profile is assigned to self.pp_intrinsic
         The results of this routine have been checked to agree with filter_profile -i
 
-        *maxinitharm* : zero harmonics above this one in the initial profile (acts to smooth/denoise) (optional)
+        *maxinitharm* : zero harmonics above this one in the initial profile
+            (acts to smooth/denoise) (optional)
 
         """
 
@@ -459,14 +462,15 @@ class CyclicSolver:
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
             print(f"noise smoothing kernel shape: {wshape}")
             kernel = np.outer(
-                kaiser(wshape[0], self.noise_smoothing_beta), kaiser(wshape[1], self.noise_smoothing_beta)
+                kaiser(wshape[0], self.noise_smoothing_beta),
+                kaiser(wshape[1], self.noise_smoothing_beta),
             )
             self.noise_smoothing_kernel = kernel / np.sum(kernel)  # Normalize the kernel
 
         if self.spectral_window is not None:
             spectral_taper = scipy.signal.get_window(self.spectral_window, self.nchan)
             for ichan in range(self.nchan):
-                self.cyclic_spectra[:,:,ichan,:] *= spectral_taper[ichan]
+                self.cyclic_spectra[:, :, ichan, :] *= spectral_taper[ichan]
 
         if self.temporal_window is not None:
             temporal_taper = scipy.signal.get_window(self.temporal_window, self.nsubint)
@@ -506,49 +510,48 @@ class CyclicSolver:
         self.save_cs_norm = False
 
     def compute_first_wavefield_from_best_harmonic(self):
-
-        initial_total_power = np.sum(np.abs(self.h_doppler_delay)**2)
-        maxharm=np.minimum(self.first_wavefield_from_best_harmonic,self.nharm)
+        initial_total_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+        maxharm = np.minimum(self.first_wavefield_from_best_harmonic, self.nharm)
         sn = np.zeros(maxharm)
 
         # search for the harmonic with the highest Doppler/delay power S/N
         for harm in range(maxharm):
             print(f"harmonic={harm}")
             # extract the harmonic and sum over polarizations
-            time_freq = np.sum(self.cyclic_spectra[:,:,:,harm],axis=1)
-            trial_wavefield = time2freq(freq2time(time_freq,axis=1),axis=0)
-            power = np.abs(trial_wavefield)**2
+            time_freq = np.sum(self.cyclic_spectra[:, :, :, harm], axis=1)
+            trial_wavefield = time2freq(freq2time(time_freq, axis=1), axis=0)
+            power = np.abs(trial_wavefield) ** 2
 
             # estimate the S/N for this trial wavefield
 
             # first, take a slice of noise at extreme Doppler shift
-            width=10
-            min=(self.nspec-width)//2
-            max=(self.nspec+width)//2
-            noise_slice = power[min:max,:]
+            width = 10
+            min = (self.nspec - width) // 2
+            max = (self.nspec + width) // 2
+            noise_slice = power[min:max, :]
 
             noise_power = np.mean(noise_slice)
             total_power = np.mean(power)
-            sn[harm] = np.sqrt(total_power/noise_power)
-            print(f'harmonic={harm} S/N={sn[harm]}')
+            sn[harm] = np.sqrt(total_power / noise_power)
+            print(f"harmonic={harm} S/N={sn[harm]}")
 
         best_harmonic = np.argmax(sn)
         print(f"best harmonic={best_harmonic}")
 
         # extract the harmonic and sum over polarizations
-        time_freq = np.sum(self.cyclic_spectra[:,:,:,best_harmonic],axis=1)
-        self.h_doppler_delay = time2freq(freq2time(time_freq,axis=1),axis=0)
-        power = np.abs(self.h_doppler_delay)**2
+        time_freq = np.sum(self.cyclic_spectra[:, :, :, best_harmonic], axis=1)
+        self.h_doppler_delay = time2freq(freq2time(time_freq, axis=1), axis=0)
+        power = np.abs(self.h_doppler_delay) ** 2
 
         # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
         log_sum = 0
         for i in {-1, 0, 1}:
             for j in {-1, 0, 1}:
                 if i != 0 or j != 0:
-                    log_sum += np.log10(power[i,j])
+                    log_sum += np.log10(power[i, j])
         log_mean = log_sum / 8
-        mean_amp = pow(10,0.5*log_mean)
-        zero_amp = np.abs(self.h_doppler_delay[0,0])
+        mean_amp = pow(10, 0.5 * log_mean)
+        zero_amp = np.abs(self.h_doppler_delay[0, 0])
         print(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
 
         if self.delay_noise_shrinkage_threshold is not None:
@@ -563,12 +566,12 @@ class CyclicSolver:
                 ),
             )
 
-        self.h_doppler_delay[0,0] *= mean_amp / zero_amp
-        self.h_doppler_delay[:,self.nchan//2:]=0.0
+        self.h_doppler_delay[0, 0] *= mean_amp / zero_amp
+        self.h_doppler_delay[:, self.nchan // 2 :] = 0.0
 
-        power = np.abs(self.h_doppler_delay)**2
+        power = np.abs(self.h_doppler_delay) ** 2
         total_power = np.sum(power)
-        scale_factor = np.sqrt(initial_total_power/total_power)
+        scale_factor = np.sqrt(initial_total_power / total_power)
         print(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
         self.h_doppler_delay *= scale_factor
 
@@ -578,7 +581,10 @@ class CyclicSolver:
         """
         if kwargs.pop("restart", False):
             self.nopt = 0
-        savefile = kwargs.pop("savebase", os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop))
+        savefile = kwargs.pop(
+            "savebase",
+            os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop),
+        )
 
         if "savedir" in kwargs:
             kwargs["savedir"]
@@ -600,8 +606,7 @@ class CyclicSolver:
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
 
-    def updateProfileSubint(self,isub):
-
+    def updateProfileSubint(self, isub):
         for ipol in range(self.npol):
             if self.save_cyclic_spectra:
                 cs = self.cyclic_spectra[isub, ipol]
@@ -626,8 +631,8 @@ class CyclicSolver:
 
             ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
 
-            self.ph_numer[ipol,isub] = ph_numer
-            self.ph_denom[ipol,isub] = ph_denom
+            self.ph_numer[ipol, isub] = ph_numer
+            self.ph_denom[ipol, isub] = ph_denom
 
             if update_gain:
                 self.optimal_gains[isub] = gain
@@ -635,7 +640,7 @@ class CyclicSolver:
             if self.omit_dc:
                 ph[0] = 0.0
             if self.maxinitharm:
-                ph[self.maxinitharm:] = 0.0
+                ph[self.maxinitharm :] = 0.0
             pp = harm2phase(ph)
 
             if self.iprint:
@@ -664,7 +669,7 @@ class CyclicSolver:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
 
         if self.shift_phasors is None:
-            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -675,7 +680,7 @@ class CyclicSolver:
             for isub in range(self.nspec):
                 executor.submit(self.updateProfileSubint, isub)
 
-        self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0,1))
+        self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0, 1))
 
         if self.compute_scattered_profile:
             self.pp_scattered = np.average(self.scattered_profiles, axis=0)
@@ -700,8 +705,8 @@ class CyclicSolver:
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol]) ** 2
 
         # sum over all polarizations and sub-integrations
-        ph_numer = np.average(self.ph_numer, axis=(0,1))
-        ph_denom = np.average(self.ph_denom, axis=(0,1))
+        ph_numer = np.average(self.ph_numer, axis=(0, 1))
+        ph_denom = np.average(self.ph_denom, axis=(0, 1))
         self.pp_intrinsic = harm2phase(ph_numer / ph_denom) * mean_gain
         print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
@@ -727,10 +732,9 @@ class CyclicSolver:
         return self.merit, np.copy(self.h_doppler_delay_grad)
 
     def get_cs(self, ps):
-
         # cast single-precision input data to double-precision before computing the Fourier transform
         tmp = np.zeros(ps.shape, dtype=np.float64)
-        tmp[:,:] = ps[:,:]
+        tmp[:, :] = ps[:, :]
 
         cs = ps2cs(tmp)
 
@@ -753,18 +757,17 @@ class CyclicSolver:
         return h_doppler_delay
 
     def updateWavefieldSubint(self, ipol, isub):
-
         if self.save_cyclic_spectra:
             cs = self.cyclic_spectra[isub, ipol]
         else:
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-            cs = self.get_cs(ps)
+            cs, norm = self.get_cs(ps)
 
         if self.use_integrated_profile:
             s0 = self.s0
         else:
-            ph_numer = self.ph_numer[ipol,isub]
-            ph_denom = self.ph_denom[ipol,isub]
+            ph_numer = self.ph_numer[ipol, isub]
+            ph_denom = self.ph_denom[ipol, isub]
             s0 = ph_numer / ph_denom
 
         ht = self.h_time_delay[isub]
@@ -788,7 +791,6 @@ class CyclicSolver:
 
         return _merit, _nterm
 
-        
     def updateWavefield(self, h_doppler_delay):
         self.normalize(h_doppler_delay)
 
@@ -806,7 +808,9 @@ class CyclicSolver:
             np.copyto(
                 h_doppler_delay,
                 apply_shrinkage_threshold(
-                    h_doppler_delay, self.noise_shrinkage_threshold, self.noise_smoothing_kernel
+                    h_doppler_delay,
+                    self.noise_shrinkage_threshold,
+                    self.noise_smoothing_kernel,
                 ),
             )
 
@@ -826,7 +830,7 @@ class CyclicSolver:
             h_doppler_delay *= self.delay_taper
 
         if self.doppler_taper is not None:
-            h_doppler_delay *= self.doppler_taper[:,np.newaxis]
+            h_doppler_delay *= self.doppler_taper[:, np.newaxis]
 
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
@@ -839,8 +843,10 @@ class CyclicSolver:
                     phasor /= np.abs(phasor)
                     ht *= np.conj(phasor)
                 hf = time2freq(ht)
-                if isub > 0:
-                    z = (np.conj(hf) * hf_prev).sum()
+                if isub == 0:
+                    hf0 = np.copy(hf)
+                else:
+                    z = (np.conj(hf) * hf0).sum()
                     z /= np.abs(z)
                     hf *= z
                 self.h_time_delay[isub] = freq2time(hf)
@@ -850,9 +856,8 @@ class CyclicSolver:
             z = (h_doppler_delay * h_doppler_delay).sum()
             ph = z / np.abs(z)
             ph = np.sqrt(ph)
-            print(
-                f"enforce_orthogonal_real_imag z={z} ph={ph} abs(h_doppler_delay[0,0])={np.abs(h_doppler_delay[0,0])}"
-            )
+            abs_origin = np.abs(h_doppler_delay[0, 0])
+            print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
             h_doppler_delay *= np.conj(ph)
 
         np.copyto(self.h_doppler_delay, h_doppler_delay)
@@ -867,23 +872,23 @@ class CyclicSolver:
 
         phasor = 1.0 + 0.0j
 
-        self.h_time_delay_grad[:,:] = 0.0 + 0.0j
+        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
 
         if self.shift_phasors is None:
-            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm,self.bw, self.ref_freq)
+            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
         for ipol in range(self.npol):
-
             self.s0 = self.intrinsic_ph[ipol]
             self.ph_ref = self.intrinsic_ph[ipol]
-        
+
             self.h_time_delay = freq2time(self.h_doppler_delay)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+                future_subint = {
+                    executor.submit(self.updateWavefieldSubint, ipol, isub): isub
+                    for isub in range(self.nspec)
+                }
 
-                future_subint = {executor.submit(self.updateWavefieldSubint,ipol,isub):
-                                    isub for isub in range(self.nspec)}
-                
                 for future in concurrent.futures.as_completed(future_subint):
                     isub = future_subint[future]
                     try:
@@ -892,7 +897,7 @@ class CyclicSolver:
                         self.nterm_merit += _nterm
 
                     except Exception as exc:
-                        print(f'updateWavefieldSubint isub={isub} exception: {exc}')
+                        print(f"updateWavefieldSubint isub={isub} exception: {exc}")
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
 
@@ -903,9 +908,7 @@ class CyclicSolver:
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
-
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
-
         hfplus, hfminus = shift_spectrum(hf, self.shift_phasors)
 
         # cs H(-)H(+)*
@@ -931,7 +934,6 @@ class CyclicSolver:
         s0 = ph_numer / ph_denom
         s0[np.real(ph_denom) <= 0.0] = 0
         return s0, gain, ph_numer, ph_denom
-
 
     def loop(
         self,
@@ -964,7 +966,7 @@ class CyclicSolver:
             uses convergence criteria from original filter_profile.
             Try 10 for less stringent (faster) convergence
         iprint: int
-            Passed to scipy.optimize.fmin_l_bfgs (see docs)
+            Passed to scipy.optimize.fmin_l_bfgs_b (see docs)
             use 0 for silent, 1 for verbose, 2 for more log info
 
         max_plot_lag: highest lag to plot in diagnostic plots.
@@ -982,15 +984,19 @@ class CyclicSolver:
             if not os.path.exists(plotdir):
                 try:
                     os.mkdir(plotdir)
-                except:
+                except Exception:
                     print("Warning: couldn't make", plotdir, "not plotting")
                     self.make_plots = False
             self.plotdir = plotdir
 
         self.isub = isub
         self.iprint = iprint
-        ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
-        cs = self.get_cs(ps)
+
+        if self.save_cyclic_spectra:
+            cs = self.cyclic_spectra[isub, ipol]
+        else:
+            ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
+            cs, norm = self.get_cs(ps)
 
         if hf_prev is None:
             _hf_prev = self.hf_prev
@@ -1106,7 +1112,8 @@ class CyclicSolver:
         self.optimized_filters[isub, :] = hf
         self.hf_prev = hf.copy()
 
-        ph = self.optimize_profile(cs, hf, self.bw, self.ref_freq)
+        update_gain = False
+        ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
 
         if self.omit_dc:
             ph[0] = 0.0
@@ -1187,7 +1194,7 @@ class CyclicSolver:
         self.statefile = orig_statefile
         print("Saved state in:", filename)
 
-    def plotCurrentSolution(self,plot_cs):
+    def plotCurrentSolution(self, plot_cs):
         cs_model = self.model
         grad = self.grad
         hf = self.hf
@@ -1197,7 +1204,10 @@ class CyclicSolver:
         ax1 = fig.add_subplot(3, 3, 1)
         csextent = [1, mlag - 1, self.rf + self.bw / 2.0, self.rf - self.bw / 2.0]
         im = ax1.imshow(
-            np.log10(np.abs(plot_cs[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent
+            np.log10(np.abs(plot_cs[:, 1:mlag])),
+            aspect="auto",
+            interpolation="nearest",
+            extent=csextent,
         )
         # im = ax1.imshow(cs2ps(plot_cs),aspect='auto',interpolation='nearest',extent=csextent)
         ax1.set_xlim(0, mlag)
@@ -1239,7 +1249,10 @@ class CyclicSolver:
             tl.set_visible(False)
         ax2 = fig.add_subplot(3, 3, 4)
         im = ax2.imshow(
-            np.log10(np.abs(cs_model[:, 1:mlag])), aspect="auto", interpolation="nearest", extent=csextent
+            np.log10(np.abs(cs_model[:, 1:mlag])),
+            aspect="auto",
+            interpolation="nearest",
+            extent=csextent,
         )
         # im = ax2.imshow(cs2ps(cs_model),aspect='auto',interpolation='nearest',extent=csextent)
         im.set_clim(-4, 2)
@@ -1279,7 +1292,7 @@ class CyclicSolver:
         )
         for tl in ax2b.yaxis.get_ticklabels():
             tl.set_visible(False)
-        sopt = self.optimize_profile(plot_cs, hf, self.bw, self.ref_freq)
+        sopt, gain, ph_numer, ph_denom = self.optimize_profile(plot_cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
 
         if self.omit_dc:
@@ -1317,7 +1330,6 @@ class CyclicSolver:
             interpolation="nearest",
             extent=csextent,
         )
-        # im = ax3b.imshow((plot_cs[:,:mlag]-cs_model[:,:mlag]).imag,aspect='auto',interpolation='nearest',extent=csextent)
         im.set_clim(-np.pi / 2.0, np.pi / 2.0)
         ax3b.set_xlim(0, mlag)
         ax3b.text(
@@ -1372,10 +1384,22 @@ class CyclicSolver:
         f = np.linspace(self.rf + self.bw / 2.0, self.rf - self.bw / 2.0, self.nchan)
         ax4b.plot(f, np.abs(hf))
         ax4b.text(
-            0.9, 0.9, "|H(f)|", fontdict=dict(size="small"), va="top", ha="right", transform=ax4b.transAxes
+            0.9,
+            0.9,
+            "|H(f)|",
+            fontdict=dict(size="small"),
+            va="top",
+            ha="right",
+            transform=ax4b.transAxes,
         )
         ax4b.text(
-            0.95, 0.01, "MHz", fontdict=dict(size="small"), va="bottom", ha="right", transform=ax4b.transAxes
+            0.95,
+            0.01,
+            "MHz",
+            fontdict=dict(size="small"),
+            va="bottom",
+            ha="right",
+            transform=ax4b.transAxes,
         )
         ax4b.set_xlim(f.min(), f.max())
         ax4b.xaxis.set_major_locator(plt.MaxNLocator(4))
@@ -1397,8 +1421,8 @@ class CyclicSolver:
         ax6.plot(pref, label="Reference", linewidth=2)
         ax6.plot(harm2phase(sopt), "r", label="Intrinsic")
         ax6.plot(harm2phase(smeas), "g", label="Measured")
-        l = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
-        l.get_frame().set_alpha(0.5)
+        legend = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
+        legend.get_frame().set_alpha(0.5)
         ax6.set_xlim(0, pref.shape[0])
         fname = self.filename[-50:]
         if len(self.filename) > 50:
@@ -1435,8 +1459,8 @@ def plotSimulation(CS, mlag=100):
     ax1 = fig.add_subplot(3, 3, 1)
     ax1.plot(f, np.abs(hf), label=r"|$\hat{H}(f)$|")
     ax1.plot(f, np.abs(hf0), label="|$H$(f)|")
-    l = ax1.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax1.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax1.text(
         0.9,
         0.1,
@@ -1452,9 +1476,14 @@ def plotSimulation(CS, mlag=100):
 
     ax2 = fig.add_subplot(3, 3, 4)
     ax2.plot(f, np.abs(hf / hf0), label=r"$\left|\frac{\hat{H}(f)}{H(f)}\right|$")
-    ax2.plot(f, np.angle(hf / hf0), alpha=0.7, label=r"$\angle\left(\frac{\hat{H}(f)}{H(f)}\right)$")
-    l = ax2.legend(loc="lower left", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    ax2.plot(
+        f,
+        np.angle(hf / hf0),
+        alpha=0.7,
+        label=r"$\angle\left(\frac{\hat{H}(f)}{H(f)}\right)$",
+    )
+    legend = ax2.legend(loc="lower left", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax2.text(
         0.9,
         0.1,
@@ -1479,11 +1508,17 @@ def plotSimulation(CS, mlag=100):
     ax3.plot(pt, fftshift(CS.pp_meas), "r", label="measured")
     ax3.plot(pt, fftshift(CS.pp_intrinsic), "cyan", alpha=0.7, label="deconvolved")
     ax3.plot(pt, fftshift(harm2phase(CS.s0)), "k", label="original")
-    ax3.errorbar([pt[len(pt) / 4]], [CS.pp_meas.max() / 2.0], xerr=CS.tau / 1e3, capsize=5, linewidth=2)
+    ax3.errorbar(
+        [pt[len(pt) / 4]],
+        [CS.pp_meas.max() / 2.0],
+        xerr=CS.tau / 1e3,
+        capsize=5,
+        linewidth=2,
+    )
     ax3.text(pt[len(pt) / 4], CS.pp_meas.max() * 0.55, "tau", fontdict=dict(size="small"))
     ax3.set_xlim(0, pt[-1])
-    l = ax3.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax3.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax3.text(
         0.9,
         0.1,
@@ -1519,7 +1554,11 @@ def plotSimulation(CS, mlag=100):
     #    im = ax5.imshow(np.abs(CS.cs[:,:mlag]/cs0[:,:mlag]),
     #                     aspect='auto',interpolation='nearest',extent=csextent)
     #    im.set_clim(0.5,2)
-    ax5.plot(t / 1e3, fftshift(20 * np.log10(np.abs(ht0) / np.abs(ht0).max())), label="dB($|h(t)|^2$)")
+    ax5.plot(
+        t / 1e3,
+        fftshift(20 * np.log10(np.abs(ht0) / np.abs(ht0).max())),
+        label="dB($|h(t)|^2$)",
+    )
     ax5.plot(
         t / 1e3,
         fftshift(20 * np.log10(np.abs(ht) / np.abs(ht).max())) - 40.0,
@@ -1528,8 +1567,8 @@ def plotSimulation(CS, mlag=100):
     )
     ax5.set_ylim(-80.0, 0)
     ax5.set_xlim(0, t[-1] / 1e3)
-    l = ax5.legend(loc="upper left", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax5.legend(loc="upper left", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax5.text(
         0.9,
         0.1,
@@ -1551,15 +1590,20 @@ def plotSimulation(CS, mlag=100):
     #    ax8.set_ylim(-80.,0)
 
     ax8.plot(t - maxt, fftshift((np.abs(ht0) / np.abs(ht0).max())), label="$|h(t)|$")
-    ax8.plot(t - maxt, fftshift((np.abs(ht) / np.abs(ht).max())), "r", label=r"$|\hat{h}(t)|$")
+    ax8.plot(
+        t - maxt,
+        fftshift((np.abs(ht) / np.abs(ht).max())),
+        "r",
+        label=r"$|\hat{h}(t)|$",
+    )
 
     left = -5 * CS.tau
     right = 20 * CS.tau
     if right > t[-1] - maxt:
         right = t[-1] - maxt
     ax8.set_xlim(left, right)
-    l = ax8.legend(loc="upper right", prop=dict(size="x-small"))
-    l.get_frame().set_alpha(0.5)
+    legend = ax8.legend(loc="upper right", prop=dict(size="x-small"))
+    legend.get_frame().set_alpha(0.5)
     ax8.set_xlabel(r"$\mu$s")
 
     ax6 = fig.add_subplot(3, 3, 6)
@@ -1584,7 +1628,10 @@ def plotSimulation(CS, mlag=100):
 
     ax7 = fig.add_subplot(3, 3, 7)
     im = ax7.imshow(
-        np.log10(np.abs(CS.cs[:, :mlag])), aspect="auto", interpolation="nearest", extent=csextent
+        np.log10(np.abs(CS.cs[:, :mlag])),
+        aspect="auto",
+        interpolation="nearest",
+        extent=csextent,
     )
     ax7.text(
         0.9,
@@ -1601,7 +1648,11 @@ def plotSimulation(CS, mlag=100):
 
     ax9 = fig.add_subplot(3, 3, 9)
     im = ax9.imshow(
-        np.angle(CS.cs[:, :mlag]), cmap="hsv", aspect="auto", interpolation="nearest", extent=csextent
+        np.angle(CS.cs[:, :mlag]),
+        cmap="hsv",
+        aspect="auto",
+        interpolation="nearest",
+        extent=csextent,
     )
 
     ax9.text(
@@ -1639,7 +1690,8 @@ def plotSimulation(CS, mlag=100):
     fig.suptitle(title, size="small")
     canvas = FigureCanvasAgg(fig)
     fname = os.path.join(
-        CS.plotdir, ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter))
+        CS.plotdir,
+        ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter)),
     )
     canvas.print_figure(fname)
 
@@ -1674,15 +1726,21 @@ def loadArray(fname):
     fh = open(fname, "r")
     try:
         x = int(fh.readline())
-    except:
+    except Exception:
         raise Exception("couldn't read first dimension")
     try:
         y = int(fh.readline())
-    except:
+    except Exception:
         raise Exception("couldn't read second dimension")
     raw = np.loadtxt(fh)
     if raw.shape[0] != x * y:
-        raise Exception("number of rows of data=", raw.shape[0], " not equal to product of dimensions:", x, y)
+        raise Exception(
+            "number of rows of data=",
+            raw.shape[0],
+            " not equal to product of dimensions:",
+            x,
+            y,
+        )
     if len(raw.shape) > 1:
         data = raw[:, 0] + raw[:, 1] * 1j
     else:
@@ -1839,7 +1897,7 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
 
     var_noise = delay_noise_power_wavefield(x_power, baseline_threshold)
     shrinkage = np.sqrt(var_noise) * threshold
-    
+
     # add a small offset to absx to avoid division by zero in next step
     absx = np.abs(x) + shrinkage * 1e-6
     out = np.maximum(absx - shrinkage, 0) * x / absx
@@ -1862,8 +1920,7 @@ def normalize_pp(pp):
     """
     ph = phase2harm(pp)
     ph = normalize_profile(ph)
-    if self.omit_dc:
-        ph[0] = 0
+    ph[0] = 0
     return harm2phase(ph)
 
 
@@ -1878,30 +1935,29 @@ def noise_power_wavefield(h_power):
 
 
 def delay_noise_power_wavefield(power, threshold):
-
     bias = 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
     # print(f"delay_noise_power_wavefield threshold={threshold} bias={bias}")
 
     ndoppler = power.shape[0]
-    ndelay = power.shape[1]
+    power.shape[1]
     # print(f"delay_noise_power_wavefield ndelay={ndelay} ndoppler={ndoppler}")
 
-    # for the initial estimate of noise power as a function of delay, 
+    # for the initial estimate of noise power as a function of delay,
     # extract a 10-doppler-shift-wide strip at the +/- extrema of Doppler shift
     # (where signal is expected to be low)
-    width=10
-    min=(ndoppler-width)//2
-    max=(ndoppler+width)//2
-    edge = power[min:max,:]
+    width = 10
+    min = (ndoppler - width) // 2
+    max = (ndoppler + width) // 2
+    edge = power[min:max, :]
 
     sum_edge = np.sum(edge, axis=0)
-    count_edge = np.maximum(np.count_nonzero(edge, axis=0),1)
+    count_edge = np.maximum(np.count_nonzero(edge, axis=0), 1)
 
     masked_delay_power = sum_edge / count_edge
     for i in range(10):
         masked = np.heaviside(threshold * masked_delay_power - power, 1) * power
-        sum_masked = np.sum(masked,axis=0)
-        count_masked = np.maximum(np.count_nonzero(masked, axis=0),1)
+        sum_masked = np.sum(masked, axis=0)
+        count_masked = np.maximum(np.count_nonzero(masked, axis=0), 1)
         masked_delay_power = sum_masked / (bias * count_masked)
 
     return masked_delay_power
@@ -1972,7 +2028,10 @@ def create_shift_phasors(nchan, nharm, bw_MHz, freq_Hz):
 
     Returns
     ------
-        $\exp(i pi \tau_j \alpha_k)$, where i=sqrt(-1), j = row index and k = column index
+    .. math::
+        exp(i pi \tau_j \alpha_k)
+
+    where i=sqrt(-1), j = row index, and k = column index
     """
 
     # tau[j] in seconds
@@ -1998,18 +2057,18 @@ def shift_spectrum(spectrum, phasors):
 
     # copy the spectrum for each shift for each harmonic
     spectra = np.repeat(tmp[:, np.newaxis], nharm, axis=1)
-    return fft(spectra*np.conj(phasors),axis=0), fft(spectra*phasors,axis=0)
+    return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
 
 
 def make_model_cs(hf, s0, bw, ref_freq, phasors):
     nchan = hf.shape[0]
-    nharm = s0.shape[0]
+    s0.shape[0]
     # profile2cs
     cs = np.repeat(
         s0[np.newaxis, :], nchan, axis=0
     )  # fill the cs model with the harmonic profile for each freq chan
 
-    hfplus, hfminus = shift_spectrum(hf,phasors)
+    hfplus, hfminus = shift_spectrum(hf, phasors)
 
     cs = cs * hfplus * np.conj(hfminus)
 
@@ -2054,7 +2113,7 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
+    merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
@@ -2064,7 +2123,6 @@ def cyclic_merit_lag(x, CS):
 
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
-
     hf = time2freq(ht)
     cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shift_phasors)
     cs_model *= gain
@@ -2072,11 +2130,11 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
-    extract = cs_model[:,CS.omit_dc:]
+    extract = cs_model[:, CS.omit_dc :]
     nonzero = np.count_nonzero(extract)
 
     # WDvS13 Equation 19 and eqn:merit_function of appendix
-    merit = (np.abs(extract - cs_data[:,CS.omit_dc:]) ** 2).sum()
+    merit = (np.abs(extract - cs_data[:, CS.omit_dc :]) ** 2).sum()
 
     # residual, R = model - data
     diff = cs_model - cs_data
@@ -2086,12 +2144,12 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
 
     cc1 = cs2cc(diff * hfminus)
-    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan # WDvS Equation 37
-    grad = grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics
+    grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan  # WDvS Equation 37
+    grad = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
-    grad += grad2[:,CS.omit_dc:].sum(1)  # sum over all harmonics
+    grad += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
@@ -2100,7 +2158,6 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
-
     # Get the shape of the input array
     shape = input_array.shape
 

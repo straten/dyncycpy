@@ -2,27 +2,27 @@
 # coding: utf-8
 
 import pickle
-import time
 import sys
+import time
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.fft import fftshift
 
 import fista
 import pycyc
 from plotting import plot_intrinsic_vs_observed
 
 mpl.rcParams["image.aspect"] = "auto"
-from scipy.fft import fftshift
 
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
 CS.nthread = 8
 CS.save_cyclic_spectra = True
 
-CS.use_integrated_profile = False
-CS.model_gain_variations = False
+CS.use_integrated_profile = True
+CS.model_gain_variations = True
 
 CS.enforce_causality = 8
 
@@ -96,7 +96,7 @@ min_step_factor = 0.5
 for i in range(1000):
     CS.nopt += 1
 
-    if i < update_profile_every_iteration_until or (i+1) % update_profile_period == 0:
+    if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
         print("cycfista: update profile")
         CS.updateProfile()
 
@@ -153,7 +153,7 @@ for i in range(1000):
             fig.colorbar(img)
             fig.savefig(base + "_wavefield.png")
             plt.close()
-        except:
+        except Exception:
             print("##################################### wavefield plot failed")
         with open(base + "_wavefield.pkl", "wb") as fh:
             pickle.dump(x_n, fh)
@@ -163,7 +163,7 @@ for i in range(1000):
             ax.plot(CS.optimal_gains)
             fig.savefig(base + "_optimal_gains.png")
             plt.close()
-        except:
+        except Exception:
             print("##################################### optimal gains plot failed")
         with open(base + "_optimal_gains.pkl", "wb") as fh:
             pickle.dump(CS.optimal_gains, fh)
@@ -173,7 +173,7 @@ for i in range(1000):
             ax.plot(np.log10(np.sum(np.abs(x_n) ** 2, axis=0)))
             fig.savefig(base + "_impulse_response.png")
             plt.close()
-        except:
+        except Exception:
             print("##################################### impulse response plot failed")
 
         plot_intrinsic_vs_observed(CS, pp_scattered, base + "_compare.png")
