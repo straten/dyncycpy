@@ -24,7 +24,7 @@ CS.save_cyclic_spectra = True
 CS.use_integrated_profile = True
 CS.model_gain_variations = True
 
-CS.enforce_causality = 8
+CS.enforce_causality = 0
 
 # Number of iterations between profile updates
 update_profile_period = 10

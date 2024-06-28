@@ -454,8 +454,17 @@ class CyclicSolver:
         self.hf_prev = hf_prev
 
         self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-        self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.nchan)
+        self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.nchan * self.nspec)
+        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
 
+        # ensure that delta-function yields expected frequency response at all times
+        for isub in range(self.nspec):
+            ht = self.h_time_delay[isub]
+            hf = time2freq(ht)
+            for ichan in range(self.nchan):
+                if np.abs(hf[ichan] - 1.0) > 1e-6:
+                    print(f'unexpected initial response[{ichan}]={hf[ichan]}')
+        
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_doppler_delay.shape)
@@ -486,7 +495,6 @@ class CyclicSolver:
         if self.first_wavefield_from_best_harmonic:
             self.compute_first_wavefield_from_best_harmonic()
 
-        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
         self.first_harmonic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan), dtype=np.complex128)
         self.optimized_filters = np.zeros((self.nsubint, self.nchan), dtype=np.complex128)
@@ -750,7 +758,7 @@ class CyclicSolver:
     def normalize(self, h_doppler_delay):
         if self.conserve_wavefield_energy:
             total_power = np.sum(np.abs(h_doppler_delay) ** 2)
-            expected_power = self.nchan**2
+            expected_power = self.nchan * self.nspec
             factor = np.sqrt(expected_power / total_power)
             h_doppler_delay *= factor
             # print(f'normalize factor={factor}')
