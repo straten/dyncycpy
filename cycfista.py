@@ -75,7 +75,11 @@ x_n = np.copy(CS.h_doppler_delay)
 t_n = 1
 
 demerits = np.array([])
-alpha = 20.0
+alphas = np.array([])
+
+# use the minimum of the last three estimates
+alpha_history = 3
+alpha = 0.1
 
 best_merit = CS.get_reduced_chisq()
 best_x = np.copy(x_n)
@@ -135,16 +139,22 @@ for i in range(1000):
     if CS.get_reduced_chisq() > prev_merit:
         print("**** bad step")
 
-    alpha = 1.0 / L_max
+    alphas = np.append(alphas, 1.0 / L)
+
+    if alphas.size < alpha_history:
+        alpha = np.min(alphas)
+    else:
+        alpha = np.min(alphas[-alpha_history:])
+
     prev_merit = CS.get_reduced_chisq()
 
-    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} t_n={t_n}")
+    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
 
     elapsed_time = end_time - start_time
     print(f"Elapsed time: {elapsed_time/60} min", flush=True)
 
-    if i % 10 == 0:
+    if i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:

@@ -146,7 +146,7 @@ class CyclicSolver:
         self.intrinsic_ph_sumsq = None
         self.pp_scattered = None
         self.pp_intrinsic = None
-        self.shift_phasors = None
+        self.shear_phasors = None
         self.cs_norm = None
 
         self.iprint = False
@@ -249,9 +249,9 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs, a, b = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shift_phasors)
+        cs = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shear_phasors)
 
-        return cs
+        return cs[0]
 
     def load(self, filename):
         """
@@ -526,9 +526,9 @@ class CyclicSolver:
 
             # first, take a slice of noise at extreme Doppler shift
             width = 10
-            min = (self.nspec - width) // 2
-            max = (self.nspec + width) // 2
-            noise_slice = power[min:max, :]
+            imin = (self.nspec - width) // 2
+            imax = (self.nspec + width) // 2
+            noise_slice = power[imin:imax, :]
 
             noise_power = np.mean(noise_slice)
             total_power = np.mean(power)
@@ -545,8 +545,8 @@ class CyclicSolver:
 
         # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
         log_sum = 0
-        for i in {-1, 0, 1}:
-            for j in {-1, 0, 1}:
+        for i in [-1, 0, 1]:
+            for j in [-1, 0, 1]:
                 if i != 0 or j != 0:
                     log_sum += np.log10(power[i, j])
         log_mean = log_sum / 8
@@ -586,8 +586,6 @@ class CyclicSolver:
             os.path.abspath(self.filename) + ("_%02d.cysolve.pkl" % self.nloop),
         )
 
-        if "savedir" in kwargs:
-            kwargs["savedir"]
         for isub in range(self.nsubint):
             kwargs["isub"] = isub
             self.loop(**kwargs)
@@ -600,8 +598,7 @@ class CyclicSolver:
         # while experimenting with maxharm, nfree can be greater than nterm
         if self.nfree_parameters < self.nterm_merit:
             return self.nterm_merit - self.nfree_parameters
-        else:
-            return 1
+        return 1
 
     def get_reduced_chisq(self):
         return self.merit / self.get_dof()
@@ -668,8 +665,8 @@ class CyclicSolver:
         if self.cs_norm is None:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
 
-        if self.shift_phasors is None:
-            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
+        if self.shear_phasors is None:
+            self.shear_phasors = create_shear_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
@@ -777,7 +774,7 @@ class CyclicSolver:
 
         _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
 
-        if self.enforce_causality > 0:
+        if self.enforce_causality:
             half_nchan = self.nchan // 2
             grad[half_nchan:] = 0
 
@@ -874,8 +871,8 @@ class CyclicSolver:
 
         self.h_time_delay_grad[:, :] = 0.0 + 0.0j
 
-        if self.shift_phasors is None:
-            self.shift_phasors = create_shift_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
+        if self.shear_phasors is None:
+            self.shear_phasors = create_shear_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
         for ipol in range(self.npol):
             self.s0 = self.intrinsic_ph[ipol]
@@ -899,7 +896,7 @@ class CyclicSolver:
                     except Exception as exc:
                         print(f"updateWavefieldSubint isub={isub} exception: {exc}")
 
-        self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
+        self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad) * self.nsubint
 
         align_phase_gradient = False
         if align_phase_gradient:
@@ -909,7 +906,7 @@ class CyclicSolver:
             self.h_doppler_delay_grad *= phasor
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
-        hfplus, hfminus = shift_spectrum(hf, self.shift_phasors)
+        hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
 
         # cs H(-)H(+)*
         cshmhp = cs * hfminus * np.conj(hfplus)
@@ -2018,7 +2015,7 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
     return (ichan, nchan - ichan)  # min,max
 
 
-def create_shift_phasors(nchan, nharm, bw_MHz, freq_Hz):
+def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """Construct the two-dimensional array of phasors used to shift the spectral response function
 
     Specifically, returns exp(i pi \tau_j \alpha_k)
@@ -2046,7 +2043,7 @@ def create_shift_phasors(nchan, nharm, bw_MHz, freq_Hz):
     return np.exp(1j * np.pi * np.outer(tau, alpha))
 
 
-def shift_spectrum(spectrum, phasors):
+def shear_spectra(spectrum, phasors):
     """Shifts the spectrum for each column of phasors
 
     Parameters
@@ -2072,7 +2069,7 @@ def make_model_cs(hf, s0, bw, ref_freq, phasors):
         s0[np.newaxis, :], nchan, axis=0
     )  # fill the cs model with the harmonic profile for each freq chan
 
-    hfplus, hfminus = shift_spectrum(hf, phasors)
+    hfplus, hfminus = shear_spectra(hf, phasors)
 
     cs = cs * hfplus * np.conj(hfminus)
 
@@ -2128,7 +2125,7 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shift_phasors)
+    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors)
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -2142,7 +2139,7 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     # residual, R = model - data
     diff = cs_model - cs_data
-    phasors = CS.shift_phasors
+    phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
     cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
