@@ -78,7 +78,7 @@ demerits = np.array([])
 alphas = np.array([])
 
 # use the minimum of the last three estimates
-alpha_history = 3
+alpha_history = 0
 alpha = 0.1
 
 best_merit = CS.get_reduced_chisq()
@@ -141,7 +141,7 @@ for i in range(1000):
 
     alphas = np.append(alphas, 1.0 / L)
 
-    if alphas.size < alpha_history:
+    if alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
