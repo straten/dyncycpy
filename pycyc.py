@@ -166,7 +166,7 @@ class CyclicSolver:
         self.omit_dc = 1
 
         # maintain constant total power in the wavefield
-        self.conserve_wavefield_energy = True
+        self.conserve_wavefield_energy = False
 
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
@@ -671,7 +671,21 @@ class CyclicSolver:
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
 
+        self.normalize(self.h_doppler_delay)
+
         self.h_time_delay = freq2time(self.h_doppler_delay)
+
+        if self.reduce_temporal_phase_noise:
+            self.minimize_temporal_phase_noise(self.h_time_delay)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
+        if self.enforce_orthogonal_real_imag:
+            z = (self.h_doppler_delay * self.h_doppler_delay).sum()
+            ph = z / np.abs(z)
+            ph = np.sqrt(ph)
+            abs_origin = np.abs(self.h_doppler_delay[0, 0])
+            print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
+            self.h_doppler_delay *= np.conj(ph)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
             for isub in range(self.nspec):
@@ -778,18 +792,11 @@ class CyclicSolver:
             half_nchan = self.nchan // 2
             grad[half_nchan:] = 0
 
-        if self.reduce_temporal_phase_noise_grad and isub > 0:
-            prev_grad = self.h_time_delay_grad[0]
-            z = (np.conj(grad) * prev_grad).sum()
-            z /= np.abs(z)
-            grad *= z
-
         self.h_time_delay_grad[isub, :] += grad
 
         return _merit, _nterm
 
     def updateWavefield(self, h_doppler_delay):
-        self.normalize(h_doppler_delay)
 
         rms_noise = rms_wavefield(h_doppler_delay)
 
@@ -830,33 +837,6 @@ class CyclicSolver:
             h_doppler_delay *= self.doppler_taper[:, np.newaxis]
 
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
-
-        if self.reduce_temporal_phase_noise:
-            print("reduce_temporal_phase_noise")
-            for isub in range(self.nspec):
-                ht = self.h_time_delay[isub]
-                if isub == 0:
-                    phasor = ht[0]
-                    phasor /= np.abs(phasor)
-                    ht *= np.conj(phasor)
-                hf = time2freq(ht)
-                if isub == 0:
-                    hf0 = np.copy(hf)
-                else:
-                    z = (np.conj(hf) * hf0).sum()
-                    z /= np.abs(z)
-                    hf *= z
-                self.h_time_delay[isub] = freq2time(hf)
-            np.copyto(h_doppler_delay, time2freq(self.h_time_delay, axis=0))
-
-        if self.enforce_orthogonal_real_imag:
-            z = (h_doppler_delay * h_doppler_delay).sum()
-            ph = z / np.abs(z)
-            ph = np.sqrt(ph)
-            abs_origin = np.abs(h_doppler_delay[0, 0])
-            print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
-            h_doppler_delay *= np.conj(ph)
-
         np.copyto(self.h_doppler_delay, h_doppler_delay)
 
         nonzero = np.count_nonzero(h_doppler_delay)
@@ -896,6 +876,9 @@ class CyclicSolver:
                     except Exception as exc:
                         print(f"updateWavefieldSubint isub={isub} exception: {exc}")
 
+        if self.reduce_temporal_phase_noise_grad:
+            self.minimize_temporal_phase_noise(self.h_time_delay_grad)
+
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad) * self.nsubint
 
         align_phase_gradient = False
@@ -904,6 +887,22 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
+
+
+    def minimize_temporal_phase_noise(self, x):
+        xprev = x[0]
+        zero = 1.0 + 0.0j
+        power = 0.0
+        for isub in range(1, self.nspec):
+            z = (np.conj(x[isub]) * xprev).sum()
+            z /= np.abs(z)
+            x[isub] *= z
+            diff = z - zero
+            power += np.abs(diff)**2
+            xprev = x[isub]
+
+        power /= (self.nspec - 1)
+        print(f"minimize_temporal_phase_noise power={power}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         hfplus, hfminus = shear_spectra(hf, self.shear_phasors)

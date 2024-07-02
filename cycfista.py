@@ -18,13 +18,26 @@ mpl.rcParams["image.aspect"] = "auto"
 
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
+# use the minimum of the last N estimates of alpha = 1 / Lipschitz
+alpha_history = 10
+
+# solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
+
+# compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
 
+# use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
+
+# include a separate gain variation term for each sub-integration
 CS.model_gain_variations = True
 
+# set h(tau,omega) to zero for tau < 0 for the first N iterations
 CS.enforce_causality = 8
+
+# when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1) 
+CS.reduce_temporal_phase_noise = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -77,8 +90,6 @@ t_n = 1
 demerits = np.array([])
 alphas = np.array([])
 
-# use the minimum of the last three estimates
-alpha_history = 0
 alpha = 0.1
 
 best_merit = CS.get_reduced_chisq()
