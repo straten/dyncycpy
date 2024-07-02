@@ -18,13 +18,26 @@ mpl.rcParams["image.aspect"] = "auto"
 
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
+# use the minimum of the last N estimates of alpha = 1 / Lipschitz
+alpha_history = 10
+
+# solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
+
+# compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
 
-# CS.use_integrated_profile = True
-# CS.model_gain_variations = True
+# use a single integrated profile as the reference profile for each sub-integration
+CS.use_integrated_profile = True
 
-# CS.enforce_causality = 0
+# include a separate gain variation term for each sub-integration
+CS.model_gain_variations = True
+
+# set h(tau,omega) to zero for tau < 0 for the first N iterations
+CS.enforce_causality = 8
+
+# when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1) 
+CS.reduce_temporal_phase_noise = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -75,7 +88,9 @@ x_n = np.copy(CS.h_doppler_delay)
 t_n = 1
 
 demerits = np.array([])
-alpha = 20.0
+alphas = np.array([])
+
+alpha = 0.1
 
 best_merit = CS.get_reduced_chisq()
 best_x = np.copy(x_n)
@@ -135,10 +150,16 @@ for i in range(1000):
     if CS.get_reduced_chisq() > prev_merit:
         print("**** bad step")
 
-    alpha = 1.0 / L_max
+    alphas = np.append(alphas, 1.0 / L)
+
+    if alpha_history == 0 or alphas.size < alpha_history:
+        alpha = np.min(alphas)
+    else:
+        alpha = np.min(alphas[-alpha_history:])
+
     prev_merit = CS.get_reduced_chisq()
 
-    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} t_n={t_n} last alpha={1.0/L}")
+    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
 
     elapsed_time = end_time - start_time
