@@ -8,12 +8,12 @@ import scipy.stats
 import numpy as np
 import psrchive
 
-def plot_four(ps,bw,cf):
+def plot_response(dynamic_response,bw,cf):
 
-    pc = ifft2(ps)
+    delay_Doppler = ifft2(dynamic_response)
 
-    ntime=ps.shape[0]
-    nchan=ps.shape[1]
+    ntime=dynamic_response.shape[0]
+    nchan=dynamic_response.shape[1]
 
     print(f"ntime={ntime} nchan={nchan}")
 
@@ -39,20 +39,20 @@ def plot_four(ps,bw,cf):
     min_delay_mus = 0
     max_delay_mus = nchan / bw
 
-    cmap="bwr"
-
     print(f'min_delay={min_delay_mus} max_delay={max_delay_mus}')
 
     tres = 15 # seconds
     tmax = ntime * tres
     max_omega = 1/tres
 
-    toplot=np.real(ps)
+    toplot=np.real(dynamic_response)
     axs[0].imshow(toplot, aspect="auto", origin="lower", cmap="plasma", extent=[fmin, fmax, 0, tmax])
     axs[0].set(xlabel="Frequency (MHz)", ylabel="Time (s)")
 
-    toplot=np.log(np.abs(pc))
-    axs[1].imshow(toplot, aspect="auto", origin="lower", cmap=cmap, extent=[min_delay_mus, max_delay_mus, 0, max_omega])
+    toplot=np.log10(np.abs(delay_Doppler))
+    max_plot=np.max(toplot,axis=None)
+    min_plot=max_plot - 5
+    axs[1].imshow(toplot, vmin=min_plot, vmax=max_plot, aspect="auto", origin="lower", cmap="binary", interpolation='none', extent=[min_delay_mus, max_delay_mus, 0, max_omega])
     axs[1].set(xlabel="Delay ($\mu$s)", ylabel="Diff. Doppler (Hz)")
 
     filename = "dyn_resp.png"
@@ -72,7 +72,7 @@ def plot_spectra(filename) -> None:
     ntime = ext.get_ntime()
     data = np.reshape(data, (ntime, nchan))
 
-    plot_four(data,bw,cf)
+    plot_response(data,bw,cf)
 
 def main() -> None:
     """Plot the cyclic spectrum in four different ways."""
