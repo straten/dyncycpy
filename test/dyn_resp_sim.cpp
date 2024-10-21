@@ -131,13 +131,15 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
 
 void dyn_res_sim::verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename)
 {
-  auto data = reinterpret_cast<const std::complex<double>*>( ext->get_data().data() );
+  cerr << "dyn_res_sim::verify_output_extension get expected extension data" << endl;
+  auto data = ext->get_data().data();
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
   Reference::To<Pulsar::Archive> test = Pulsar::Archive::load(filename);
   auto test_ext = test->get<Pulsar::DynamicResponse>();
-  auto test_data = reinterpret_cast<std::complex<double>*>( test_ext->get_data().data() );
+  cerr << "dyn_res_sim::verify_output_extension get loaded extension data" << endl;
+  auto test_data = test_ext->get_data().data();
   for (unsigned ichan=0; ichan < nchan; ichan++)
   {
     for (unsigned itime=0; itime < ntime; itime++)
@@ -157,7 +159,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
-  auto data = reinterpret_cast<std::complex<double>*>( ext->get_data().data() );
+  auto data = ext->get_data().data();
 
   for (unsigned ichan=0; ichan < nchan; ichan++)
     for (unsigned itime=0; itime < ntime; itime++)
@@ -268,7 +270,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   delay-Doppler wavefield).
   */
 
-  auto fftin = reinterpret_cast<fftw_complex *>( ext->get_data().data() );
+  auto fftin = reinterpret_cast<fftw_complex*>( ext->get_data().data() );
   auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
@@ -277,7 +279,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
 //! Generate a periodic spectrum for each time sample of the response
 void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext, const Pulsar::Archive* archive)
 {
-  auto data = reinterpret_cast<const std::complex<double>*>( ext->get_data().data() );
+  auto data = ext->get_data().data();
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
@@ -303,7 +305,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   for (unsigned ibin=0; ibin<nbin; ibin++)
     amps[ibin] = f_amps[ibin];
 
-  auto fftin = reinterpret_cast<fftw_complex *>( amps.data() );
+  auto fftin = reinterpret_cast<fftw_complex*>(amps.data());
   auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
@@ -316,8 +318,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   }
 
   vector<std::complex<double>> profile (nbin);
-  fftin = reinterpret_cast<fftw_complex *>( amps.data() );
-  auto fftout = reinterpret_cast<fftw_complex *>( profile.data() );
+  fftin = reinterpret_cast<fftw_complex*>( amps.data() );
+  auto fftout = reinterpret_cast<fftw_complex*>( profile.data() );
   plan = fftw_plan_dft_1d (nbin, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
   vector<std::complex<double>> frequency_response (nchan);
@@ -390,7 +392,6 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   fftw_destroy_plan(fwd_plan);
   fftw_destroy_plan(bwd_plan);
   fftw_destroy_plan(plan);
-
 }
 
 /*!
