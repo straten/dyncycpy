@@ -171,6 +171,9 @@ class CyclicSolver:
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
 
+        # set the wavefield at all Doppler shifts above and below 50% of Nyquist to zero
+        self.low_pass_filter_Doppler = False
+
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
 
@@ -888,6 +891,10 @@ class CyclicSolver:
             self.minimize_temporal_phase_noise(self.h_time_delay_grad)
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
+
+        if self.low_pass_filter_Doppler:
+            quarter_nsub = self.nsubint // 4
+            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub,:] = 0
 
         align_phase_gradient = False
         if align_phase_gradient:
