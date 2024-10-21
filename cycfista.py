@@ -21,6 +21,9 @@ CS = pycyc.CyclicSolver(zap_edges=0.05556)
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
 alpha_history = 10
 
+# should probably estimate this as described in Oslowski & Walker (2023)
+alpha_init = 0.001
+
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
 
@@ -34,7 +37,10 @@ CS.use_integrated_profile = True
 CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 8
+CS.enforce_causality = 35
+
+# set h(tau,omega) to zero for |omega| > 0.5*omega_Nyq for the first N iterations
+CS.low_pass_filter_Doppler = 35
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1) 
 CS.reduce_temporal_phase_noise = True
@@ -90,7 +96,7 @@ t_n = 1
 demerits = np.array([])
 alphas = np.array([])
 
-alpha = 0.1
+alpha = alpha_init
 
 best_merit = CS.get_reduced_chisq()
 best_x = np.copy(x_n)
@@ -137,6 +143,10 @@ for i in range(1000):
     if CS.enforce_causality:
         CS.enforce_causality -= 1
         print(f"enforcing causality for {CS.enforce_causality} more iterations")
+
+    if CS.low_pass_filter_Doppler:
+        CS.low_pass_filter_Doppler -= 1
+        print(f"low pass Doppler filter for {CS.low_pass_filter_Doppler} more iterations")
 
     if i == 0 or L > L_max:
         L_max = L
