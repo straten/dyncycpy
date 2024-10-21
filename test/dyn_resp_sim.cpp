@@ -195,15 +195,27 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   cerr << "loop finished with iomega=" << iomega << " and itau=" << itau << endl;
 
   // perform an in-place 2D FFT
+
+  /* 
+  In principle, we wish to perform a forward FFT along the delay axis and a backward FFT
+  along the differential Doppler delay axis.  This could be achieved by complex conjugating
+  and reversing the elements along differential Doppler delay axis.  However, since the
+  phases are random, it doesn't matter (at least, as long as only the dynamic frequency 
+  response is used from this point onward, and there is no need to return to the
+  delay-Doppler wavefield).
+  */
+
   auto fftin = reinterpret_cast<fftw_complex *>( ext->get_data().data() );
   auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_MEASURE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
-  archive->add_extension(ext);
+  Reference::To<Pulsar::Archive> clone = archive->clone();
+  clone->resize(0);
+  clone->add_extension(ext);
 
   std::string filename = "dyn_resp_sim.fits";
-  archive->unload(filename);
+  clone->unload(filename);
 
   Reference::To<Pulsar::Archive> test = Pulsar::Archive::load(filename);
   auto test_ext = test->get<Pulsar::DynamicResponse>();
