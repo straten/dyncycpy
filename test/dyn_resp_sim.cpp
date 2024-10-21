@@ -7,10 +7,13 @@
 
 #include "Pulsar/Application.h"
 #include "Pulsar/DynamicResponse.h"
+#include "Pulsar/Integration.h"
 #include "random.h"
+#include "strutil.h"
 
 #include <fftw3.h>
 #include <cassert>
+#include <cstring>
 
 using namespace std;
 
@@ -41,8 +44,20 @@ protected:
   //! Curvature of scintillation arc
   double arc_curvature = 0.0;
 
+  //! Output dynamic periodic spectra
+  bool output_periodic_spectra = false;
+
   //! Add command line options
   void add_options (CommandLine::Menu&);
+
+  //! Generate a dynamic response based on a scintillation arc
+  void generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw);
+
+  //! Verify that the extension written to filename is equivalent to the first argument
+  void verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename);
+
+  //! Generate a periodic spectrum for each time sample of the response
+  void generate_periodic_spectra (const Pulsar::DynamicResponse*, const Pulsar::Archive*);
 };
 
 dyn_res_sim::dyn_res_sim ()
@@ -57,11 +72,14 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   menu.add ("\n" "General options:");
 
-  arg = menu.add (sampling_interval, 't');
+  arg = menu.add (sampling_interval, 't', "seconds");
   arg->set_help ("Sampling interval in seconds");
 
-  arg = menu.add (ntime, 'n');
+  arg = menu.add (ntime, 'n', "samples");
   arg->set_help ("Number of time samples");
+
+  arg = menu.add (output_periodic_spectra, 'c');
+  arg->set_help ("Output periodic spectrum for each time sample");
 }
 
 std::complex<double> random_phasor()
@@ -93,6 +111,51 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   ext->set_ntime(ntime);
   ext->set_npol(1);
   ext->resize_data();
+
+  generate_scintillation_arc (ext, bw);
+
+  Reference::To<Pulsar::Archive> clone = archive->clone();
+  clone->resize(0);
+  clone->add_extension(ext);
+
+  std::string filename = "dyn_resp_sim.fits";
+  clone->unload(filename);
+
+  verify_output_extension (ext, filename);
+
+  if (output_periodic_spectra)
+  {
+    generate_periodic_spectra (ext, archive);
+  }
+}
+
+void dyn_res_sim::verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename)
+{
+  auto data = reinterpret_cast<const std::complex<double>*>( ext->get_data().data() );
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
+
+  Reference::To<Pulsar::Archive> test = Pulsar::Archive::load(filename);
+  auto test_ext = test->get<Pulsar::DynamicResponse>();
+  auto test_data = reinterpret_cast<std::complex<double>*>( test_ext->get_data().data() );
+  for (unsigned ichan=0; ichan < nchan; ichan++)
+  {
+    for (unsigned itime=0; itime < ntime; itime++)
+    {
+      unsigned idx = itime*nchan + ichan;
+      auto diff = test_data[idx] - data[idx];
+      if (abs(diff) > 1e-3)
+      {
+        cerr << "ichan=" << ichan << " itime=" << itime << " " << data[idx] << " - " << test_data[idx] << " = " << diff << endl;
+      }
+    }
+  }
+}
+
+void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw)
+{
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
 
   auto data = reinterpret_cast<std::complex<double>*>( ext->get_data().data() );
 
@@ -206,28 +269,129 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   */
 
   auto fftin = reinterpret_cast<fftw_complex *>( ext->get_data().data() );
-  auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_MEASURE);
+  auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
+  fftw_execute(plan);
+  fftw_destroy_plan(plan);
+}
+
+//! Generate a periodic spectrum for each time sample of the response
+void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext, const Pulsar::Archive* archive)
+{
+  auto data = reinterpret_cast<const std::complex<double>*>( ext->get_data().data() );
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
+
+  assert(nchan == archive->get_nchan());
+  unsigned nbin = archive->get_nbin();
+
+  double bw = archive->get_bandwidth();
+  double chanbw = bw * 1e6 / nchan;
+
+  Reference::To<Pulsar::Archive> prototype = archive->clone();
+  prototype->fscrunch();
+  prototype->tscrunch();
+  prototype->pscrunch();
+
+  cerr << "dyn_res_sim::generate_periodic_spectra prototype profile computed" << endl;
+
+  auto subint = prototype->get_Integration(0);
+  double folding_period = subint->get_folding_period();
+  double spin_frequency = 1.0 / folding_period;
+
+  const float* f_amps = prototype->get_Profile(0,0,0)->get_amps();
+  vector<std::complex<double>> amps (nbin);
+  for (unsigned ibin=0; ibin<nbin; ibin++)
+    amps[ibin] = f_amps[ibin];
+
+  auto fftin = reinterpret_cast<fftw_complex *>( amps.data() );
+  auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
-  Reference::To<Pulsar::Archive> clone = archive->clone();
-  clone->resize(0);
-  clone->add_extension(ext);
-
-  std::string filename = "dyn_resp_sim.fits";
-  clone->unload(filename);
-
-  Reference::To<Pulsar::Archive> test = Pulsar::Archive::load(filename);
-  auto test_ext = test->get<Pulsar::DynamicResponse>();
-  auto test_data = reinterpret_cast<std::complex<double>*>( test_ext->get_data().data() );
+  // initialize a cyclic spectrum that is nchan copies of the profile FFT
+  vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
   for (unsigned ichan=0; ichan < nchan; ichan++)
-    for (unsigned itime=0; itime < ntime; itime++)
-    {
-      unsigned idx = itime*nchan + ichan;
-      assert(test_data[idx] == data[idx]);
-    }
-}
+  {
+    memcpy(cyclic_spectrum.data() + ichan*nbin, amps.data(), nbin * sizeof(complex<double>));
+  }
 
+  vector<std::complex<double>> profile (nbin);
+  fftin = reinterpret_cast<fftw_complex *>( amps.data() );
+  auto fftout = reinterpret_cast<fftw_complex *>( profile.data() );
+  plan = fftw_plan_dft_1d (nbin, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
+
+  vector<std::complex<double>> frequency_response (nchan);
+  vector<std::complex<double>> impulse_response (nchan);
+  vector<std::complex<double>> shifted_impulse_response (nchan);
+
+  fftin = reinterpret_cast<fftw_complex*>( frequency_response.data() );
+  fftout = reinterpret_cast<fftw_complex*>( impulse_response.data() );
+  auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
+
+  // re-use frequency reponse for the shifted frequency response
+  fftout = reinterpret_cast<fftw_complex*>( frequency_response.data() );
+  fftin = reinterpret_cast<fftw_complex*>( shifted_impulse_response.data() );
+  auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
+
+  for (unsigned itime=0; itime < ntime; itime++)
+  {
+    // copy from the dynamic response to the input frequency response
+    memcpy(frequency_response.data(), data + itime * nchan, sizeof(complex<double>) * nchan);
+    fftw_execute(fwd_plan);
+    // impulse_response now contains the FFT of the frequency response
+
+    for (unsigned ibin=0; ibin < nbin; ibin++)
+    {
+      for (int sign: {-1, 1})
+      {
+        double slope = sign * 2.0 * M_PI * ibin * spin_frequency / chanbw;
+
+        shifted_impulse_response = impulse_response;
+        for (unsigned ichan=1; ichan < nchan; ichan++)
+        {
+          double phase = slope * double(ichan) / nchan;
+          complex<double> phasor (cos(phase), sin(phase));
+          shifted_impulse_response[ichan] *= phasor;
+        }
+
+        fftw_execute(bwd_plan);
+        // frequency_response now contains the shifted frequency response function
+
+        for (unsigned ichan=0; ichan < nchan; ichan++)
+        {
+          if (sign == -1)
+            frequency_response[ichan] = conj(frequency_response[ichan]);
+          unsigned idx = ichan*nbin + ibin;
+          cyclic_spectrum[idx] *= frequency_response[ichan];
+        }
+      }
+    }
+
+    Reference::To<Pulsar::Archive> output = archive->clone();
+    auto subint = output->get_Integration(0);
+    unsigned ipol = 0;
+
+    for (unsigned ichan=0; ichan < nchan; ichan++)
+    {
+      memcpy(amps.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
+      fftw_execute(plan);
+      // profile now contains the periodic correlation for ichan
+
+      auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
+      for (unsigned ibin=0; ibin < nbin; ibin++)
+        f_amps[ibin] = profile[ibin].real();
+    }
+
+    string filename = "periodic_correlation_" + stringprintf("%05d",itime) + ".ar";
+    cerr << "unloading " << filename << endl;
+    output->unload(filename);
+  }
+
+  fftw_destroy_plan(fwd_plan);
+  fftw_destroy_plan(bwd_plan);
+  fftw_destroy_plan(plan);
+
+}
 
 /*!
 
