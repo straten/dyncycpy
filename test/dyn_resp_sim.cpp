@@ -192,7 +192,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   double decay = impulse_response_decay;
   if (decay == 0)
   {
-    double default_decay = 0.25;
+    double default_decay = 0.1;
     cerr << "dyn_res_sim::process setting decay time scale to " << default_decay*100.0 << "\% of maximum delay" << endl;
     decay = max_tau * default_decay;
   }
@@ -247,7 +247,8 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
       iomega = jomega;
     }
 
-    double amplitude = exp(-decay * tau);
+    double amplitude = exp(- tau/decay);
+    cout << jtau << " " << amplitude << endl;
 
     data[jomega*nchan + jtau] = amplitude;
     if (jomega > 0)

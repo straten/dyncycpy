@@ -51,7 +51,7 @@ def plot_four(ps,bw,cf):
     axs[0].imshow(toplot, aspect="auto", origin="lower", cmap="plasma", extent=[fmin, fmax, 0, tmax])
     axs[0].set(xlabel="Frequency (MHz)", ylabel="Time (s)")
 
-    toplot=np.real(pc)
+    toplot=np.log(np.abs(pc))
     axs[1].imshow(toplot, aspect="auto", origin="lower", cmap=cmap, extent=[min_delay_mus, max_delay_mus, 0, max_omega])
     axs[1].set(xlabel="Delay ($\mu$s)", ylabel="Diff. Doppler (Hz)")
 
