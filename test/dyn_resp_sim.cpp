@@ -39,13 +39,18 @@ protected:
   unsigned ntime = 256;
 
   //! Timescale of exponential decay of impulse response
-  double impulse_response_decay = 0.0;
+  double arc_decay = 0.0;
 
   //! Curvature of scintillation arc
   double arc_curvature = 0.0;
 
+  //! Arc width in pixels
+  double arc_width = 0.0;
+
   //! Output dynamic periodic spectra
   bool output_periodic_spectra = false;
+
+  double Tukey_width = 0.0;
 
   //! Add command line options
   void add_options (CommandLine::Menu&);
@@ -78,7 +83,19 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (ntime, 'n', "samples");
   arg->set_help ("Number of time samples");
 
-  arg = menu.add (output_periodic_spectra, 'c');
+  arg = menu.add (arc_curvature, 'c', "s^3");
+  arg->set_help ("Arc curvature in seconds per square Hz");
+
+  arg = menu.add (arc_decay, 'd', "s");
+  arg->set_help ("Arc exponential decay timescale in seconds");
+
+  arg = menu.add (arc_width, 'w', "pixels");
+  arg->set_help ("Arc width in pixels along Doppler axis");
+
+  arg = menu.add (Tukey_width, 'T', "flat");
+  arg->set_help ("Fractional width of flat top of Tukey window");
+
+  arg = menu.add (output_periodic_spectra, 'o');
   arg->set_help ("Output periodic spectrum for each time sample");
 }
 
@@ -154,6 +171,42 @@ void dyn_res_sim::verify_output_extension (const Pulsar::DynamicResponse* ext, c
   }
 }
 
+void add_response (complex<double>* data, unsigned jomega, unsigned jtau, unsigned ntime, unsigned nchan, double amplitude, double arc_width)
+{
+  data[jomega*nchan + jtau] += amplitude * random_phasor();
+
+  if (arc_width)
+  {
+    for (unsigned iom=0; iom < ntime; iom++)
+    {
+      double dist = (double(iom) - double(jomega)) / arc_width;
+      double amp = exp( -dist*dist );
+      data[iom*nchan + jtau] += amplitude * amp * random_phasor();
+    }
+  }
+}
+
+void Tukey (vector<double>& window, double fraction_flat)
+{
+  unsigned ndat = window.size();
+  unsigned transition_end = ndat * (1-fraction_flat) / 2;
+  double frequency = M_PI/transition_end;
+
+  cerr << "Tukey: ndat=" << ndat << " transition_end=" << transition_end << endl;
+
+  float denom_start = 2*transition_end;
+  float denom_end = 2*transition_end;
+
+  for (unsigned idat=0; idat<ndat/2; idat++)
+  {
+    double amp = 1.0;
+    if (idat < transition_end)
+      amp = 0.5 * (1 - cos(idat*frequency));
+
+    window[idat] = window[ndat-idat-1] = amp;
+  }
+}
+
 void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw)
 {
   unsigned nchan = ext->get_nchan();
@@ -189,7 +242,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
 
   cerr << "dyn_res_sim::process arc curvature = " << curvature << " s^3" << endl;
 
-  double decay = impulse_response_decay;
+  double decay = arc_decay;
   if (decay == 0)
   {
     double default_decay = 0.1;
@@ -248,14 +301,12 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
     }
 
     double amplitude = exp(- tau/decay);
-    cout << jtau << " " << amplitude << endl;
+    // cout << jtau << " " << amplitude << endl;
 
-    data[jomega*nchan + jtau] = amplitude;
+    add_response (data, jomega, jtau, ntime, nchan, amplitude, arc_width);
+
     if (jomega > 0)
-    {
-      data[jomega*nchan + jtau] *= random_phasor();
-      data[(ntime-jomega)*nchan + jtau] = amplitude * random_phasor();
-    }
+      add_response (data, ntime-jomega, jtau, ntime, nchan, amplitude, arc_width);
   }
 
   cerr << "loop finished with iomega=" << iomega << " and itau=" << itau << endl;
@@ -275,6 +326,16 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
+
+  if (Tukey_width)
+  {
+    vector<double> window (nchan);
+    Tukey (window, Tukey_width);
+
+    for (unsigned itime=0; itime < ntime; itime++)
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+        data[itime*nchan + ichan] *= window[ichan];
+  }
 }
 
 //! Generate a periodic spectrum for each time sample of the response
@@ -302,24 +363,33 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   double spin_frequency = 1.0 / folding_period;
 
   const float* f_amps = prototype->get_Profile(0,0,0)->get_amps();
-  vector<std::complex<double>> amps (nbin);
+  vector<std::complex<double>> intrinsic_spectrum (nbin);
   for (unsigned ibin=0; ibin<nbin; ibin++)
-    amps[ibin] = f_amps[ibin];
+    intrinsic_spectrum[ibin] = f_amps[ibin];
 
-  auto fftin = reinterpret_cast<fftw_complex*>(amps.data());
+  auto fftin = reinterpret_cast<fftw_complex*>(intrinsic_spectrum.data());
   auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
-  // initialize a cyclic spectrum that is nchan copies of the profile FFT
-  vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
-  for (unsigned ichan=0; ichan < nchan; ichan++)
+  // verify that the intrinsic spectrum has the expected Hermiticity
+  double power = 0;
+  double diff_power = 0;
+  for (unsigned ibin=1; ibin < nbin/2; ibin++)
   {
-    memcpy(cyclic_spectrum.data() + ichan*nbin, amps.data(), nbin * sizeof(complex<double>));
+    auto diff = intrinsic_spectrum[ibin] - conj(intrinsic_spectrum[nbin - ibin]);
+    power += norm(intrinsic_spectrum[ibin]);
+    diff_power += norm(diff);
   }
 
+  if (diff_power > power * 1e-20)
+  {
+    cerr << "Intrinsic spectrum does not appear to be Hermitian power=" << power << " diff power=" << diff_power << endl;
+  }
+
+  vector<std::complex<double>> temp (nbin);
   vector<std::complex<double>> profile (nbin);
-  fftin = reinterpret_cast<fftw_complex*>( amps.data() );
+  fftin = reinterpret_cast<fftw_complex*>( temp.data() );
   auto fftout = reinterpret_cast<fftw_complex*>( profile.data() );
   plan = fftw_plan_dft_1d (nbin, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
@@ -336,14 +406,22 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   fftin = reinterpret_cast<fftw_complex*>( shifted_impulse_response.data() );
   auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
+  vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
+
   for (unsigned itime=0; itime < ntime; itime++)
   {
+    // initialize a cyclic spectrum that is nchan copies of the profile FFT
+    for (unsigned ichan=0; ichan < nchan; ichan++)
+    {
+      memcpy(cyclic_spectrum.data() + ichan*nbin, intrinsic_spectrum.data(), nbin * sizeof(complex<double>));
+    }
+
     // copy from the dynamic response to the input frequency response
     memcpy(frequency_response.data(), data + itime * nchan, sizeof(complex<double>) * nchan);
     fftw_execute(fwd_plan);
     // impulse_response now contains the FFT of the frequency response
 
-    for (unsigned ibin=0; ibin < nbin; ibin++)
+    for (unsigned ibin=1; ibin < nbin/2; ibin++)
     {
       for (int sign: {-1, 1})
       {
@@ -364,8 +442,14 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
         {
           if (sign == -1)
             frequency_response[ichan] = conj(frequency_response[ichan]);
-          unsigned idx = ichan*nbin + ibin;
-          cyclic_spectrum[idx] *= frequency_response[ichan];
+
+          auto spectrum = cyclic_spectrum.data() + ichan*nbin;
+
+          spectrum[ibin] *= frequency_response[ichan];
+
+          unsigned jbin = nbin - ibin;
+          if (jbin > nbin/2)
+            spectrum[jbin] = conj(spectrum[ibin]);
         }
       }
     }
@@ -376,13 +460,27 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
     for (unsigned ichan=0; ichan < nchan; ichan++)
     {
-      memcpy(amps.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
+      memcpy(temp.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
       fftw_execute(plan);
       // profile now contains the periodic correlation for ichan
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
+
+      double real_power = 0.0;
+      double imag_power = 0.0;
       for (unsigned ibin=0; ibin < nbin; ibin++)
-        f_amps[ibin] = profile[ibin].real();
+      {
+        double re = profile[ibin].real();
+        double im = profile[ibin].imag();
+
+        real_power += re*re;
+        imag_power += im*im;
+
+        f_amps[ibin] = re;
+      }
+
+      if (imag_power > real_power * 1e-20)
+        cerr << "ichan=" << ichan << " power imag=" << imag_power << " real=" << real_power << endl;
     }
 
     string filename = "periodic_correlation_" + stringprintf("%05d",itime) + ".ar";
