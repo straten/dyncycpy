@@ -17,7 +17,29 @@ from plotting import plot_intrinsic_vs_observed
 
 mpl.rcParams["image.aspect"] = "auto"
 
-CS = pycyc.CyclicSolver(zap_edges=0.05556)
+# do arg parsing here
+p = argparse.ArgumentParser()
+p.add_argument(
+    "--init",
+    type=str,
+    help="file containing the initial wavefield and intrinsic profile",
+)
+
+p.add_argument(
+    "--zap",
+    type=float,
+    help="fraction of band edges to zap",
+)
+
+args, files = p.parse_known_args()
+init = args.init
+zap = args.zap
+
+zap_edges = 0.05556
+if zap is not None:
+    zap_edges = float(zap)
+
+CS = pycyc.CyclicSolver(zap_edges=zap_edges)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
 alpha_history = 10
@@ -32,13 +54,13 @@ CS.save_cyclic_spectra = True
 CS.use_integrated_profile = True
 
 # include a separate gain variation term for each sub-integration
-CS.model_gain_variations = True
+# CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
 CS.enforce_causality = 8
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
-CS.reduce_temporal_phase_noise = True
+# CS.reduce_temporal_phase_noise = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -58,17 +80,6 @@ update_profile_every_iteration_until = 15
 
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
-
-# do arg parsing here
-p = argparse.ArgumentParser()
-p.add_argument(
-    "--init",
-    type=str,
-    help="file containing the initial wavefield and intrinsic profile",
-)
-
-args, files = p.parse_known_args()
-init = args.init
 
 if init is not None:
     print(f"cycfista: loading initial wavefield and intrinsic profile from {init}")

@@ -268,9 +268,27 @@ class CyclicSolver:
         ntime = ext.get_ntime()
         data = np.reshape(data, (ntime, nchan))
 
-        if self.zap_edges is not None:
+        h_time_delay = freq2time(data, axis=1)
+        h_doppler_delay = time2freq(h_time_delay, axis=0)
+        plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
+        fig, ax = plt.subplots(figsize=(8, 9))
+        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
+        fig.colorbar(img)
+        fig.savefig("input_wavefield.png")
+        plt.close()
+
+        if self.zap_edges is not None and self.zap_edges > 0:
             zap_count = int(self.zap_edges * nchan)
             data = data[:, zap_count:-zap_count]
+
+            h_time_delay = freq2time(data, axis=1)
+            h_doppler_delay = time2freq(h_time_delay, axis=0)
+            plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
+            fig, ax = plt.subplots(figsize=(8, 9))
+            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
+            fig.colorbar(img)
+            fig.savefig("input_wavefield_after_zap_edges.png")
+            plt.close()
 
         self.initial_h_time_freq = data
         self.pp_intrinsic = np.copy(ar.get_Profile(0,0,0).get_amps())
@@ -290,7 +308,7 @@ class CyclicSolver:
             ar.remove_baseline()
 
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
-        if self.zap_edges is not None:
+        if self.zap_edges is not None and self.zap_edges > 0:
             zap_count = int(self.zap_edges * data.shape[2])
             data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
