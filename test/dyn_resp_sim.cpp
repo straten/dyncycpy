@@ -352,9 +352,9 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   double chanbw_Hz = bw_MHz * 1e6 / nchan;
 
   Reference::To<Pulsar::Archive> prototype = archive->clone();
+  prototype->pscrunch();
   prototype->fscrunch();
   prototype->tscrunch();
-  prototype->pscrunch();
 
   cerr << "dyn_res_sim::generate_periodic_spectra prototype profile computed" << endl;
 
@@ -408,6 +408,9 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
   vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
 
+  prototype = archive->clone();
+  prototype->pscrunch();
+
   for (unsigned itime=0; itime < ntime; itime++)
   {
     // initialize a cyclic spectrum that is nchan copies of the profile FFT
@@ -452,7 +455,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
       }
     }
 
-    Reference::To<Pulsar::Archive> output = archive->clone();
+    Reference::To<Pulsar::Archive> output = prototype->clone();
     auto subint = output->get_Integration(0);
     unsigned ipol = 0;
 
@@ -460,7 +463,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     {
       memcpy(temp.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
       fftw_execute(plan);
-      // profile now contains the periodic correlation for ichan
+      // profile now contains the periodic spectrum for ichan
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
 
@@ -481,7 +484,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
         cerr << "ichan=" << ichan << " power imag=" << imag_power << " real=" << real_power << endl;
     }
 
-    string filename = "periodic_correlation_" + stringprintf("%05d",itime) + ".ar";
+    string filename = "periodic_spectrum_" + stringprintf("%05d",itime) + ".ar";
     cerr << "unloading " << filename << endl;
     output->unload(filename);
   }
