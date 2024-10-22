@@ -132,7 +132,9 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   generate_scintillation_arc (ext, bw);
 
   Reference::To<Pulsar::Archive> clone = archive->clone();
-  clone->resize(0);
+  clone->pscrunch();
+  clone->fscrunch();
+  clone->tscrunch();
   clone->add_extension(ext);
 
   std::string filename = "dyn_resp_sim.fits";

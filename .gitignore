@@ -4,6 +4,7 @@
 *.npy
 *.fix
 *.npz
+*.ar
 filter.txt
 *.swp
 iterate.dat

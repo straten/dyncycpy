@@ -233,6 +233,9 @@ class CyclicSolver:
         self.delay_window = None
         self.delay_taper = None
 
+        # initial guess for the dynamic response
+        self.initial_h_time_freq = None
+
         if filename:
             self.load(filename)
 
@@ -252,6 +255,26 @@ class CyclicSolver:
         cs = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shear_phasors)
 
         return cs[0]
+
+    def load_initial_guess(self, filename):
+        """
+        Load initial guess for wavefield and intrinsic profile from PSRFITS file
+        """
+
+        ar = psrchive.Archive_load(filename)
+        ext = ar.get_dynamic_response()
+        data = ext.get_data()
+        nchan = ext.get_nchan()
+        ntime = ext.get_ntime()
+        data = np.reshape(data, (ntime, nchan))
+
+        if self.zap_edges is not None:
+            zap_count = int(self.zap_edges * nchan)
+            data = data[:, zap_count:-zap_count]
+
+        self.initial_h_time_freq = data
+        self.pp_intrinsic = np.copy(ar.get_Profile(0,0,0).get_amps())
+
 
     def load(self, filename):
         """
@@ -453,8 +476,14 @@ class CyclicSolver:
         hf_prev = np.ones((self.nchan,), dtype=np.complex128)
         self.hf_prev = hf_prev
 
-        self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-        self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
+        if self.initial_h_time_freq is None:
+            self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
+            self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
+        else:
+            assert self.initial_h_time_freq.shape[0] == self.nspec
+            assert self.initial_h_time_freq.shape[1] == self.nchan
+            self.h_time_delay = freq2time(self.initial_h_time_freq, axis=1)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
@@ -797,7 +826,6 @@ class CyclicSolver:
         return _merit, _nterm
 
     def updateWavefield(self, h_doppler_delay):
-
         rms_noise = rms_wavefield(h_doppler_delay)
 
         if rms_noise > 0 and self.noise_threshold is not None:
@@ -888,7 +916,6 @@ class CyclicSolver:
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
-
     def minimize_temporal_phase_noise(self, x):
         xprev = x[0]
         zero = 1.0 + 0.0j
@@ -898,10 +925,10 @@ class CyclicSolver:
             z /= np.abs(z)
             x[isub] *= z
             diff = z - zero
-            power += np.abs(diff)**2
+            power += np.abs(diff) ** 2
             xprev = x[isub]
 
-        power /= (self.nspec - 1)
+        power /= self.nspec - 1
         print(f"minimize_temporal_phase_noise power={power}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
