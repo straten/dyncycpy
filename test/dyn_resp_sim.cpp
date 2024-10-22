@@ -47,6 +47,9 @@ protected:
   //! Arc width in pixels
   double arc_width = 0.0;
 
+  //! Maximum delay of arc, as a fraction of the maximum delay
+  double arc_max_delay = 1.0;
+
   //! Output dynamic periodic spectra
   bool output_periodic_spectra = false;
 
@@ -88,6 +91,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (arc_decay, 'd', "s");
   arg->set_help ("Arc exponential decay timescale in seconds");
+
+  arg = menu.add (arc_max_delay, 'D', "fraction");
+  arg->set_help ("Arc maximum delay, as a fraction of maximum delay sampled");
 
   arg = menu.add (arc_width, 'w', "pixels");
   arg->set_help ("Arc width in pixels along Doppler axis");
@@ -239,7 +245,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
     double default_omega_span = 0.9;
     cerr << "dyn_res_sim::process setting arc curvature to span " << default_omega_span*100.0 << "\% of Doppler axis at maximum delay" << endl;
     double span_omega = default_omega_span * max_omega;
-    curvature = max_tau / (span_omega * span_omega);
+    curvature = arc_max_delay * max_tau / (span_omega * span_omega);
   }
 
   cerr << "dyn_res_sim::process arc curvature = " << curvature << " s^3" << endl;
@@ -249,7 +255,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   {
     double default_decay = 0.1;
     cerr << "dyn_res_sim::process setting decay time scale to " << default_decay*100.0 << "\% of maximum delay" << endl;
-    decay = max_tau * default_decay;
+    decay = arc_max_delay * max_tau * default_decay;
   }
 
   cerr << "dyn_res_sim::process decay time scale = " << decay << " s" << endl;
@@ -258,7 +264,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   unsigned nomega = ntime / 2;
 
   unsigned itau = 0;
-  unsigned ntau = nchan / 2;
+  unsigned ntau = arc_max_delay * nchan / 2;
 
   cerr << "dyn_res_sim::process nomega=" << nomega << " ntau=" << ntau << endl;
 
