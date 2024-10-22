@@ -2,7 +2,7 @@
 # coding: utf-8
 
 import matplotlib.pyplot as plt
-from scipy.fft import ifft2
+from scipy.fft import ifft2, ifft
 import scipy.stats
 
 import numpy as np
@@ -11,6 +11,7 @@ import psrchive
 def plot_response(dynamic_response,bw,cf):
 
     delay_Doppler = ifft2(dynamic_response)
+    # delay_Doppler = ifft(dynamic_response, axis=1)
 
     ntime=dynamic_response.shape[0]
     nchan=dynamic_response.shape[1]

@@ -348,8 +348,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   assert(nchan == archive->get_nchan());
   unsigned nbin = archive->get_nbin();
 
-  double bw = archive->get_bandwidth();
-  double chanbw = bw * 1e6 / nchan;
+  double bw_MHz = archive->get_bandwidth();
+  double chanbw_Hz = bw_MHz * 1e6 / nchan;
 
   Reference::To<Pulsar::Archive> prototype = archive->clone();
   prototype->fscrunch();
@@ -399,12 +399,12 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
   fftin = reinterpret_cast<fftw_complex*>( frequency_response.data() );
   fftout = reinterpret_cast<fftw_complex*>( impulse_response.data() );
-  auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
+  auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
   // re-use frequency reponse for the shifted frequency response
-  fftout = reinterpret_cast<fftw_complex*>( frequency_response.data() );
   fftin = reinterpret_cast<fftw_complex*>( shifted_impulse_response.data() );
-  auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
+  fftout = reinterpret_cast<fftw_complex*>( frequency_response.data() );
+  auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
 
   vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
 
@@ -425,7 +425,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     {
       for (int sign: {-1, 1})
       {
-        double slope = sign * 2.0 * M_PI * ibin * spin_frequency / chanbw;
+        double alpha = ibin * spin_frequency;
+        double slope = sign * M_PI * alpha / chanbw_Hz; // 2pi * alpha/2
 
         shifted_impulse_response = impulse_response;
         for (unsigned ichan=1; ichan < nchan; ichan++)
@@ -440,16 +441,13 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
         for (unsigned ichan=0; ichan < nchan; ichan++)
         {
-          if (sign == -1)
+          if (sign == 1)
             frequency_response[ichan] = conj(frequency_response[ichan]);
 
           auto spectrum = cyclic_spectrum.data() + ichan*nbin;
 
           spectrum[ibin] *= frequency_response[ichan];
-
-          unsigned jbin = nbin - ibin;
-          if (jbin > nbin/2)
-            spectrum[jbin] = conj(spectrum[ibin]);
+          spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
         }
       }
     }
