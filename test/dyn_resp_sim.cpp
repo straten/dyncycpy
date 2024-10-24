@@ -47,8 +47,11 @@ protected:
   //! Arc width in pixels
   double arc_width = 0.0;
 
-  //! Maximum delay of arc, as a fraction of the maximum delay
+  //! Maximum delay of arc, as a fraction of the maximum delay sampled
   double arc_max_delay = 1.0;
+
+  //! Maximum Doppler shift of arc, as a fraction of the maximum Doppler shift sampled
+  double arc_max_Doppler = 0.9;
 
   //! Output dynamic periodic spectra
   bool output_periodic_spectra = false;
@@ -89,11 +92,14 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
 
-  arg = menu.add (arc_decay, 'd', "s");
+  arg = menu.add (arc_decay, "tau", "s");
   arg->set_help ("Arc exponential decay timescale in seconds");
 
-  arg = menu.add (arc_max_delay, 'D', "fraction");
+  arg = menu.add (arc_max_delay, 'd', "fraction");
   arg->set_help ("Arc maximum delay, as a fraction of maximum delay sampled");
+
+  arg = menu.add (arc_max_Doppler, 'D', "fraction");
+  arg->set_help ("Arc maximum Doppler shift, as a fraction of maximum Doppler shift sampled");
 
   arg = menu.add (arc_width, 'w', "pixels");
   arg->set_help ("Arc width in pixels along Doppler axis");
@@ -242,9 +248,8 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   double curvature = arc_curvature;
   if (curvature == 0)
   {
-    double default_omega_span = 0.9;
-    cerr << "dyn_res_sim::process setting arc curvature to span " << default_omega_span*100.0 << "\% of Doppler axis at maximum delay" << endl;
-    double span_omega = default_omega_span * max_omega;
+    cerr << "dyn_res_sim::process setting arc curvature to span " << arc_max_Doppler*100.0 << "\% of Doppler axis at maximum delay" << endl;
+    double span_omega = arc_max_Doppler * max_omega;
     curvature = arc_max_delay * max_tau / (span_omega * span_omega);
   }
 
