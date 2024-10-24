@@ -295,11 +295,13 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
         cerr << "switch to function of tau when iomega=" << iomega << " and itau=" << itau << endl;
         f_of_omega = false;
       }
-
-      iomega ++;
-      itau = jtau + 1;
+      else
+      {
+        iomega ++;
+        itau = jtau + 1;
+      }
     }
-
+    
     if (!f_of_omega)
     {
       tau = itau * delta_tau;
