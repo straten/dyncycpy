@@ -291,8 +291,7 @@ class CyclicSolver:
             plt.close()
 
         self.initial_h_time_freq = data
-        self.pp_intrinsic = np.copy(ar.get_Profile(0,0,0).get_amps())
-
+        self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
 
     def load(self, filename):
         """

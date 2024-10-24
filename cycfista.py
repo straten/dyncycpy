@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import pickle
-import sys
-import time
 import argparse
+import pickle
+import time
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -28,21 +27,25 @@ p.add_argument(
 p.add_argument(
     "--zap",
     type=float,
+    default=0.05556,
     help="fraction of band edges to zap",
+)
+
+p.add_argument(
+    "--iter",
+    type=int,
+    default=1000,
+    help="maximum number of iterations",
 )
 
 args, files = p.parse_known_args()
 init = args.init
-zap = args.zap
+max_iterations = args.iter
 
-zap_edges = 0.05556
-if zap is not None:
-    zap_edges = float(zap)
-
-CS = pycyc.CyclicSolver(zap_edges=zap_edges)
+CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
-alpha_history = 10
+alpha_history = 5
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
@@ -57,7 +60,7 @@ CS.use_integrated_profile = True
 # CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 8
+# CS.enforce_causality = 8
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
 # CS.reduce_temporal_phase_noise = True
@@ -134,7 +137,7 @@ prev_merit = best_merit
 start_time = time.time()
 min_step_factor = 0.5
 
-for i in range(1000):
+for i in range(max_iterations):
     CS.nopt += 1
 
     if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
@@ -176,14 +179,18 @@ for i in range(1000):
     if CS.get_reduced_chisq() > prev_merit:
         print("**** bad step")
 
-    alphas = np.append(alphas, 1.0 / L)
+    if CS.get_reduced_chisq() > 100.0 * prev_merit:
+        print("**** really bad step - RESET")
+        t_n = 1
+        x_n[:] = best_x[:]
+    else:
+        alphas = np.append(alphas, 1.0 / L)
+        prev_merit = CS.get_reduced_chisq()
 
     if alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
-
-    prev_merit = CS.get_reduced_chisq()
 
     print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
