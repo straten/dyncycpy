@@ -11,6 +11,7 @@
 #include "Pulsar/Integration.h"
 #include "random.h"
 #include "strutil.h"
+#include "pairutil.h"
 
 #include <fftw3.h>
 #include <cassert>
@@ -60,17 +61,26 @@ protected:
   //! Output dynamic periodic spectra
   bool output_periodic_spectra = false;
 
+  //! discrete scattered wave (Doppler, delay) harmonic coordinates
+  std::pair<unsigned,unsigned> scattered_wave = {0,0};
+
   double Tukey_width = 0.0;
 
   //! Add command line options
   void add_options (CommandLine::Menu&);
 
+  //! Fill profile data with simulated intrinsic profile
+  void generate_intrinsic_profile (Pulsar::Archive* archive);
+  
   //! Generate a dynamic response based on a scintillation arc
   void generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw);
 
-  //! Fill profile data with simulated intrinsic profile
-  void generate_intrinsic_profile (Pulsar::Archive* archive);
+  //! Generate a dynamic response based on a single scattered wave component
+  void generate_scattered_wave (Pulsar::DynamicResponse*);
 
+  //! Perform an in-place 2D FFT of the input wavefield, converting it to a dynamic frequency response
+  void transform_wavefield (Pulsar::DynamicResponse*);
+    
   //! Verify that the extension written to filename is equivalent to the first argument
   void verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename);
 
@@ -98,6 +108,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (max_profile_harmonic, 'm', "fraction");
   arg->set_help ("maximum profile harmonic, as a fraction of number of phase bins");
+
+  arg = menu.add (scattered_wave, 's', "Doppler:delay");
+  arg->set_help ("Doppler,delay harmonic coordinates of discrete scattered wave");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -151,7 +164,10 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   ext->set_npol(1);
   ext->resize_data();
 
-  generate_scintillation_arc (ext, bw);
+  if (scattered_wave.first != 0 || scattered_wave.second != 0)
+    generate_scattered_wave (ext);
+  else
+    generate_scintillation_arc (ext, bw);
 
   if (max_profile_harmonic)
     generate_intrinsic_profile (archive);
@@ -297,6 +313,58 @@ void Tukey (vector<double>& window, double fraction_flat)
   }
 }
 
+// perform an in-place 2D FFT
+
+/*! 
+In principle, we wish to perform a forward FFT along the delay axis and a backward FFT
+along the differential Doppler delay axis.  This could be achieved by complex conjugating
+and reversing the elements along differential Doppler delay axis.  However, since the
+phases are random, it doesn't matter (at least, as long as only the dynamic frequency 
+response is used from this point onward, and there is no need to return to the
+delay-Doppler wavefield).
+*/
+void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
+{
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
+  auto data = ext->get_data().data();
+
+  auto fftin = reinterpret_cast<fftw_complex*>(data);
+  auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
+  fftw_execute(plan);
+  fftw_destroy_plan(plan);
+
+  if (Tukey_width)
+  {
+    vector<double> window (nchan);
+    Tukey (window, Tukey_width);
+
+    for (unsigned itime=0; itime < ntime; itime++)
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+        data[itime*nchan + ichan] *= window[ichan];
+  }
+}
+
+void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
+{
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
+
+  auto data = ext->get_data().data();
+
+  for (unsigned ichan=0; ichan < nchan; ichan++)
+    for (unsigned itime=0; itime < ntime; itime++)
+      data[itime*nchan + ichan] = 0;
+
+  unsigned itime = scattered_wave.first;
+  unsigned ichan = scattered_wave.second;
+
+  data[0] = 1.0;
+  data[itime*nchan + ichan] = 1.0;
+
+  transform_wavefield (ext);
+}
+
 void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw)
 {
   unsigned nchan = ext->get_nchan();
@@ -402,31 +470,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
 
   cerr << "loop finished with iomega=" << iomega << " and itau=" << itau << endl;
 
-  // perform an in-place 2D FFT
-
-  /* 
-  In principle, we wish to perform a forward FFT along the delay axis and a backward FFT
-  along the differential Doppler delay axis.  This could be achieved by complex conjugating
-  and reversing the elements along differential Doppler delay axis.  However, since the
-  phases are random, it doesn't matter (at least, as long as only the dynamic frequency 
-  response is used from this point onward, and there is no need to return to the
-  delay-Doppler wavefield).
-  */
-
-  auto fftin = reinterpret_cast<fftw_complex*>( ext->get_data().data() );
-  auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
-  fftw_execute(plan);
-  fftw_destroy_plan(plan);
-
-  if (Tukey_width)
-  {
-    vector<double> window (nchan);
-    Tukey (window, Tukey_width);
-
-    for (unsigned itime=0; itime < ntime; itime++)
-      for (unsigned ichan=0; ichan < nchan; ichan++)
-        data[itime*nchan + ichan] *= window[ichan];
-  }
+  transform_wavefield (ext);
 }
 
 //! Generate a periodic spectrum for each time sample of the response
