@@ -7,6 +7,7 @@
 
 #include "Pulsar/Application.h"
 #include "Pulsar/DynamicResponse.h"
+#include "Pulsar/ProfileColumn.h"
 #include "Pulsar/Integration.h"
 #include "random.h"
 #include "strutil.h"
@@ -53,6 +54,9 @@ protected:
   //! Maximum Doppler shift of arc, as a fraction of the maximum Doppler shift sampled
   double arc_max_Doppler = 0.9;
 
+  //! Max profile harmonic, as a fraction of the number of phase bins
+  double max_profile_harmonic = 0.0;
+
   //! Output dynamic periodic spectra
   bool output_periodic_spectra = false;
 
@@ -64,6 +68,9 @@ protected:
   //! Generate a dynamic response based on a scintillation arc
   void generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw);
 
+  //! Fill profile data with simulated intrinsic profile
+  void generate_intrinsic_profile (Pulsar::Archive* archive);
+
   //! Verify that the extension written to filename is equivalent to the first argument
   void verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename);
 
@@ -74,7 +81,7 @@ protected:
 dyn_res_sim::dyn_res_sim ()
   : Application ("dyn_res_sim", "Dynamic Response Simulator")
 {
-
+  Pulsar::ProfileColumn::output_floats = true;
 }
 
 void dyn_res_sim::add_options (CommandLine::Menu& menu)
@@ -88,6 +95,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (ntime, 'n', "samples");
   arg->set_help ("Number of time samples");
+
+  arg = menu.add (max_profile_harmonic, 'm', "fraction");
+  arg->set_help ("maximum profile harmonic, as a fraction of number of phase bins");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -143,6 +153,9 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
 
   generate_scintillation_arc (ext, bw);
 
+  if (max_profile_harmonic)
+    generate_intrinsic_profile (archive);
+
   Reference::To<Pulsar::Archive> clone = archive->clone();
   clone->pscrunch();
   clone->fscrunch();
@@ -157,6 +170,69 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   if (output_periodic_spectra)
   {
     generate_periodic_spectra (ext, archive);
+  }
+}
+
+void copy (float* amps, vector<complex<double>>& profile)
+{
+  unsigned nbin = profile.size();
+  double real_power = 0.0;
+  double imag_power = 0.0;
+
+  for (unsigned ibin=0; ibin < nbin; ibin++)
+  {
+    double re = profile[ibin].real();
+    double im = profile[ibin].imag();
+
+    real_power += re*re;
+    imag_power += im*im;
+
+    amps[ibin] = re;
+  }
+
+  assert (imag_power < real_power * 1e-20);
+}
+
+void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
+{
+  archive->pscrunch();
+  archive->tscrunch();
+
+  unsigned nbin = archive->get_nbin();
+  unsigned nchan = archive->get_nchan();
+
+  vector<std::complex<double>> profile (nbin, 0.0);
+
+  // maximum dynamic range supported by single-precision floating point profile amplitudes 
+  // in PSRFITS files, as determined by trial-and-error using psrplot -U -c val=I
+  double log10_max = 0.0;
+  double log10_min = -8.0;
+
+  unsigned ibin_min = 1;
+  unsigned ibin_max = 0.5 * max_profile_harmonic * nbin;
+
+  double log10_slope = ( log10_min - log10_max ) / (ibin_max - ibin_min);
+
+  // DC bin
+  profile[0] = 0.0;
+
+  for (unsigned ibin=1; ibin < nbin/2; ibin++)
+  {
+    double log10_amp = log10_max + (ibin - ibin_min) * log10_slope;
+    profile[nbin-ibin] = profile[ibin] = pow(10.0, log10_amp);
+  }
+
+  auto fftinout = reinterpret_cast<fftw_complex*>( profile.data() );
+  auto plan = fftw_plan_dft_1d (nbin, fftinout, fftinout, FFTW_BACKWARD, FFTW_ESTIMATE);
+  fftw_execute(plan);
+  fftw_destroy_plan(plan);
+
+  Pulsar::Integration* subint = archive->get_Integration(0);
+  unsigned ipol = 0;
+  for (unsigned ichan = 0; ichan < nchan; ichan++)
+  {
+    auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
+    copy(f_amps,profile);
   }
 }
 
@@ -301,7 +377,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
         itau = jtau + 1;
       }
     }
-    
+
     if (!f_of_omega)
     {
       tau = itau * delta_tau;
@@ -481,22 +557,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
       // profile now contains the periodic spectrum for ichan
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
-
-      double real_power = 0.0;
-      double imag_power = 0.0;
-      for (unsigned ibin=0; ibin < nbin; ibin++)
-      {
-        double re = profile[ibin].real();
-        double im = profile[ibin].imag();
-
-        real_power += re*re;
-        imag_power += im*im;
-
-        f_amps[ibin] = re;
-      }
-
-      if (imag_power > real_power * 1e-20)
-        cerr << "ichan=" << ichan << " power imag=" << imag_power << " real=" << real_power << endl;
+      copy(f_amps, profile);
     }
 
     string filename = "periodic_spectrum_" + stringprintf("%05d",itime) + ".ar";
