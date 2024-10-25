@@ -935,7 +935,7 @@ class CyclicSolver:
         if self.reduce_temporal_phase_noise_grad:
             self.minimize_temporal_phase_noise(self.h_time_delay_grad)
 
-        self.h_doppler_delay_grad = freq2time(self.h_time_delay_grad)
+        self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
 
         if self.low_pass_filter_Doppler < 1:
             quarter_nsub = round (self.nsubint * self.low_pass_filter_Doppler / 2.0)
