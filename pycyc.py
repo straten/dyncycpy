@@ -97,6 +97,7 @@ except Exception:
 import concurrent.futures
 import os
 import pickle
+import sys
 
 import numpy as np
 import scipy
@@ -935,7 +936,20 @@ class CyclicSolver:
         if self.reduce_temporal_phase_noise_grad:
             self.minimize_temporal_phase_noise(self.h_time_delay_grad)
 
+        dumps = False
+
+        if dumps:
+            with open("h_time_delay_grad.pkl", "wb") as fh:
+                print("DUMPING TIME DELAY GRADIENT")
+                pickle.dump(self.h_time_delay_grad, fh)
+
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
+
+        if dumps:
+            with open("h_doppler_delay_grad.pkl", "wb") as fh:
+                print("DUMPING DOPPLER DELAY GRADIENT AND STOPPING")
+                pickle.dump(self.h_doppler_delay_grad, fh)
+            sys.exit()
 
         if self.low_pass_filter_Doppler < 1:
             quarter_nsub = round (self.nsubint * self.low_pass_filter_Doppler / 2.0)
