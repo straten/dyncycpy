@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import argparse
 import pickle
-import sys
 import time
 
 import matplotlib as mpl
@@ -16,13 +16,39 @@ from plotting import plot_intrinsic_vs_observed
 
 mpl.rcParams["image.aspect"] = "auto"
 
-CS = pycyc.CyclicSolver(zap_edges=0.05556)
+# do arg parsing here
+p = argparse.ArgumentParser()
+p.add_argument(
+    "--init",
+    type=str,
+    help="file containing the initial wavefield and intrinsic profile",
+)
+
+p.add_argument(
+    "--zap",
+    type=float,
+    default=0.05556,
+    help="fraction of band edges to zap",
+)
+
+p.add_argument(
+    "--iter",
+    type=int,
+    default=1000,
+    help="maximum number of iterations",
+)
+
+args, files = p.parse_known_args()
+init = args.init
+max_iterations = args.iter
+
+CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
-alpha_history = 10
+alpha_history = 5
 
 # should probably estimate this as described in Oslowski & Walker (2023)
-alpha_init = 0.001
+alpha_init = 1e-6
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
@@ -33,17 +59,17 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
+CS.low_pass_filter_Doppler = 0.5
+
 # include a separate gain variation term for each sub-integration
-CS.model_gain_variations = True
+# CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 35
+# CS.enforce_causality = 8
 
-# set h(tau,omega) to zero for |omega| > 0.5*omega_Nyq for the first N iterations
-CS.low_pass_filter_Doppler = 35
-
-# when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1) 
-CS.reduce_temporal_phase_noise = True
+# when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
+# CS.reduce_temporal_phase_noise = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -64,9 +90,12 @@ update_profile_every_iteration_until = 15
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
 
-inputArgs = sys.argv
-print(f"cycfista: loading {len(inputArgs)-1} files")
-for file in inputArgs[1:]:
+if init is not None:
+    print(f"cycfista: loading initial wavefield and intrinsic profile from {init}")
+    CS.load_initial_guess(init)
+
+print(f"cycfista: loading {len(files)} files")
+for file in files:
     CS.load(file)
 
 print(f"cycfista: {CS.nsubint} spectra loaded")
@@ -114,7 +143,7 @@ prev_merit = best_merit
 start_time = time.time()
 min_step_factor = 0.5
 
-for i in range(1000):
+for i in range(max_iterations):
     CS.nopt += 1
 
     if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
@@ -160,14 +189,18 @@ for i in range(1000):
     if CS.get_reduced_chisq() > prev_merit:
         print("**** bad step")
 
-    alphas = np.append(alphas, 1.0 / L)
+    if CS.get_reduced_chisq() > 100.0 * prev_merit:
+        print("**** really bad step - RESET")
+        t_n = 1
+        x_n[:] = best_x[:]
+    else:
+        alphas = np.append(alphas, 1.0 / L)
+        prev_merit = CS.get_reduced_chisq()
 
     if alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
-
-    prev_merit = CS.get_reduced_chisq()
 
     print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
