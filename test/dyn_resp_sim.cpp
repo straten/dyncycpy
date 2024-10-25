@@ -360,7 +360,12 @@ void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
   unsigned ichan = scattered_wave.second;
 
   data[0] = 1.0;
-  data[itime*nchan + ichan] = 1.0;
+
+  /* Reflect Doppler coordinate because a single forward 2D FFT 
+     is performed by transform_wavefield, when it should be forward 
+     along delay-to-frequency backward along Doppler-to-time. */
+  unsigned jtime = ntime - itime;
+  data[jtime*nchan + ichan] = 1.0;
 
   transform_wavefield (ext);
 }
