@@ -56,6 +56,9 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
+CS.low_pass_filter_Doppler = 0.5
+
 # include a separate gain variation term for each sub-integration
 # CS.model_gain_variations = True
 

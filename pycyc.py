@@ -229,6 +229,9 @@ class CyclicSolver:
         self.doppler_window = None
         self.doppler_taper = None
 
+        # by default, do not filter
+        self.low_pass_filter_Doppler = 1.0
+
         # taper wavefield along delay axis using the specified window
         self.delay_window = None
         self.delay_taper = None
@@ -925,6 +928,10 @@ class CyclicSolver:
             self.minimize_temporal_phase_noise(self.h_time_delay_grad)
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad) * self.nsubint
+
+        if self.low_pass_filter_Doppler < 1:
+            quarter_nsub = round (self.nsubint * self.low_pass_filter_Doppler / 2.0)
+            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub,:] = 0
 
         align_phase_gradient = False
         if align_phase_gradient:
