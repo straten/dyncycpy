@@ -515,7 +515,9 @@ class CyclicSolver:
                 for ichan in range(self.nchan):
                     if np.abs(hf[ichan] - 1.0) > 1e-6:
                         print(f'unexpected initial response[{ichan}]={hf[ichan]}')
-        
+
+        print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
+
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_doppler_delay.shape)
@@ -2065,11 +2067,9 @@ def cyclic_padding(cs, bw, ref_freq):
 
 
 def chan_limits_cs(iharm, nchan, bw, ref_freq):
-    inv_aspect = ref_freq * nchan
-    inv_aspect *= iharm / (bw * 1e6)
-    inv_aspect -= 1
-    inv_aspect /= 2.0
-    ichan = int(inv_aspect) + 1
+    chanbw_Hz = bw * 1e6 / nchan    # width of FFT bins in radio frequency Hz
+    shift_Hz = iharm * ref_freq / 2
+    ichan = round(shift_Hz / chanbw_Hz)
     if ichan > nchan / 2:
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max

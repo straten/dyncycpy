@@ -60,7 +60,7 @@ CS.save_cyclic_spectra = True
 CS.use_integrated_profile = True
 
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
-CS.low_pass_filter_Doppler = 0.5
+# CS.low_pass_filter_Doppler = 0.5
 
 # include a separate gain variation term for each sub-integration
 # CS.model_gain_variations = True
@@ -172,10 +172,6 @@ for i in range(max_iterations):
     if CS.enforce_causality:
         CS.enforce_causality -= 1
         print(f"enforcing causality for {CS.enforce_causality} more iterations")
-
-    if CS.low_pass_filter_Doppler:
-        CS.low_pass_filter_Doppler -= 1
-        print(f"low pass Doppler filter for {CS.low_pass_filter_Doppler} more iterations")
 
     if i == 0 or L > L_max:
         L_max = L
