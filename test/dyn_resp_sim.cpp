@@ -64,7 +64,11 @@ protected:
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
   std::pair<unsigned,unsigned> scattered_wave = {0,0};
 
+  //! Use a Tukey window to taper the frequency response
   double Tukey_width = 0.0;
+
+  //! Multiply each frequency response by a random phase
+  bool degenerate_phase = false;
 
   //! Add command line options
   void add_options (CommandLine::Menu&);
@@ -132,6 +136,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (output_periodic_spectra, 'o');
   arg->set_help ("Output periodic spectrum for each time sample");
+
+  arg = menu.add (degenerate_phase, 'x');
+  arg->set_help ("Multiply each frequency response by a random phase");
 }
 
 std::complex<double> random_phasor()
@@ -282,12 +289,17 @@ void add_response (complex<double>* data, unsigned jomega, unsigned jtau, unsign
   data[jomega*nchan + jtau] += amplitude * random_phasor();
 
   if (arc_width)
-  {
+  {    
     for (unsigned iom=0; iom < ntime; iom++)
     {
-      double dist = (double(iom) - double(jomega)) / arc_width;
-      double amp = exp( -dist*dist );
-      data[iom*nchan + jtau] += amplitude * amp * random_phasor();
+      double dist_om = (double(iom) - double(jomega)) / arc_width;
+
+      for (unsigned itau=0; itau < nchan; itau++)
+      {
+        double dist_tau = (double(itau) - double(jtau)) / arc_width;
+        double amp = exp( -dist_om*dist_om -dist_tau*dist_tau );
+        data[iom*nchan + itau] += amplitude * amp * random_phasor();
+      }
     }
   }
 }
@@ -312,6 +324,11 @@ void Tukey (vector<double>& window, double fraction_flat)
     window[idat] = window[ndat-idat-1] = amp;
   }
 }
+
+
+
+
+
 
 // perform an in-place 2D FFT
 
@@ -343,7 +360,85 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
       for (unsigned ichan=0; ichan < nchan; ichan++)
         data[itime*nchan + ichan] *= window[ichan];
   }
+
+  if (degenerate_phase)
+  {
+    vector<complex<double>> phasors (ntime);
+    vector<complex<double>> sums (ntime);
+
+    for (unsigned itime=0; itime < ntime; itime++)
+    {
+      auto phasor = random_phasor();
+      phasors[itime] = phasor;
+
+      complex<double> sum = 0.0;
+
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+      {
+        unsigned idx = itime*nchan + ichan;
+        data[idx] *= phasor;
+        sum += data[idx];
+      }
+
+#if MINIMIZE_DC_PHASE
+
+      sums[itime] = sum;
+      phasor = conj(sum) / abs(sum);
+
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+      {
+        unsigned idx = itime*nchan + ichan;
+        data[idx] *= phasor;
+      }
+
+#else
+
+      if (itime > 0)
+      {
+        auto s0 = data + (itime-1)*nchan;
+        auto s1 = data + itime*nchan;
+
+        sum = 0.0;
+        for (unsigned ichan=0; ichan < nchan; ichan++)
+        {
+          sum += s0[ichan] * conj(s1[ichan]);
+        }
+
+        phasor = sum / abs(sum);
+        for (unsigned ichan=0; ichan < nchan; ichan++)
+        {
+          s1[ichan] *= phasor;
+        }
+      }
+
+#endif
+    }
+  }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
 {
@@ -453,6 +548,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
 
     if (!f_of_omega)
     {
+      cerr << " " << itau;
       tau = itau * delta_tau;
       omega = sqrt(tau/curvature);
       jtau = itau;
