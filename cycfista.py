@@ -59,6 +59,9 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# reduce phase noise by minimizing the spectral entropy
+CS.minimize_spectral_entropy = True
+
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
 # CS.low_pass_filter_Doppler = 0.5
 
@@ -66,7 +69,7 @@ CS.use_integrated_profile = True
 # CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-# CS.enforce_causality = 8
+CS.enforce_causality = 8
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
 # CS.reduce_temporal_phase_noise = True
