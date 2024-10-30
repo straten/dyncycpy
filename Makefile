@@ -1,5 +1,5 @@
 
-PYTHON_SRC = cycfista.py pycyc.py
+PYTHON_SRC = cycfista.py pycyc.py fista.py
 
 PYTHON_RUNNER ?=
 

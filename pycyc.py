@@ -105,6 +105,7 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
+from scipy.optimize import minimize
 from scipy.signal import fftconvolve, kaiser
 
 
@@ -937,8 +938,8 @@ class CyclicSolver:
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad) * self.nsubint
 
         if self.low_pass_filter_Doppler < 1:
-            quarter_nsub = round (self.nsubint * self.low_pass_filter_Doppler / 2.0)
-            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub,:] = 0
+            quarter_nsub = round(self.nsubint * self.low_pass_filter_Doppler / 2.0)
+            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub, :] = 0
 
         align_phase_gradient = False
         if align_phase_gradient:
@@ -946,7 +947,6 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
-
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
@@ -2200,6 +2200,7 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     return merit, grad, nonzero
 
+
 def spectral_entropy_grad(phi, h_time_delay):
     """
     Calculates the total spectral entropy of the time-to-Doppler forward Fourier transform
@@ -2232,10 +2233,11 @@ def spectral_entropy_grad(phi, h_time_delay):
     weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
 
     gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
-    grad_power = np.sum(gradient**2)
+    np.sum(gradient**2)
 
-    rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
-    print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
+    np.sqrt(np.sum(phi**2) / (Ntime - 1))
+
+    # print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
 
     return entropy, gradient[1:]
 
@@ -2259,11 +2261,8 @@ def circular(x):
 
 
 def minimize_spectral_entropy(h_time_delay):
-
     ntime = h_time_delay.shape[0]
     initial_guess = np.zeros(ntime - 1)
-
-    options = {"maxiter": 1000, "disp": True}
 
     result = minimize(
         spectral_entropy_grad,
@@ -2272,7 +2271,6 @@ def minimize_spectral_entropy(h_time_delay):
         method="BFGS",
         jac=True,
         callback=circular,
-        options=options,
     )
 
     optimal_phases = np.zeros(ntime)

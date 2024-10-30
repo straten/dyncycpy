@@ -1,10 +1,14 @@
-import numpy as np
-from scipy.linalg import norm
-import logging, logger
+import logging
+import math
 from typing import Optional
 
+import numpy as np
+from scipy.linalg import norm
+
+import logger
+
 # from lib import Residual, extract_part_of_array
-from pycyc import CyclicSolver as Residual # TODO dirty hack
+from pycyc import CyclicSolver as Residual  # TODO dirty hack
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
@@ -124,14 +128,16 @@ def complex_phase_fix(x: np.ndarray, coords: list, value=0):
 
     return x
 
+
 def rms_wavefield(h):
     # compute the rms at -ve delay, over all doppler shifts
     nchan = h.shape[1]
-    start_chan = nchan*5//8
-    end_chan = nchan*7//8
-    noise = h[:,start_chan:end_chan]
-    variance = np.mean(np.abs(noise)**2)
+    start_chan = nchan * 5 // 8
+    end_chan = nchan * 7 // 8
+    noise = h[:, start_chan:end_chan]
+    variance = np.mean(np.abs(noise) ** 2)
     return np.sqrt(variance)
+
 
 def take_fista_step(
     iter,
@@ -172,7 +178,7 @@ def take_fista_step(
         # Need to define L when not backtracking since we're returning it:
         L = 1.0 / alpha
 
-        y_val, y_grad = func.evaluate (y_n)
+        y_val, y_grad = func.evaluate(y_n)
         x_np1 = func.normalize(y_n - alpha * y_grad)
         x_np1 = apply_prox_operators(
             _lambda,
@@ -196,22 +202,24 @@ def take_fista_step(
 
     # Estimate minimum L using equation (12) from ow23
     z = np.vdot(x_np1, y_n)
-    print(f'take_fista_step: wavefield phase difference={np.angle(z)}')
+    print(f"take_fista_step: wavefield phase difference={np.angle(z)}")
     z /= np.abs(z)
-    diff = z*x_np1 - y_n
-    var_diff = np.vdot(diff,diff);
+    diff = z * x_np1 - y_n
+    var_diff = np.vdot(diff, diff)
 
-    relative_difference = np.sqrt(np.real(var_diff / np.sqrt( np.vdot(x_np1,x_np1) * np.vdot(y_n,y_n) )))
-    print(f'take_fista_step: wavefield relative difference={relative_difference}')
+    relative_difference = np.sqrt(np.real(var_diff / np.sqrt(np.vdot(x_np1, x_np1) * np.vdot(y_n, y_n))))
+    print(f"take_fista_step: wavefield relative difference={relative_difference}")
 
     # TO-DO compute L/curvature only when the difference is significant
     # if relative_difference > ???
     z = np.vdot(y_grad, func_grad)
-    print(f'take_fista_step: wavefield gradient phase difference={np.angle(z)}')
+    print(f"take_fista_step: wavefield gradient phase difference={np.angle(z)}")
     gdiff = y_grad - func_grad
-    L_min = np.sqrt( np.real( np.vdot( gdiff, gdiff ) / var_diff ) )
+    L_min = np.sqrt(np.real(np.vdot(gdiff, gdiff) / var_diff))
 
-    demerits = np.append(demerits, func_val)
+    if math.isfinite(func_val):
+        demerits = np.append(demerits, func_val)
+
     x_n = x_np1
     y_n = y_np1
     t_n = t_np1

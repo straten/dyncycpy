@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import math
 import pickle
 import time
 
@@ -45,7 +46,7 @@ max_iterations = args.iter
 CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
-alpha_history = 5
+alpha_history = 10
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
@@ -60,19 +61,19 @@ CS.use_integrated_profile = True
 # CS.conserve_wavefield_energy = True
 
 # reduce temporal phase noise by minimizing the spectral entropy
-# CS.minimize_spectral_entropy = True
+CS.minimize_spectral_entropy = True
 
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
 # CS.low_pass_filter_Doppler = 0.5
 
 # include a separate gain variation term for each sub-integration
-# CS.model_gain_variations = True
+CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
 CS.enforce_causality = 8
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
-# CS.reduce_temporal_phase_noise = True
+CS.reduce_temporal_phase_noise = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
@@ -143,7 +144,7 @@ bad_step = 0
 prev_merit = best_merit
 
 # Start timer
-start_time = time.time()
+prev_time = start_time = time.time()
 min_step_factor = 0.5
 
 for i in range(max_iterations):
@@ -179,33 +180,45 @@ for i in range(max_iterations):
     if i == 0 or L > L_max:
         L_max = L
 
-    if CS.get_reduced_chisq() < best_merit:
-        best_merit = CS.get_reduced_chisq()
+    reduced_chisq = CS.get_reduced_chisq()
+
+    if reduced_chisq < best_merit:
+        best_merit = reduced_chisq
         best_x = np.copy(x_n)
     else:
         print(f"\n** greater than best={best_merit}")
 
-    if CS.get_reduced_chisq() > prev_merit:
+    if reduced_chisq > prev_merit:
         print("**** bad step")
 
-    if CS.get_reduced_chisq() > 100.0 * prev_merit:
+    really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
+
+    if really_bad:
         print("**** really bad step - RESET")
         t_n = 1
-        x_n[:] = best_x[:]
+        CS.h_doppler_delay[:] = y_n[:] = x_n[:] = best_x[:]
     else:
         alphas = np.append(alphas, 1.0 / L)
-        prev_merit = CS.get_reduced_chisq()
+        prev_merit = reduced_chisq
 
     if alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
 
-    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
+    if really_bad:
+        alpha *= 0.2
+        print(f"reducing alpha to {alpha}")
+        alphas = np.append(alphas, alpha)
+
+    print(f"\n{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
 
+    iter_time = end_time - prev_time
     elapsed_time = end_time - start_time
-    print(f"Elapsed time: {elapsed_time/60} min", flush=True)
+
+    prev_time = end_time
+    print(f"Elapsed time: {elapsed_time/60} min   Iteration time: {iter_time/60} min", flush=True)
 
     if i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
