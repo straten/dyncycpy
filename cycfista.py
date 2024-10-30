@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import math
 import pickle
 import time
 
@@ -59,8 +60,11 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# maintain constant total energy
+CS.conserve_wavefield_energy = True
+
 # reduce phase noise by minimizing the spectral entropy
-CS.minimize_spectral_entropy = True
+# CS.minimize_spectral_entropy = True
 
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
 # CS.low_pass_filter_Doppler = 0.5
@@ -172,6 +176,8 @@ for i in range(max_iterations):
         eps=None,
     )
 
+    assert math.isfinite(CS.get_reduced_chisq())
+
     if CS.enforce_causality:
         CS.enforce_causality -= 1
         print(f"enforcing causality for {CS.enforce_causality} more iterations")
@@ -233,7 +239,7 @@ for i in range(max_iterations):
 
         try:
             fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2, axis=0)))
+            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2 + 1e-5, axis=0)))
             fig.savefig(base + "_impulse_response.png")
             plt.close()
         except Exception:

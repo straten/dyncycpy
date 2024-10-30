@@ -106,8 +106,8 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
-from scipy.signal import fftconvolve, kaiser
 from scipy.optimize import minimize
+from scipy.signal import fftconvolve, kaiser
 
 
 class CyclicSolver:
@@ -506,6 +506,8 @@ class CyclicSolver:
             assert self.initial_h_time_freq.shape[1] == self.nchan
             self.h_time_delay = freq2time(self.initial_h_time_freq, axis=1)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            self.expected_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+
         else:
             self.expected_power = self.nchan * self.nspec
             self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
@@ -518,9 +520,10 @@ class CyclicSolver:
                 hf = time2freq(ht)
                 for ichan in range(self.nchan):
                     if np.abs(hf[ichan] - 1.0) > 1e-6:
-                        print(f'unexpected initial response[{ichan}]={hf[ichan]}')
+                        print(f"unexpected initial response[{ichan}]={hf[ichan]}")
 
-        print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
+        if self.iprint:
+            print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
@@ -961,8 +964,8 @@ class CyclicSolver:
                 pickle.dump(self.h_doppler_delay_grad, fh)
 
         if self.low_pass_filter_Doppler < 1:
-            quarter_nsub = round (self.nsubint * self.low_pass_filter_Doppler / 2.0)
-            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub,:] = 0
+            quarter_nsub = round(self.nsubint * self.low_pass_filter_Doppler / 2.0)
+            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub, :] = 0
 
         align_phase_gradient = False
         if align_phase_gradient:
@@ -1858,32 +1861,42 @@ def loadProfile(fname):
 # input array.
 # I've left the bug in for now to compare directly to filter_profile
 
+
 def ps2cs(ps, workers=2, axis=1):
     return rfft(ps, axis=axis, workers=workers, norm="ortho")
+
 
 def ps2pc(ps, workers=2, axis=0):
     return rfft(ps, axis=axis, workers=workers, norm="ortho")
 
+
 def cc2cs(cs, workers=2, axis=0):
     return fft(cs, axis=axis, workers=workers, norm="ortho")
+
 
 def cs2cc(cc, workers=2, axis=0):
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
+
 def cc2pc(cc, workers=2, axis=1):
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
-def pc2cc(pc,workers=2, axis=1):
+
+def pc2cc(pc, workers=2, axis=1):
     return fft(pc, axis=axis, workers=workers, norm="ortho")
+
 
 def time2freq(ht, workers=1, axis=0):
     return fft(ht, axis=axis, workers=workers, norm="ortho")
 
+
 def freq2time(hf, workers=1, axis=0):
     return ifft(hf, axis=axis, workers=workers, norm="ortho")
 
+
 def harm2phase(ph, workers=1):
     return irfft(ph, workers=workers, norm="ortho")
+
 
 def phase2harm(pp, workers=1):
     return rfft(pp, workers=workers, norm="ortho")
@@ -2059,7 +2072,7 @@ def cyclic_padding(cs, bw, ref_freq):
 
 
 def chan_limits_cs(iharm, nchan, bw, ref_freq):
-    chanbw_Hz = bw * 1e6 / nchan    # width of FFT bins in radio frequency Hz
+    chanbw_Hz = bw * 1e6 / nchan  # width of FFT bins in radio frequency Hz
     shift_Hz = iharm * ref_freq / 2
     ichan = round(shift_Hz / chanbw_Hz)
     if ichan > nchan / 2:
@@ -2209,48 +2222,49 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     return merit, grad, nonzero
 
+
 def spectral_entropy_grad(phi, h_time_delay):
     """
-    Calculates the total spectral entropy of the time-to-Doppler forward Fourier transform 
+    Calculates the total spectral entropy of the time-to-Doppler forward Fourier transform
     of the input h_time_delay after phase shifting each row/time (except the first) by phi
 
     Args:
-    phi: A 1D array of (Ntime - 1) real-valued phase shifts, in radians, to be applied to each row except the first
-    h_time_delay: A 2D array of Ntime * Ndelay complex-values; each row of the dynamic impulse response is multiplied by a phasor defined by x
+    phi: A 1D array of Ntime-1 real-valued phase shifts (radians) to be applied to each row except the first
+    h_time_delay: A 2D array of Ntime * Ndelay complex-values;
+
+    Each row of the dynamic impulse response, h_time_delay, is multiplied by a phasor defined by phi
 
     Returns:
     The spectral entropy and its gradient with respect to the phase shifts
     """
 
     Ntime, M = h_time_delay.shape
-    
+
     phs = np.zeros(Ntime)
     phs[1:] = phi
-    phasors = np.exp(1.j * phs)
+    phasors = np.exp(1.0j * phs)
     h_time_delay_prime = np.multiply(h_time_delay, phasors[:, np.newaxis])
     h_doppler_delay_prime = fft(h_time_delay_prime, axis=0, norm="ortho")
-    power_spectrum = np.abs(h_doppler_delay_prime)**2
-    
+    power_spectrum = np.abs(h_doppler_delay_prime) ** 2
+
     total_power = np.sum(power_spectrum)
     power_spectrum /= total_power
     log_power_spectrum = np.log2(power_spectrum + 1e-16)
     entropy = -np.sum(power_spectrum * log_power_spectrum)
-    
-    weighted_ifft = ifft((1.+log_power_spectrum)*h_doppler_delay_prime, axis=0, norm="ortho")
 
-    gradient = 2.0/total_power * np.sum( np.imag( np.conj(weighted_ifft)*h_time_delay_prime ), axis=1)
+    weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
+
+    gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
     grad_power = np.sum(gradient**2)
 
-    rms = np.sqrt(np.sum(phi**2) / (Ntime-1))
-    print (f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
+    rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
+    print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
 
     return entropy, gradient[1:]
 
 
-
-
 def minimize_temporal_phase_noise(x):
-    nspec=x.shape[0]
+    nspec = x.shape[0]
     xprev = x[0]
     zero = 1.0 + 0.0j
     power = 0.0
@@ -2264,23 +2278,30 @@ def minimize_temporal_phase_noise(x):
 
 
 def circular(x):
-    x[:] = np.fmod(x, 2.0*np.pi)
+    x[:] = np.fmod(x, 2.0 * np.pi)
 
 
 def minimize_spectral_entropy(h_time_delay):
-
     minimize_temporal_phase_noise(h_time_delay)
 
     ntime = h_time_delay.shape[0]
-    initial_guess = np.zeros(ntime-1)
+    initial_guess = np.zeros(ntime - 1)
 
-    options = {'maxiter': 1000, 'disp': True}
+    options = {"maxiter": 1000, "disp": True}
 
-    result = minimize(spectral_entropy_grad, initial_guess, args=(h_time_delay,), method='BFGS', jac=True, callback=circular, options=options)
+    result = minimize(
+        spectral_entropy_grad,
+        initial_guess,
+        args=(h_time_delay,),
+        method="BFGS",
+        jac=True,
+        callback=circular,
+        options=options,
+    )
 
     optimal_phases = np.zeros(ntime)
     optimal_phases[1:] = result.x
-    phasors = np.exp(1.j * optimal_phases)
+    phasors = np.exp(1.0j * optimal_phases)
     h_time_delay *= phasors[:, np.newaxis]
 
 
@@ -2312,8 +2333,6 @@ def loadCyclicSolver(statefile):
 
 
 if __name__ == "__main__":
-    import sys
-
     fname = sys.argv[1]
     CS = CyclicSolver(filename=fname)
     if len(sys.argv) > 2:
