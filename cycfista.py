@@ -56,14 +56,20 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# maintain constant total power in the wavefield
+# CS.conserve_wavefield_energy = True
+
+# reduce temporal phase noise by minimizing the spectral entropy
+# CS.minimize_spectral_entropy = True
+
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
-CS.low_pass_filter_Doppler = 0.5
+# CS.low_pass_filter_Doppler = 0.5
 
 # include a separate gain variation term for each sub-integration
 # CS.model_gain_variations = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-# CS.enforce_causality = 8
+CS.enforce_causality = 8
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
 # CS.reduce_temporal_phase_noise = True
@@ -215,19 +221,20 @@ for i in range(max_iterations):
         with open(base + "_wavefield.pkl", "wb") as fh:
             pickle.dump(x_n, fh)
 
-        try:
-            fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(CS.optimal_gains)
-            fig.savefig(base + "_optimal_gains.png")
-            plt.close()
-        except Exception:
-            print("##################################### optimal gains plot failed")
-        with open(base + "_optimal_gains.pkl", "wb") as fh:
-            pickle.dump(CS.optimal_gains, fh)
+        if CS.model_gain_variations:
+            try:
+                fig, ax = plt.subplots(figsize=(12, 8))
+                ax.plot(CS.optimal_gains)
+                fig.savefig(base + "_optimal_gains.png")
+                plt.close()
+            except Exception:
+                print("##################################### optimal gains plot failed")
+            with open(base + "_optimal_gains.pkl", "wb") as fh:
+                pickle.dump(CS.optimal_gains, fh)
 
         try:
             fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2, axis=0)))
+            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2, axis=0) + 1e-16))
             fig.savefig(base + "_impulse_response.png")
             plt.close()
         except Exception:

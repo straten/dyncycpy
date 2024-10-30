@@ -171,6 +171,9 @@ class CyclicSolver:
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
 
+        # reduce temporal phase noise by minimizing the spectral entropy
+        self.minimize_spectral_entropy = False
+
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
 
@@ -725,7 +728,11 @@ class CyclicSolver:
         self.h_time_delay = freq2time(self.h_doppler_delay)
 
         if self.reduce_temporal_phase_noise:
-            self.minimize_temporal_phase_noise(self.h_time_delay)
+            minimize_temporal_phase_noise(self.h_time_delay)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
+        if self.minimize_spectral_entropy:
+            minimize_spectral_entropy(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.enforce_orthogonal_real_imag:
@@ -925,7 +932,7 @@ class CyclicSolver:
                         print(f"updateWavefieldSubint isub={isub} exception: {exc}")
 
         if self.reduce_temporal_phase_noise_grad:
-            self.minimize_temporal_phase_noise(self.h_time_delay_grad)
+            minimize_temporal_phase_noise(self.h_time_delay_grad)
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad) * self.nsubint
 
@@ -940,20 +947,6 @@ class CyclicSolver:
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
 
-    def minimize_temporal_phase_noise(self, x):
-        xprev = x[0]
-        zero = 1.0 + 0.0j
-        power = 0.0
-        for isub in range(1, self.nspec):
-            z = (np.conj(x[isub]) * xprev).sum()
-            z /= np.abs(z)
-            x[isub] *= z
-            diff = z - zero
-            power += np.abs(diff) ** 2
-            xprev = x[isub]
-
-        power /= self.nspec - 1
-        print(f"minimize_temporal_phase_noise power={power}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
@@ -2206,6 +2199,86 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
 
     return merit, grad, nonzero
+
+def spectral_entropy_grad(phi, h_time_delay):
+    """
+    Calculates the total spectral entropy of the time-to-Doppler forward Fourier transform
+    of the input h_time_delay after phase shifting each row/time (except the first) by phi
+
+    Args:
+    phi: A 1D array of Ntime-1 real-valued phase shifts (radians) to be applied to each row except the first
+    h_time_delay: A 2D array of Ntime * Ndelay complex-values;
+
+    Each row of the dynamic impulse response, h_time_delay, is multiplied by a phasor defined by phi
+
+    Returns:
+    The spectral entropy and its gradient with respect to the phase shifts
+    """
+
+    Ntime, M = h_time_delay.shape
+
+    phs = np.zeros(Ntime)
+    phs[1:] = phi
+    phasors = np.exp(1.0j * phs)
+    h_time_delay_prime = np.multiply(h_time_delay, phasors[:, np.newaxis])
+    h_doppler_delay_prime = fft(h_time_delay_prime, axis=0, norm="ortho")
+    power_spectrum = np.abs(h_doppler_delay_prime) ** 2
+
+    total_power = np.sum(power_spectrum)
+    power_spectrum /= total_power
+    log_power_spectrum = np.log2(power_spectrum + 1e-16)
+    entropy = -np.sum(power_spectrum * log_power_spectrum)
+
+    weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
+
+    gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
+    grad_power = np.sum(gradient**2)
+
+    rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
+    print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
+
+    return entropy, gradient[1:]
+
+
+def minimize_temporal_phase_noise(x):
+    nspec = x.shape[0]
+    xprev = x[0]
+    zero = 1.0 + 0.0j
+    power = 0.0
+    for isub in range(1, nspec):
+        z = (np.conj(x[isub]) * xprev).sum()
+        z /= np.abs(z)
+        x[isub] *= z
+        diff = z - zero
+        power += np.abs(diff) ** 2
+        xprev = x[isub]
+
+
+def circular(x):
+    x[:] = np.fmod(x, 2.0 * np.pi)
+
+
+def minimize_spectral_entropy(h_time_delay):
+
+    ntime = h_time_delay.shape[0]
+    initial_guess = np.zeros(ntime - 1)
+
+    options = {"maxiter": 1000, "disp": True}
+
+    result = minimize(
+        spectral_entropy_grad,
+        initial_guess,
+        args=(h_time_delay,),
+        method="BFGS",
+        jac=True,
+        callback=circular,
+        options=options,
+    )
+
+    optimal_phases = np.zeros(ntime)
+    optimal_phases[1:] = result.x
+    phasors = np.exp(1.0j * optimal_phases)
+    h_time_delay *= phasors[:, np.newaxis]
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
