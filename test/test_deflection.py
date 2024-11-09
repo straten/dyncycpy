@@ -86,7 +86,9 @@ for i in range(4):
 
     ph = 0.5 * i * np.pi
 
-    delta = relative_deflection * initial_doppler_delay
+    print(f"\ntest_deflection: deflecting with phase shifted by={ph} radians")
+
+    delta = relative_deflection * initial_doppler_delay * np.exp(1.j * ph)
     offset_doppler_delay = initial_doppler_delay + delta
 
     y_val, gradient = CS.evaluate(offset_doppler_delay)
@@ -113,25 +115,26 @@ for i in range(4):
     plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
     try:
         fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
+        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
         fig.colorbar(img)
-        fig.savefig(base + "_wavefield.png")
+        fig.savefig(base + "_gradient.png")
         plt.close()
     except Exception:
-        print("##################################### wavefield plot failed")
-    with open(base + "_wavefield.pkl", "wb") as fh:
+        print("##################################### gradient plot failed")
+    with open(base + "_gradient.pkl", "wb") as fh:
         pickle.dump(gradient, fh)
 
-    if CS.model_gain_variations:
-        try:
-            fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(CS.optimal_gains)
-            fig.savefig(base + "_optimal_gains.png")
-            plt.close()
-        except Exception:
-            print("##################################### optimal gains plot failed")
-        with open(base + "_optimal_gains.pkl", "wb") as fh:
-            pickle.dump(CS.optimal_gains, fh)
+    plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
+    try:
+        fig, ax = plt.subplots(figsize=(8, 9))
+        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
+        fig.colorbar(img)
+        fig.savefig(base + "_deflection.png")
+        plt.close()
+    except Exception:
+        print("##################################### deflection plot failed")
+    with open(base + "_deflection.pkl", "wb") as fh:
+        pickle.dump(gradient, fh)
 
     try:
         fig, ax = plt.subplots(figsize=(12, 8))
@@ -141,5 +144,3 @@ for i in range(4):
     except Exception:
         print("##################################### impulse response plot failed")
 
-    plot_intrinsic_vs_observed(CS, pp_scattered, base + "_compare.png")
-    plt.close()
