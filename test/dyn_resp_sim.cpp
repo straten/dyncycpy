@@ -63,8 +63,11 @@ protected:
   //! Output simulated dynamic periodic spectra
   bool output_periodic_spectra = false;
 
-  //! Add noise to the simulated dynamic periodic spectra, as a fraction of the peak
-  double periodic_spectra_noise_fraction = 0.0;
+  //! Add instrumental noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  double instrumental_noise_fraction = 0.0;
+
+  //! Add self noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  double self_noise_fraction = 0.0;
 
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
   std::pair<unsigned,unsigned> scattered_wave = {0,0};
@@ -140,8 +143,11 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (max_profile_harmonic, 'm', "fraction");
   arg->set_help ("Maximum spin harmonic, as a fraction of number of phase bins");
 
-  arg = menu.add (periodic_spectra_noise_fraction, 'N', "rms");
+  arg = menu.add (instrumental_noise_fraction, 'N', "rms");
   arg->set_help ("Standard deviation of additional noise, relative to peak harmonic power");
+
+  arg = menu.add (self_noise_fraction, 'S', "rms");
+  arg->set_help ("Standard deviation of additional self-noise, relative to power in each phase bin");
 }
 
 std::complex<double> random_phasor()
@@ -522,6 +528,16 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   for (unsigned ibin=0; ibin<nbin; ibin++)
     intrinsic_spectrum[ibin] = f_amps[ibin];
 
+  if (self_noise_fraction > 0.0)
+  {
+    cerr << "dyn_res_sim::generate_periodic_spectra adding self noise with fractional rms=" << self_noise_fraction << endl;
+    BoxMuller gasdev (usec_seed());
+    for (unsigned ibin=0; ibin < nbin; ibin++)
+    {
+      intrinsic_spectrum[ibin] *= 1.0 + self_noise_fraction*gasdev();
+    }
+  }
+
   auto fftin = reinterpret_cast<fftw_complex*>(intrinsic_spectrum.data());
   auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
@@ -546,7 +562,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     cerr << "Intrinsic spectrum does not appear to be Hermitian power=" << total_power << " diff power=" << diff_power << endl;
   }
 
-  double noise_power = periodic_spectra_noise_fraction * sqrt(max_power);
+  double instrumental_noise_power = instrumental_noise_fraction * sqrt(max_power);
 
   vector<std::complex<double>> temp (nbin);
   vector<std::complex<double>> profile (nbin);
@@ -629,23 +645,23 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
     // cerr << "standard deviation of frequency response = " << rms << endl;
 
-    if (noise_power > 0.0)
+    if (instrumental_noise_power > 0.0)
     {
       BoxMuller gasdev (usec_seed());
 
-      // cerr << "adding noise with rms=" << noise_power << endl;
+      // cerr << "adding noise with rms=" << instrumental_noise_power << endl;
       for (unsigned ichan=0; ichan < nchan; ichan++)
       {
         auto spectrum = cyclic_spectrum.data() + ichan*nbin;
 
         for (unsigned ibin=1; ibin < nbin/2; ibin++)
         {
-          complex<double> noise (noise_power*gasdev(), noise_power*gasdev());
+          complex<double> noise (instrumental_noise_power*gasdev(), instrumental_noise_power*gasdev());
           spectrum[ibin] += noise;
           spectrum[nbin-ibin] += conj(noise);  // Hermitian spectrum
         }
-        spectrum[0] += noise_power*gasdev();
-        spectrum[nbin/2] += noise_power*gasdev();
+        spectrum[0] += instrumental_noise_power*gasdev();
+        spectrum[nbin/2] += instrumental_noise_power*gasdev();
       }
     }
 
