@@ -45,6 +45,9 @@ max_iterations = args.iter
 
 CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
+# initial value of alpha
+alpha_init = 1e-9
+
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
 alpha_history = 10
 
@@ -129,7 +132,7 @@ t_n = 1
 demerits = np.array([])
 alphas = np.array([])
 
-alpha = 1e-6
+alpha = alpha_init
 
 best_merit = CS.get_reduced_chisq()
 best_x = np.copy(x_n)
@@ -147,7 +150,7 @@ prev_merit = best_merit
 prev_time = start_time = time.time()
 min_step_factor = 0.5
 
-for i in range(max_iterations):
+for i in range(max_iterations+1):
     CS.nopt += 1
 
     if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
@@ -201,7 +204,10 @@ for i in range(max_iterations):
         alphas = np.append(alphas, 1.0 / L)
         prev_merit = reduced_chisq
 
-    if alpha_history == 0 or alphas.size < alpha_history:
+    if alphas.size == 0:
+        alpha = 1.0 / L  # this should happen only if the first step is bad
+        printf ("alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
+    elif alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
