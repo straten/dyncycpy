@@ -82,6 +82,10 @@ CS.initWavefield()
 
 initial_doppler_delay = np.copy(CS.h_doppler_delay)
 
+print(f"\ntest_deflection: no deflection baseline")
+y_val, gradient = CS.evaluate(initial_doppler_delay)
+analysis("no_deflection", gradient, None)
+
 for i in range(4):
 
     ph = 0.5 * i * np.pi
@@ -96,17 +100,11 @@ for i in range(4):
 
     y_val, gradient = CS.evaluate(offset_doppler_delay)
 
-    # Note that numpy vdot takes the complex conjugate of the first argument
-    z = np.vdot(gradient, delta)
+    base = "test_deflection_" + f"{i}"
+    analysis (base,gradient,delta)
 
-    print(f"test_deflection: gradient phase difference={np.angle(z)}")
-    z /= np.abs(z)
 
-    re_delta = np.real(delta)
-    im_delta = np.imag(delta)
-    print(f"test_deflection: power in delta={np.vdot(delta, delta)}")
-    print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
-    print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")
+def analysis (base, gradient, delta):
 
     re_gradient = np.real(gradient)
     im_gradient = np.imag(gradient)
@@ -114,7 +112,6 @@ for i in range(4):
     print(f"test_deflection: power in Re[gradient]={np.vdot(re_gradient,re_gradient)}")
     print(f"test_deflection: power in Im[gradient]={np.vdot(im_gradient,im_gradient)}")
 
-    base = "test_deflection_" + f"{i}"
     plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
     try:
         fig, ax = plt.subplots(figsize=(8, 9))
@@ -127,23 +124,26 @@ for i in range(4):
     with open(base + "_gradient.pkl", "wb") as fh:
         pickle.dump(gradient, fh)
 
-    plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
-    try:
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-        fig.colorbar(img)
-        fig.savefig(base + "_deflection.png")
-        plt.close()
-    except Exception:
-        print("##################################### deflection plot failed")
-    with open(base + "_deflection.pkl", "wb") as fh:
-        pickle.dump(gradient, fh)
+    if delta is not None:
+        re_delta = np.real(delta)
+        im_delta = np.imag(delta)
+        print(f"test_deflection: power in delta={np.vdot(delta, delta)}")
+        print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
+        print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")        
+        plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
+        try:
+            fig, ax = plt.subplots(figsize=(8, 9))
+            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
+            fig.colorbar(img)
+            fig.savefig(base + "_deflection.png")
+            plt.close()
+        except Exception:
+            print("##################################### deflection plot failed")
+        with open(base + "_deflection.pkl", "wb") as fh:
+            pickle.dump(delta, fh)
 
-    try:
-        fig, ax = plt.subplots(figsize=(12, 8))
-        ax.plot(np.log10(np.sum(np.abs(gradient) ** 2, axis=0) + 1e-16))
-        fig.savefig(base + "_impulse_response.png")
-        plt.close()
-    except Exception:
-        print("##################################### impulse response plot failed")
+        # Note that numpy vdot takes the complex conjugate of the first argument
+        z = np.vdot(gradient, delta)
 
+        print(f"test_deflection: gradient phase difference={np.angle(z)}")
+        z /= np.abs(z)
