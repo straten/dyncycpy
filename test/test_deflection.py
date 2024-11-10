@@ -88,7 +88,10 @@ for i in range(4):
 
     print(f"\ntest_deflection: deflecting with phase shifted by={ph} radians")
 
-    delta = relative_deflection * initial_doppler_delay * np.exp(1.j * ph)
+    delta_factor = relative_deflection * np.exp(1.j * ph)
+    delta = delta_factor * initial_doppler_delay
+    delta[0,0] = 0.0
+
     offset_doppler_delay = initial_doppler_delay + delta
 
     y_val, gradient = CS.evaluate(offset_doppler_delay)
