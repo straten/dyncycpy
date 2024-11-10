@@ -17,6 +17,51 @@ from plotting import plot_intrinsic_vs_observed
 
 mpl.rcParams["image.aspect"] = "auto"
 
+def analysis (base, gradient, delta):
+
+    re_gradient = np.real(gradient)
+    im_gradient = np.imag(gradient)
+    print(f"test_deflection: power in gradient={np.vdot(gradient, gradient)}")
+    print(f"test_deflection: power in Re[gradient]={np.vdot(re_gradient,re_gradient)}")
+    print(f"test_deflection: power in Im[gradient]={np.vdot(im_gradient,im_gradient)}")
+
+    plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
+    try:
+        fig, ax = plt.subplots(figsize=(8, 9))
+        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
+        fig.colorbar(img)
+        fig.savefig(base + "_gradient.png")
+        plt.close()
+    except Exception:
+        print("##################################### gradient plot failed")
+    with open(base + "_gradient.pkl", "wb") as fh:
+        pickle.dump(gradient, fh)
+
+    if delta is not None:
+        re_delta = np.real(delta)
+        im_delta = np.imag(delta)
+        print(f"test_deflection: power in delta={np.vdot(delta, delta)}")
+        print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
+        print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")        
+        plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
+        try:
+            fig, ax = plt.subplots(figsize=(8, 9))
+            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
+            fig.colorbar(img)
+            fig.savefig(base + "_deflection.png")
+            plt.close()
+        except Exception:
+            print("##################################### deflection plot failed")
+        with open(base + "_deflection.pkl", "wb") as fh:
+            pickle.dump(delta, fh)
+
+        # Note that numpy vdot takes the complex conjugate of the first argument
+        z = np.vdot(gradient, delta)
+
+        print(f"test_deflection: gradient phase difference={np.angle(z)}")
+        z /= np.abs(z)
+
+
 # do arg parsing here
 p = argparse.ArgumentParser()
 p.add_argument(
@@ -102,48 +147,3 @@ for i in range(4):
 
     base = "test_deflection_" + f"{i}"
     analysis (base,gradient,delta)
-
-
-def analysis (base, gradient, delta):
-
-    re_gradient = np.real(gradient)
-    im_gradient = np.imag(gradient)
-    print(f"test_deflection: power in gradient={np.vdot(gradient, gradient)}")
-    print(f"test_deflection: power in Re[gradient]={np.vdot(re_gradient,re_gradient)}")
-    print(f"test_deflection: power in Im[gradient]={np.vdot(im_gradient,im_gradient)}")
-
-    plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
-    try:
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-        fig.colorbar(img)
-        fig.savefig(base + "_gradient.png")
-        plt.close()
-    except Exception:
-        print("##################################### gradient plot failed")
-    with open(base + "_gradient.pkl", "wb") as fh:
-        pickle.dump(gradient, fh)
-
-    if delta is not None:
-        re_delta = np.real(delta)
-        im_delta = np.imag(delta)
-        print(f"test_deflection: power in delta={np.vdot(delta, delta)}")
-        print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
-        print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")        
-        plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
-        try:
-            fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-            fig.colorbar(img)
-            fig.savefig(base + "_deflection.png")
-            plt.close()
-        except Exception:
-            print("##################################### deflection plot failed")
-        with open(base + "_deflection.pkl", "wb") as fh:
-            pickle.dump(delta, fh)
-
-        # Note that numpy vdot takes the complex conjugate of the first argument
-        z = np.vdot(gradient, delta)
-
-        print(f"test_deflection: gradient phase difference={np.angle(z)}")
-        z /= np.abs(z)
