@@ -2047,7 +2047,7 @@ def cyclic_padding(cs, bw, ref_freq):
     return cs
 
 
-def chan_limits_cs(iharm, nchan, bw, ref_freq):
+def old_chan_limits_cs(iharm, nchan, bw, ref_freq):
     inv_aspect = ref_freq * nchan
     inv_aspect *= iharm / (bw * 1e6)
     inv_aspect -= 1
@@ -2057,6 +2057,13 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
 
+def chan_limits_cs(iharm, nchan, bw, ref_freq):
+    chanbw_Hz = bw * 1e6 / nchan  # width of FFT bins in radio frequency Hz
+    shift_Hz = iharm * ref_freq / 2
+    ichan = round(shift_Hz / chanbw_Hz)
+    if ichan > nchan / 2:
+        ichan = int(nchan / 2)
+    return (ichan, nchan - ichan)  # min,max
 
 def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """Construct the two-dimensional array of phasors used to shift the spectral response function
