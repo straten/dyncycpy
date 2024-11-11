@@ -70,7 +70,7 @@ protected:
   double self_noise_fraction = 0.0;
 
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
-  std::pair<unsigned,unsigned> scattered_wave = {0,0};
+  std::vector<std::pair<int,int>> scattered_waves;
 
   double Tukey_width = 0.0;
 
@@ -83,8 +83,11 @@ protected:
   //! Generate a dynamic response based on a scintillation arc
   void generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw);
 
-  //! Generate a dynamic response based on a single scattered wave component
-  void generate_scattered_wave (Pulsar::DynamicResponse*);
+  // add a scattered wave component at "Doppler:delay"
+  void add_scattered_wave (const std::string&);
+
+  //! Generate a dynamic response based the scattered wave components
+  void generate_scattered_waves (Pulsar::DynamicResponse*);
 
   //! Perform an in-place 2D FFT of the input wavefield, converting it to a dynamic frequency response
   void transform_wavefield (Pulsar::DynamicResponse*);
@@ -114,8 +117,8 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (ntime, 'n', "samples");
   arg->set_help ("Number of time samples");
 
-  arg = menu.add (scattered_wave, 's', "Doppler:delay");
-  arg->set_help ("Doppler,delay harmonic coordinates of discrete scattered wave");
+  arg = menu.add (this, &dyn_res_sim::add_scattered_wave, 's', "Doppler:delay");
+  arg->set_help ("add a discrete scattered wave at Doppler:delay (integer harmonic coordinates)");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -180,8 +183,8 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   ext->set_npol(1);
   ext->resize_data();
 
-  if (scattered_wave.first != 0 || scattered_wave.second != 0)
-    generate_scattered_wave (ext);
+  if (scattered_waves.size() != 0)
+    generate_scattered_waves (ext);
   else
     generate_scintillation_arc (ext, bw);
 
@@ -371,7 +374,14 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
   }
 }
 
-void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
+void dyn_res_sim::add_scattered_wave (const std::string& arg)
+{
+  auto coords = fromstring<std::pair<int,int>> (arg);
+  cerr << "dyn_res_sim::add_scattered_wave coords=" << coords << endl;
+  scattered_waves.push_back(coords);
+}
+
+void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
 {
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
@@ -382,11 +392,19 @@ void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
     for (unsigned itime=0; itime < ntime; itime++)
       data[itime*nchan + ichan] = 0;
 
-  unsigned itime = scattered_wave.first;
-  unsigned ichan = scattered_wave.second;
-
   data[0] = 1.0;
-  data[itime*nchan + ichan] = 1.0;
+
+  for (auto wave: scattered_waves)
+  {
+    int itime = wave.first;
+    int ichan = wave.second;
+
+    // reverse the time axis ... see note about conjugation at dyn_res_sim::transform_wavefield
+    int jtime = (ntime-itime) % ntime;
+    int jchan = (nchan+ichan) % nchan;
+
+    data[jtime*nchan + jchan] = 1.0;
+  }
 
   transform_wavefield (ext);
 }
