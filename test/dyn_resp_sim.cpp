@@ -386,6 +386,8 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
+  cerr << "dyn_res_sim::generate_scattered_waves coords=" << ntime << ":" << nchan << endl;
+
   auto data = ext->get_data().data();
 
   for (unsigned ichan=0; ichan < nchan; ichan++)
@@ -402,6 +404,8 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
     // reverse the time axis ... see note about conjugation at dyn_res_sim::transform_wavefield
     int jtime = (ntime-itime) % ntime;
     int jchan = (nchan+ichan) % nchan;
+
+    cerr << "dyn_res_sim::generate_scattered_waves coords=" << jtime << ":" << jchan << endl;
 
     data[jtime*nchan + jchan] = 1.0;
   }
@@ -635,7 +639,9 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
         shifted_impulse_response = impulse_response;
         for (unsigned ichan=1; ichan < nchan; ichan++)
         {
-          double phase = slope * double(ichan) / nchan;
+          // treat the upper half of the array as -ve delays
+          int jchan = (ichan < nchan/2) ? ichan : int(ichan) - int(nchan);
+          double phase = slope * double(jchan) / nchan;
           complex<double> phasor (cos(phase), sin(phase));
           shifted_impulse_response[ichan] *= phasor;
         }
