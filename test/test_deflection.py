@@ -109,15 +109,6 @@ CS.nthread = 8
 # compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
 
-# use a single integrated profile as the reference profile for each sub-integration
-CS.use_integrated_profile = True
-
-# maintain constant total power in the wavefield
-# CS.conserve_wavefield_energy = True
-
-# reduce temporal phase noise by minimizing the spectral entropy
-# CS.minimize_spectral_entropy = True
-
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
     CS.load_initial_guess(init)
