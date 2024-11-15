@@ -72,6 +72,9 @@ protected:
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
   std::vector<std::pair<int,int>> scattered_waves;
 
+  //! randomize scattered wave phases
+  bool scattered_waves_random_phase = false;
+
   double Tukey_width = 0.0;
 
   //! Add command line options
@@ -119,6 +122,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (this, &dyn_res_sim::add_scattered_wave, 's', "Doppler:delay");
   arg->set_help ("add a discrete scattered wave at Doppler:delay (integer harmonic coordinates)");
+
+  arg = menu.add (scattered_waves_random_phase, "rand");
+  arg->set_help ("randomize the phases of scattered wave components");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -302,12 +308,22 @@ void add_response (complex<double>* data, unsigned jomega, unsigned jtau, unsign
 
   if (arc_width)
   {
-    for (unsigned iom=0; iom < ntime; iom++)
-    {
-      double dist = (double(iom) - double(jomega)) / arc_width;
-      double amp = exp( -dist*dist );
-      data[iom*nchan + jtau] += amplitude * amp * random_phasor();
-    }
+    // compute the Gaussian out to where the amplitude falls to 10^-9
+    int fizzle = sqrt(arc_width * 9 * log(10.0));
+    // cerr << "add_response compute Gaussian out to " << fizzle << " pixels from arc" << endl;
+
+    for (int iom=int(jomega)-fizzle; iom <= int(jomega)+fizzle; iom++)
+      for (int itau=int(jtau)-fizzle; itau <= int(jtau)+fizzle; itau++)
+      {
+        double dist_om = (double(iom) - double(jomega)) / arc_width;
+        double dist_tau = (double(itau) - double(jtau)) / arc_width;
+        double amp = exp( -dist_om*dist_om -dist_tau*dist_tau );
+
+        unsigned kom = (iom + ntime) % ntime;
+        unsigned ktau = (itau + nchan) % nchan;
+
+        data[kom*nchan + ktau] += amplitude * amp * random_phasor();
+      }
   }
 }
 
@@ -407,7 +423,12 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
 
     cerr << "dyn_res_sim::generate_scattered_waves coords=" << jtime << ":" << jchan << endl;
 
-    data[jtime*nchan + jchan] = 1.0;
+    complex<double> value = 1.0;
+    if (scattered_waves_random_phase)
+      value = random_phasor();
+
+    data[jtime*nchan + jchan] = value;
+  
   }
 
   transform_wavefield (ext);
