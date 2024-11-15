@@ -22,7 +22,7 @@ def plot_response(dynamic_response,bw,cf):
     MEDIUM_SIZE = 22
     BIGGER_SIZE = 32
 
-    plt.rc('figure', figsize=[18,12])
+    plt.rc('figure', figsize=[24,12])
 
     plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
     plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
@@ -32,7 +32,7 @@ def plot_response(dynamic_response,bw,cf):
     plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
     plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
-    fig, axs = plt.subplots(2,2)
+    fig, axs = plt.subplots(1,2)
 
     fmin=cf-bw/2
     fmax=cf+bw/2
@@ -49,24 +49,31 @@ def plot_response(dynamic_response,bw,cf):
     toplot=np.real(dynamic_response)
     pmax = np.max(abs(toplot))
     pextent = [fmin, fmax, 0, tmax]
-    img = axs[0,0].imshow(toplot, aspect="auto", origin="lower", cmap="bwr", interpolation=None, extent=pextent, vmin=-pmax, vmax=pmax)
-    axs[0,0].set(xlabel="Frequency (MHz)", ylabel="Time (s)")
+    img = axs[0].imshow(toplot, aspect="auto", origin="lower", cmap="bwr", interpolation=None, extent=pextent, vmin=-pmax, vmax=pmax)
+    axs[0].set(xlabel="Frequency (MHz)", ylabel="Time (s)", title="Real")
     fig.colorbar(img)
 
     toplot=np.imag(dynamic_response)
     pmax = np.max(abs(toplot))
     pextent = [fmin, fmax, 0, tmax]
-    img = axs[1,0].imshow(toplot, aspect="auto", origin="lower", cmap="bwr", interpolation=None, extent=pextent, vmin=-pmax, vmax=pmax)
-    axs[1,0].set(xlabel="Frequency (MHz)", ylabel="Time (s)")
+    img = axs[1].imshow(toplot, aspect="auto", origin="lower", cmap="bwr", interpolation=None, extent=pextent, vmin=-pmax, vmax=pmax)
+    axs[1].set(xlabel="Frequency (MHz)", ylabel="Time (s)", title="Imaginary")
     fig.colorbar(img)
+
+    filename = "dyn_resp.png"
+
+    plt.savefig(filename)
+    plt.close()
+
+    fig, axs = plt.subplots(1,1)
 
     toplot=np.log10(np.abs(delay_Doppler))
     max_plot=np.max(toplot,axis=None)
     min_plot=max_plot - 5
-    axs[0,1].imshow(toplot, vmin=min_plot, vmax=max_plot, aspect="auto", origin="lower", cmap="binary", interpolation='none', extent=[min_delay_mus, max_delay_mus, 0, max_omega])
-    axs[0,1].set(xlabel="Delay ($\mu$s)", ylabel="Diff. Doppler (Hz)")
+    axs.imshow(toplot, vmin=min_plot, vmax=max_plot, aspect="auto", origin="lower", cmap="binary", interpolation='none', extent=[min_delay_mus, max_delay_mus, 0, max_omega])
+    axs.set(xlabel="Delay ($\mu$s)", ylabel="Diff. Doppler (Hz)")
 
-    filename = "dyn_resp.png"
+    filename = "wavefield.png"
 
     plt.savefig(filename)
     plt.close()
