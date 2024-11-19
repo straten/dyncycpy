@@ -60,33 +60,36 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
-# maintain constant total power in the wavefield
-# CS.conserve_wavefield_energy = True
-
-# reduce temporal phase noise by minimizing the spectral entropy
-CS.minimize_spectral_entropy = True
-
-# maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
-# CS.low_pass_filter_Doppler = 0.5
-
-# include a separate gain variation term for each sub-integration
-CS.model_gain_variations = True
-
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
 CS.enforce_causality = 8
 
+# use a delay-dependent threshold to perform shrinkage
+CS.delay_noise_shrinkage_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
+
+# CS.noise_shrinkage_threshold = 1.0
+
+# include a separate gain variation term for each sub-integration
+# CS.model_gain_variations = True
+
+# maintain constant total power in the wavefield
+CS.conserve_wavefield_energy = True
+
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
 CS.reduce_temporal_phase_noise = True
+
+# reduce temporal phase noise by minimizing the spectral entropy
+CS.minimize_spectral_entropy = True
 
 # Number of iterations between profile updates
 update_profile_period = 10
 update_profile_every_iteration_until = 15
 
-# CS.noise_shrinkage_threshold = 1.0
+
 # CS.doppler_window = ('kaiser', 8.0)
 
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+# maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
+# CS.low_pass_filter_Doppler = 0.5
 
 # CS.temporal_taper_alpha = 0.25
 # CS.spectral_taper_alpha = 0.25
