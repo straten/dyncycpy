@@ -402,7 +402,7 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
-  cerr << "dyn_res_sim::generate_scattered_waves coords=" << ntime << ":" << nchan << endl;
+  cerr << "dyn_res_sim::generate_scattered_waves dimensions=" << ntime << ":" << nchan << endl;
 
   auto data = ext->get_data().data();
 
@@ -649,8 +649,9 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
       impulse_response[ichan] /= nchan;
 
     double total_power = 0.0;
+    double total_cs_power = 0.0;
 
-    for (unsigned ibin=1; ibin < nbin/2; ibin++)
+    for (unsigned ibin=0; ibin < nbin/2; ibin++)
     {
       for (int sign: {-1, 1})
       {
@@ -680,7 +681,11 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
           auto spectrum = cyclic_spectrum.data() + ichan*nbin;
 
           spectrum[ibin] *= frequency_response[ichan];
-          spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
+          if (ibin > 0)
+            spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
+
+          if (sign == 1)
+            total_cs_power += norm(spectrum[ibin]);
         }
 
       }
@@ -689,6 +694,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     double rms = sqrt(total_power / (nchan * 2 * (nbin/2 - 1)));
 
     // cerr << "standard deviation of frequency response = " << rms << endl;
+    cerr << "total power in cyclic spectrum = " << total_cs_power << endl;
 
     if (instrumental_noise_power > 0.0)
     {
