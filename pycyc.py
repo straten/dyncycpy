@@ -213,6 +213,9 @@ class CyclicSolver:
         # include separate temporal gain variations in the model
         self.model_gain_variations = False
 
+        # normalize each cyclic spectrum
+        self.normalize_cyclic_spectra = False
+
         # derive a first guest for the wavefield using the harmonic with the highest S/N
         self.first_wavefield_from_best_harmonic = 0
 
@@ -808,8 +811,10 @@ class CyclicSolver:
 
         if self.model_gain_variations:
             cs, norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
-        else:
+        elif self.normalize_cyclic_spectra:
             cs, norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+        else:
+            norm = 1
         cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
             cs[:, self.maxharm + 1 :] = 0.0
@@ -2027,6 +2032,7 @@ def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
     rmsn = rms_cs(cs, ih=cs.shape[1] - 1, bw=bw, ref_freq=ref_freq)
     normfac = np.sqrt(np.abs(rms1**2 - rmsn**2))
+    print(f"normalize_cs: normfac={normfac}")
     return cs / normfac, normfac
 
 
@@ -2037,6 +2043,11 @@ def rms_cs(cs, ih, bw, ref_freq):
     return rms
 
 
+# to disable cyclic padding, rename this function `cyclic_padding`
+def disable_cyclic_padding(cs, bw, ref_freq):
+    return cs
+
+# to disable cyclic padding, rename this function something `enable_cyclic_padding`
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
@@ -2045,7 +2056,6 @@ def cyclic_padding(cs, bw, ref_freq):
         cs[:imin, ih] = 0
         cs[imax:, ih] = 0
     return cs
-
 
 def old_chan_limits_cs(iharm, nchan, bw, ref_freq):
     inv_aspect = ref_freq * nchan
@@ -2189,6 +2199,9 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     # residual, R = model - data
     diff = cs_model - cs_data
+
+    # print(f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}")
+
     phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
@@ -2196,11 +2209,21 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     cc1 = cs2cc(diff * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0) / CS.nchan  # WDvS Equation 37
-    grad = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum1 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0 / CS.nchan
-    grad += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum2 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+
+    test_conjugacy = False
+    if test_conjugacy:
+        test = grad_sum1 - np.conj(grad_sum2)
+        test_power = (np.abs(test) ** 2).sum()
+        sum1_power = (np.abs(grad_sum1) ** 2).sum()
+        sum2_power = (np.abs(grad_sum2) ** 2).sum()
+        print(f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}")
+
+    grad = grad_sum1 + grad_sum2
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
@@ -2248,6 +2271,11 @@ def spectral_entropy_grad(phi, h_time_delay):
 
     return entropy, gradient[1:]
 
+def spectral_entropy(h_time_delay):
+    ntime = h_time_delay.shape[0]
+    phi = np.zeros(ntime - 1)
+    entropy, grad = spectral_entropy_grad(phi,h_time_delay)
+    return entropy
 
 def minimize_temporal_phase_noise(x):
     nspec = x.shape[0]
@@ -2271,6 +2299,8 @@ def minimize_spectral_entropy(h_time_delay):
     ntime = h_time_delay.shape[0]
     initial_guess = np.zeros(ntime - 1)
 
+    S_init = spectral_entropy(h_time_delay)
+
     result = minimize(
         spectral_entropy_grad,
         initial_guess,
@@ -2284,6 +2314,10 @@ def minimize_spectral_entropy(h_time_delay):
     optimal_phases[1:] = result.x
     phasors = np.exp(1.0j * optimal_phases)
     h_time_delay *= phasors[:, np.newaxis]
+
+    S_final = spectral_entropy(h_time_delay)
+
+    print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
