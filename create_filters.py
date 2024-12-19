@@ -39,26 +39,26 @@ def add_filter_to_result () -> None:
   print(f"performing SVD on {store_index} spectra")
 
   subset = store[:,:store_index,:]
-
   nsamp = store.shape[2]
-  if result is None:
-      result = np.zeros((2, 1, nsamp), dtype=np.complex128)
-  else:
-      result.resize((2,result_index+1, nsamp))
 
-  for ipol in [0,1]:
-      U, s, Vh = svd (subset[ipol,:,:])
-      print(f"singular values {s}")
-      result[ipol,result_index,:] = Vh[0,:]
+  subset = np.reshape(subset, (2*store_index,nsamp))
+  if result is None:
+      result = np.zeros((1, nsamp), dtype=np.complex128)
+  else:
+      result.resize((result_index+1, nsamp))
+
+  U, s, Vh = svd (subset)
+  print(f"singular values {s}")
+  result[result_index,:] = Vh[0,:]
 
   if produce_plots:
       fig, axs = plt.subplots(1,2)
-
-      for ipol in [0,1]:
-          toplot = np.copy(np.real(result[ipol,result_index,:]))
-          axs[ipol].plot(toplot)
-          axs[ipol].set(ylabel="Re[v(t)]", xlabel="Time (sample index)")
-
+      toplot = np.copy(np.real(result[result_index,:]))
+      axs[0].plot(toplot)
+      axs[0].set(ylabel="Re[v(t)]", xlabel="Time (sample index)")
+      toplot = np.copy(np.imag(result[result_index,:]))
+      axs[1].plot(toplot)
+      axs[1].set(ylabel="Im[v(t)]", xlabel="Time (sample index)")
 
 first_second = 0
 current_time = 0
@@ -96,7 +96,6 @@ def get_current_offset (filename) -> float:
 
 def create_filters (files, interval) -> None:
 
-  global result
   global result_index
   global store 
   global store_index
