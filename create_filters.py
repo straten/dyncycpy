@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from scipy.fft import fftshift, fft, ifft
 from scipy.optimize import minimize
 from scipy.linalg import svd
+from scipy import signal
 
 mpl.rcParams["image.aspect"] = "auto"
 
@@ -23,10 +24,10 @@ mpl.rcParams["image.aspect"] = "auto"
 store = None
 store_index = 0
 
-# result of performing SVD on voltage data for the current interval
-# produced during add_filter_to_result
+# average giant pulse voltage waveforms for each interval
 result = None
 result_index = 0
+result_sum = None
 
 produce_plots = False
 
@@ -34,11 +35,14 @@ def add_filter_to_result () -> None:
 
     global result
     global result_index
+    global result_sum
+
+    global produce_plots
 
     if store is None:
         error("no stored data")
 
-    print(f"performing SVD on {store_index} spectra")
+    print(f"computing the average of {store_index} spectra")
 
     subset = store[:,:store_index,:]
     nsamp = store.shape[2]
@@ -49,9 +53,40 @@ def add_filter_to_result () -> None:
     else:
         result.resize((result_index+1, nsamp))
 
-    U, s, Vh = svd (subset)
-    print(f"singular values {s}")
-    result[result_index,:] = Vh[0,:]
+    power = np.sum(np.abs(subset)**2,axis=1)
+    max_idx = np.argmax(power)
+
+    x = subset[max_idx]
+
+    if result_sum is None:
+        correlate_with = x
+    else:
+        correlate_with = result_sum
+
+    for idx in range(subset.shape[0]):
+        if result_sum is None and idx == max_idx:
+            continue
+
+        y = subset[idx]
+        correlation = signal.correlate(x, y, mode="full")
+        lags = signal.correlation_lags(x.size, y.size, mode="full")
+        maxval = np.max(correlation)
+
+        lag = lags[np.argmax(correlation)]
+        y = np.roll(y, lag)
+        ph = maxval / np.abs(maxval)
+        y *= np.conj(ph)
+        x += y
+        print(f"lag[{idx}]={lag}={maxval}")
+
+    if result_sum is None:
+        result_sum = np.copy(x)
+    else:
+        result_sum += x
+
+    # U, s, Vh = svd (subset)
+    # print(f"singular values {s}")
+    result[result_index,:] = x[:]
 
     if produce_plots:
         fig, axs = plt.subplots(1,2)
@@ -61,6 +96,10 @@ def add_filter_to_result () -> None:
         toplot = np.copy(np.imag(result[result_index,:]))
         axs[1].plot(toplot)
         axs[1].set(ylabel="Im[v(t)]", xlabel="Time (sample index)")
+
+        filename = f"svd_{result_index:03}.png"
+        plt.savefig(filename)
+        plt.close()
 
     result_index += 1
 
@@ -102,12 +141,15 @@ def get_current_offset (filename) -> float:
     return current_offset
 
 
-def create_filters (files, interval, template) -> None:
+def create_filters (files, interval, template, plot) -> None:
 
     global store 
     global store_index
     global file_index
     global current_time
+    global produce_plots
+
+    produce_plots = plot
 
     for file in files:
 
@@ -171,7 +213,12 @@ def main() -> None:
         required=True,
         help="the archive file used as a template",
     )
-
+    p.add_argument(
+        "-plot",
+        type=bool,
+        default=False,
+        help="plot each giant",
+    )
     args, files = p.parse_known_args()
 
     vargs = vars(args)
