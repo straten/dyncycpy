@@ -73,8 +73,15 @@ def add_filter_to_result (method) -> None:
     else:
         result.resize((result_index+1, nsamp))
 
-    power = np.sum(np.abs(subset)**2,axis=1)
-    max_idx = np.argmax(power)
+    sum_power = np.sum(np.abs(subset)**2,axis=1)
+    sum_max_idx = np.argmax(sum_power)
+
+    max_power = np.max(np.abs(subset)**2,axis=1)
+    max_max_idx = np.argmax(max_power)
+
+    print(f"max sum={sum_max_idx} max={max_max_idx}")
+
+    max_idx = sum_max_idx
 
     x = subset[max_idx]
 
@@ -83,6 +90,8 @@ def add_filter_to_result (method) -> None:
             correlate_with = x
         else:
             correlate_with = result_sum
+
+        print(f"aligning and adding to pulse with maximum power at idx={max_idx}")
 
         for idx in range(subset.shape[0]):
             if result_sum is None and idx == max_idx:
@@ -97,18 +106,17 @@ def add_filter_to_result (method) -> None:
         else:
             result_sum += x
 
+    else:
+        print(f"directly using pulse with maximum power at idx={max_idx}")
+
     # U, s, Vh = svd (subset)
     # print(f"singular values {s}")
     result[result_index,:] = x[:]
 
     if produce_plots:
-        fig, axs = plt.subplots(1,2)
-        toplot = np.copy(np.real(result[result_index,:]))
-        axs[0].plot(toplot)
-        axs[0].set(ylabel="Re[v(t)]", xlabel="Time (sample index)")
-        toplot = np.copy(np.imag(result[result_index,:]))
-        axs[1].plot(toplot)
-        axs[1].set(ylabel="Im[v(t)]", xlabel="Time (sample index)")
+        toplot = np.abs(x)**2
+        toplot = np.mean(toplot.reshape(-1, 4), axis=1)
+        plt.plot(toplot)
 
         filename = f"svd_{result_index:03}.png"
         plt.savefig(filename)
@@ -247,6 +255,9 @@ def main() -> None:
 
     # convert h(t,tau) to H(t,nu)
     result = fft(result,axis=1,norm="ortho")
+
+    # output matched filter frequency response functions
+    result = np.conj(result)
 
     ntime, nchan = result.shape
 
