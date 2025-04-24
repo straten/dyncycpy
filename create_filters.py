@@ -288,11 +288,12 @@ def main() -> None:
     ext.set_minimum_epoch (start_time)
     ext.set_maximum_epoch (end_time)
 
-    cfreq = arch.get_centre_frequency()
-    bw = arch.get_bandwidth()
+    ext.set_centre_frequency (arch.get_centre_frequency())
+    ext.set_bandwidth (arch.get_bandwidth())
 
-    ext.set_minimum_frequency (cfreq - 0.5*bw)
-    ext.set_maximum_frequency (cfreq + 0.5*bw)
+    # complex conjugation of the frequency response negates the time axis
+    # however, DC remains DC; therefore, there are nchan-1 FIR taps at -ve delay
+    ext.set_impulse_neg(nchan-1)
 
     arch.unload("giant_pulse_filters.fits")
 
