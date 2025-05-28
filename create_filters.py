@@ -24,14 +24,31 @@ mpl.rcParams["image.aspect"] = "auto"
 store = None
 store_index = 0
 
-# average giant pulse voltage waveforms for each interval
+# giant pulse voltage waveforms for each interval
 result = None
 result_index = 0
 result_sum = None
 
 produce_plots = False
+lags = None
 
-def add_filter_to_result () -> None:
+def align (x, y, idx):
+
+    global lags
+    if lags is None:
+        lags = signal.correlation_lags(x.size, y.size, mode="full")
+
+    correlation = signal.correlate(x, y, mode="full")
+    cabs = np.abs(correlation)
+    imax = np.argmax(cabs)
+    maxval = np.max(correlation)
+    lag = lags[imax]
+    y[:] = np.roll(y, lag)
+    ph = maxval / np.abs(maxval)
+    y *= np.conj(ph)
+    print(f"lag[{idx}] {lag=} {maxval=} {ph=}")
+
+def add_filter_to_result (method) -> None:
 
     global result
     global result_index
@@ -42,7 +59,10 @@ def add_filter_to_result () -> None:
     if store is None:
         error("no stored data")
 
-    print(f"computing the average of {store_index} spectra")
+    if method == "max":
+        print(f"taking the maximum of {store_index} spectra")
+    else:
+        print(f"computing the average of {store_index} spectra")
 
     subset = store[:,:store_index,:]
     nsamp = store.shape[2]
@@ -53,49 +73,50 @@ def add_filter_to_result () -> None:
     else:
         result.resize((result_index+1, nsamp))
 
-    power = np.sum(np.abs(subset)**2,axis=1)
-    max_idx = np.argmax(power)
+    sum_power = np.sum(np.abs(subset)**2,axis=1)
+    sum_max_idx = np.argmax(sum_power)
+
+    max_power = np.max(np.abs(subset)**2,axis=1)
+    max_max_idx = np.argmax(max_power)
+
+    print(f"max sum={sum_max_idx} max={max_max_idx}")
+
+    max_idx = sum_max_idx
 
     x = subset[max_idx]
 
-    if result_sum is None:
-        correlate_with = x
+    if method != "max":
+        if result_sum is None:
+            correlate_with = x
+        else:
+            correlate_with = result_sum
+
+        print(f"aligning and adding to pulse with maximum power at idx={max_idx}")
+
+        for idx in range(subset.shape[0]):
+            if result_sum is None and idx == max_idx:
+                continue
+
+            y = subset[idx]
+            align (x, y, idx)
+            x += y
+
+        if result_sum is None:
+            result_sum = np.copy(x)
+        else:
+            result_sum += x
+
     else:
-        correlate_with = result_sum
-
-    for idx in range(subset.shape[0]):
-        if result_sum is None and idx == max_idx:
-            continue
-
-        y = subset[idx]
-        correlation = signal.correlate(x, y, mode="full")
-        lags = signal.correlation_lags(x.size, y.size, mode="full")
-        maxval = np.max(correlation)
-
-        lag = lags[np.argmax(correlation)]
-        y = np.roll(y, lag)
-        ph = maxval / np.abs(maxval)
-        y *= np.conj(ph)
-        x += y
-        print(f"lag[{idx}]={lag}={maxval}")
-
-    if result_sum is None:
-        result_sum = np.copy(x)
-    else:
-        result_sum += x
+        print(f"directly using pulse with maximum power at idx={max_idx}")
 
     # U, s, Vh = svd (subset)
     # print(f"singular values {s}")
     result[result_index,:] = x[:]
 
     if produce_plots:
-        fig, axs = plt.subplots(1,2)
-        toplot = np.copy(np.real(result[result_index,:]))
-        axs[0].plot(toplot)
-        axs[0].set(ylabel="Re[v(t)]", xlabel="Time (sample index)")
-        toplot = np.copy(np.imag(result[result_index,:]))
-        axs[1].plot(toplot)
-        axs[1].set(ylabel="Im[v(t)]", xlabel="Time (sample index)")
+        toplot = np.abs(x)**2
+        toplot = np.mean(toplot.reshape(-1, 4), axis=1)
+        plt.plot(toplot)
 
         filename = f"svd_{result_index:03}.png"
         plt.savefig(filename)
@@ -141,7 +162,7 @@ def get_current_offset (filename) -> float:
     return current_offset
 
 
-def create_filters (files, interval, template, plot) -> None:
+def create_filters (files, interval, template, method, plot) -> None:
 
     global store 
     global store_index
@@ -156,7 +177,7 @@ def create_filters (files, interval, template, plot) -> None:
         current_offset = get_current_offset(file)
 
         if current_offset > interval:
-            add_filter_to_result ()
+            add_filter_to_result (method)
             current_time += interval
             store_index = 0
 
@@ -190,7 +211,7 @@ def create_filters (files, interval, template, plot) -> None:
 
     if store_index > 0:
         print(f"adding last interval to result current_offset/interval={current_offset}/{interval}")
-        add_filter_to_result()
+        add_filter_to_result(method)
     
 
 def main() -> None:
@@ -214,6 +235,12 @@ def main() -> None:
         help="the archive file used as a template",
     )
     p.add_argument(
+        "-method",
+        type=str,
+        default="max",
+        help="the method used to derive the impulse response",
+    )
+    p.add_argument(
         "-plot",
         type=bool,
         default=False,
@@ -226,14 +253,23 @@ def main() -> None:
 
     print(f"{result.shape=}")
 
+    # convert h(t,tau) to H(t,nu)
+    result = fft(result,axis=1,norm="ortho")
+
+    # output matched filter frequency response functions
+    result = np.conj(result)
+
+    ntime, nchan = result.shape
+
+    # normalize each time interval by the standard deviation (over nu)
+    result /= np.sqrt(np.sum(np.abs(result)**2, axis=1) / nchan)[:, np.newaxis]
+
     with open("giant_pulse_filters.pkl", "wb") as fh:
         pickle.dump(result, fh)
 
     arch = psrchive.Archive_load(args.template)
     arch.resize(0)
 
-    ntime = result.shape[0]
-    nchan = result.shape[1]
     result = np.reshape(result,ntime*nchan)
 
     ext = arch.add_dynamic_response()
@@ -243,16 +279,21 @@ def main() -> None:
     ext.resize_data()
     ext.set_data(result)
 
-    start_time = psrchive.MJD(first_datestr)
+    start_time = psrchive.MJD()
+    start_time.from_datestr(first_datestr)
+
     end_time = start_time + args.interval * ntime
+
+    print(f"start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
     ext.set_minimum_epoch (start_time)
-    ext.set_maximum_epoch (start_time)
+    ext.set_maximum_epoch (end_time)
 
-    cfreq = arch.get_centre_frequency()
-    bw = arch.get_bandwidth()
+    ext.set_centre_frequency (arch.get_centre_frequency())
+    ext.set_bandwidth (arch.get_bandwidth())
 
-    ext.set_minimum_frequency (cfreq - 0.5*bw)
-    ext.set_maximum_frequency (cfreq + 0.5*bw)
+    # complex conjugation of the frequency response negates the time axis
+    # however, DC remains DC; therefore, there are nchan-1 FIR taps at -ve delay
+    ext.set_impulse_neg(nchan-1)
 
     arch.unload("giant_pulse_filters.fits")
 
