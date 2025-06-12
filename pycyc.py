@@ -106,8 +106,8 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
 from scipy.optimize import minimize
-from scipy.signal import fftconvolve, kaiser
-
+from scipy.signal import fftconvolve
+from scipy.signal.windows import kaiser
 
 class CyclicSolver:
     def __init__(
@@ -149,7 +149,7 @@ class CyclicSolver:
         self.pp_intrinsic = None
         self.shear_phasors = None
         self.cs_norm = None
-
+        self.hf_prev = None
         self.iprint = False
         self.make_plots = False
         self.niter = 0
@@ -178,11 +178,14 @@ class CyclicSolver:
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
 
-        # align the phases of time-adjacent frequency responses computed from the wavefield
+        # align the phases of time-adjacent impulse responses computed from the wavefield
         self.reduce_temporal_phase_noise = False
 
-        # align the phases of time-adjacent frequency responses computed from the wavefield gradient
+        # align the phases of time-adjacent impulse responses computed from the wavefield gradient
         self.reduce_temporal_phase_noise_grad = False
+
+        # align the phase and delay of time-adjacent frequency responses computed from the wavefield
+        self.align_frequency_responses = False
 
         # set all wavefield components less than theshold*rms to zero
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
@@ -500,8 +503,7 @@ class CyclicSolver:
 
         self.nspec = self.nsubint
 
-        hf_prev = np.ones((self.nchan,), dtype=np.complex128)
-        self.hf_prev = hf_prev
+        self.hf_prev = np.ones((self.nchan,), dtype=np.complex128)
 
         if self.initial_h_time_freq is None:
             self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
@@ -731,11 +733,20 @@ class CyclicSolver:
 
         self.h_time_delay = freq2time(self.h_doppler_delay)
 
+        if self.align_frequency_responses:
+            print(f"reduce temporal phase and delay noise")
+            h_time_freq = time2freq(self.h_time_delay, axis=1)
+            align_to_neighbour(h_time_freq)
+            self.h_time_delay = freq2time(h_time_freq, axis=1)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
         if self.reduce_temporal_phase_noise:
+            print(f"reduce temporal phase noise")
             minimize_temporal_phase_noise(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.minimize_spectral_entropy:
+            print(f"minimize spectral entropy")
             minimize_spectral_entropy(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
@@ -1044,6 +1055,8 @@ class CyclicSolver:
             cs, norm = self.get_cs(ps)
 
         if hf_prev is None:
+            if self.hf_prev is None:
+                self.hf_prev = np.ones((self.nchan,), dtype=np.complex128)
             _hf_prev = self.hf_prev
         else:
             _hf_prev = hf_prev
@@ -2319,6 +2332,95 @@ def minimize_spectral_entropy(h_time_delay):
     S_final = spectral_entropy(h_time_delay)
 
     print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
+
+
+def spectral_distance(alpha, z, w):
+    """
+    Calculates the magnitude of the difference between the two spectra in the two halve of two_spectra
+    after mupltiplying the second one by an amplitude, phase, and phase gradient
+
+    Args:
+    alpha: A 1D array of 3 values: amplitude, phase, and slope
+    two_spectra: the complex-valued spectra to be aligned
+
+    Returns:
+    The distance and its gradient with respect to the 3 parameters in alpha
+    """
+
+    Nchan = z.size
+    phase = alpha[0]
+    slope = alpha[1]
+    amplitude = 1
+    # print(f"{amplitude=} {phase=} {slope=}")
+
+    nus = np.fft.fftfreq(Nchan)
+    wprime = amplitude * np.exp(1j * phase) * w * np.exp(1j * slope * nus)
+    delta = z - wprime
+
+    diff = np.sum(np.abs(delta)**2)
+
+    del_amplitude = wprime / amplitude
+    del_phase = 1j * wprime
+    del_slope = 1j * nus * wprime
+
+    ddiff_damp = -2 * np.sum ( np.real( np.conj(delta) * del_amplitude ) )
+    ddiff_dphs = -2 * np.sum ( np.real( np.conj(delta) * del_phase ) )
+    ddiff_dslo = -2 * np.sum ( np.real( np.conj(delta) * del_slope ) )
+
+    # print(f"{diff=} del_a={ddiff_damp} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
+    return diff, [ddiff_dphs, ddiff_dslo]
+
+
+def minimize_difference(z, w):
+
+    Nchan = z.size
+    initial_guess = np.zeros(2)
+
+    ccf = fft( np.conj(w) * z )
+    ccf_power = np.abs(ccf)**2
+    imax = np.argmax(ccf_power)
+    ph_max = np.angle(ccf[imax])
+
+    # print(f"{imax=} {ph_max=} {Nchan=}")
+
+    initial_guess[0] = ph_max
+
+    if imax < Nchan // 2:
+        slope = imax
+    else:
+        slope = imax - Nchan
+
+    initial_guess[1] = slope * 2.0 * np.pi
+
+    options = {"maxiter": 1000, "gtol": 1e-9}
+
+    result = minimize(
+        spectral_distance,
+        initial_guess,
+        args=(z,w),
+        method="BFGS",
+        jac=True,
+        options=options,
+    )
+
+    alpha = result.x
+
+    phase = alpha[0]
+    slope = alpha[1]
+    amplitude = 1
+
+    nus = np.fft.fftfreq(Nchan)
+    w[:] = amplitude * np.exp(1j * phase) * w * np.exp(1j * slope * nus)
+
+
+def align_to_neighbour(h_time_freq):
+    nt, nf = h_time_freq.shape
+    hf0 = h_time_freq[0]
+    for it in range(1,nt):
+        hf = h_time_freq[it]
+        minimize_difference(hf0,hf)
+        hf0 = hf
+        h_time_freq[it,:] = hf
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
