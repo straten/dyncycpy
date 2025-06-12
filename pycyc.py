@@ -2097,6 +2097,7 @@ def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
 
     # tau[j] in seconds
     tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
+    # tau = np.linspace(0.0, 1.0-1.0/nchan, nchan) * (nchan * 1e-6 / bw_MHz)
     # alpha[k] in Hz
     alpha = freq_Hz * np.arange(nharm)
 
