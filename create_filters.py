@@ -17,6 +17,7 @@ from scipy.fft import fftshift, fft, ifft
 from scipy.optimize import minimize
 from scipy.linalg import svd
 from scipy import signal
+from pycyc import minimize_difference
 
 mpl.rcParams["image.aspect"] = "auto"
 
@@ -27,32 +28,13 @@ store_index = 0
 # giant pulse voltage waveforms for each interval
 result = None
 result_index = 0
-result_sum = None
 
 produce_plots = False
-lags = None
-
-def align (x, y, idx):
-
-    global lags
-    if lags is None:
-        lags = signal.correlation_lags(x.size, y.size, mode="full")
-
-    correlation = signal.correlate(x, y, mode="full")
-    cabs = np.abs(correlation)
-    imax = np.argmax(cabs)
-    maxval = np.max(correlation)
-    lag = lags[imax]
-    y[:] = np.roll(y, lag)
-    ph = maxval / np.abs(maxval)
-    y *= np.conj(ph)
-    print(f"lag[{idx}] {lag=} {maxval=} {ph=}")
 
 def add_filter_to_result (method) -> None:
 
     global result
     global result_index
-    global result_sum
 
     global produce_plots
 
@@ -81,31 +63,28 @@ def add_filter_to_result (method) -> None:
 
     print(f"max sum={sum_max_idx} max={max_max_idx}")
 
+    subset = subset / np.sqrt(sum_power)[:, np.newaxis]
+
+    # convert h(t,tau) to H(t,nu)
+    subset_f = fft(subset,axis=1,norm="ortho")
+
     max_idx = sum_max_idx
 
-    x = subset[max_idx]
+    x = subset_f[max_idx]
 
     if method != "max":
-        if result_sum is None:
-            correlate_with = x
-        else:
-            correlate_with = result_sum
-
-        print(f"aligning and adding to pulse with maximum power at idx={max_idx}")
-
         for idx in range(subset.shape[0]):
-            if result_sum is None and idx == max_idx:
+            if idx == max_idx:
                 continue
+            y = subset_f[idx]
+            R = minimize_difference (x, y)
+            subset_f[idx,:] = y
+            print(f"{idx=} {R=}")
 
-            y = subset[idx]
-            align (x, y, idx)
-            x += y
-
-        if result_sum is None:
-            result_sum = np.copy(x)
-        else:
-            result_sum += x
-
+        print(f"adding to pulse with maximum power at idx={max_idx}")
+        for idx in range(subset_f.shape[0]):
+            if idx != max_idx:
+                x += subset_f[idx]
     else:
         print(f"directly using pulse with maximum power at idx={max_idx}")
 
@@ -171,6 +150,8 @@ def create_filters (files, interval, template, method, plot) -> None:
     global produce_plots
 
     produce_plots = plot
+
+    print(f"create_filters {method=}")
 
     for file in files:
 
@@ -252,9 +233,6 @@ def main() -> None:
     create_filters(files, **vargs)
 
     print(f"{result.shape=}")
-
-    # convert h(t,tau) to H(t,nu)
-    result = fft(result,axis=1,norm="ortho")
 
     # output matched filter frequency response functions
     result = np.conj(result)

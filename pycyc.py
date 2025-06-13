@@ -2334,49 +2334,63 @@ def minimize_spectral_entropy(h_time_delay):
     print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
 
 
-def spectral_distance(alpha, z, w):
+def spectral_shift(alpha, hf):
     """
-    Calculates the magnitude of the difference between the two spectra in the two halve of two_spectra
-    after mupltiplying the second one by an amplitude, phase, and phase gradient
+    Return the input mupltiplied by a phase and phase gradient
 
     Args:
-    alpha: A 1D array of 3 values: amplitude, phase, and slope
-    two_spectra: the complex-valued spectra to be aligned
+    alpha: A 1D array of two values: phase, and slope
+    hf: the complex-valued spectra that is transformed
+
+    Returns:
+    The transformed input
+    """
+
+    phase = alpha[0]
+    slope = alpha[1]
+    nus = np.fft.fftfreq(hf.size)
+    return hf * np.exp(1j * (phase + slope * nus)), nus
+
+
+def spectral_distance(alpha, hf_ref, hf):
+    """
+    Calculates the magnitude of the difference between the two spectra in hf_ref and hf
+    after mupltiplying the second one by a phase and phase gradient
+
+    Args:
+    alpha: A 1D array of two values: phase, and slope
+    hf_ref: the complex-valued spectra used as a reference
+    hf: the complex-valued spectra that is aligned to hf_ref by minimizing distance
 
     Returns:
     The distance and its gradient with respect to the 3 parameters in alpha
     """
 
-    Nchan = z.size
     phase = alpha[0]
     slope = alpha[1]
-    amplitude = 1
-    # print(f"{amplitude=} {phase=} {slope=}")
+    # print(f"{phase=} {slope=}")
 
-    nus = np.fft.fftfreq(Nchan)
-    wprime = amplitude * np.exp(1j * phase) * w * np.exp(1j * slope * nus)
-    delta = z - wprime
+    hfprime, nus = spectral_shift(alpha, hf)
+    delta = hf_ref - hfprime
 
     diff = np.sum(np.abs(delta)**2)
 
-    del_amplitude = wprime / amplitude
-    del_phase = 1j * wprime
-    del_slope = 1j * nus * wprime
+    del_phase = 1j * hfprime
+    del_slope = 1j * nus * hfprime
 
-    ddiff_damp = -2 * np.sum ( np.real( np.conj(delta) * del_amplitude ) )
     ddiff_dphs = -2 * np.sum ( np.real( np.conj(delta) * del_phase ) )
     ddiff_dslo = -2 * np.sum ( np.real( np.conj(delta) * del_slope ) )
 
-    # print(f"{diff=} del_a={ddiff_damp} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
+    # print(f"{diff=} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
     return diff, [ddiff_dphs, ddiff_dslo]
 
 
-def minimize_difference(z, w):
+def minimize_difference(hf_ref, hf):
 
-    Nchan = z.size
+    Nchan = hf_ref.size
     initial_guess = np.zeros(2)
 
-    ccf = fft( np.conj(w) * z )
+    ccf = fft( np.conj(hf) * hf_ref )
     ccf_power = np.abs(ccf)**2
     imax = np.argmax(ccf_power)
     ph_max = np.angle(ccf[imax])
@@ -2397,21 +2411,21 @@ def minimize_difference(z, w):
     result = minimize(
         spectral_distance,
         initial_guess,
-        args=(z,w),
+        args=(hf_ref,hf),
         method="BFGS",
         jac=True,
         options=options,
     )
 
     alpha = result.x
+    hf[:], nus = spectral_shift(alpha, hf)
 
-    phase = alpha[0]
-    slope = alpha[1]
-    amplitude = 1
-
-    nus = np.fft.fftfreq(Nchan)
-    w[:] = amplitude * np.exp(1j * phase) * w * np.exp(1j * slope * nus)
-
+    # cross-correlation at lag 0
+    ccf0 = np.sum(np.conj(hf) * hf_ref)
+    # total spectral power in reference spectrum
+    tsp0 = np.sum(np.abs(hf_ref)**2)
+    tsp = np.sum(np.abs(hf)**2)
+    return ccf0 / np.sqrt(tsp0 * tsp)
 
 def align_to_neighbour(h_time_freq):
     nt, nf = h_time_freq.shape
