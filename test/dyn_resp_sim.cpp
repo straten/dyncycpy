@@ -63,6 +63,9 @@ protected:
   //! Output simulated dynamic periodic spectra
   bool output_periodic_spectra = false;
 
+  //! Add noise to the dynamic response, as a fraction of the rms in the response
+  double dyn_resp_noise_fraction = 0.0;
+
   //! Add instrumental noise to the simulated dynamic periodic spectra, as a fraction of the peak
   double instrumental_noise_fraction = 0.0;
 
@@ -144,6 +147,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (Tukey_width, 'T', "flat");
   arg->set_help ("Fractional width of flat top of Tukey window");
 
+  arg = menu.add (dyn_resp_noise_fraction, 'r', "rms");
+  arg->set_help ("Standard deviation of additional noise, relative to rms of signal");
+
   menu.add ("\n" "Periodic spectra options:");
 
   arg = menu.add (output_periodic_spectra, 'o');
@@ -177,12 +183,9 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   double bw = archive->get_bandwidth();
   double chanbw = bw / nchan;
 
-  double minfreq = cfreq - 0.5 * (bw - chanbw);
-  double maxfreq = cfreq + 0.5 * (bw - chanbw);
-
   Reference::To<Pulsar::DynamicResponse> ext = new Pulsar::DynamicResponse;
-  ext->set_minimum_frequency(minfreq);
-  ext->set_maximum_frequency(maxfreq);
+  ext->set_centre_frequency(cfreq);
+  ext->set_bandwidth(bw);
 
   ext->set_nchan(nchan);
   ext->set_ntime(ntime);
@@ -378,7 +381,17 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
   cerr << "dyn_res_sim::transform_wavefield normalizing by rms of dynamic response=" << rms << endl;
   for (unsigned idat=0; idat < ndat; idat++)
     data[idat] /= rms;
-  
+
+  if (dyn_resp_noise_fraction > 0.0)
+  {
+    cerr << "dyn_res_sim::transform_wavefield adding noise with fractional rms=" << dyn_resp_noise_fraction << endl;
+    BoxMuller gasdev (usec_seed());
+    for (unsigned idat=0; idat < ndat; idat++)
+    {
+      data[idat] += dyn_resp_noise_fraction * complex<double>(gasdev(),gasdev());
+    }
+  }
+
   if (Tukey_width)
   {
     vector<double> window (nchan);
