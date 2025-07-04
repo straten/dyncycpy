@@ -58,21 +58,6 @@ def analysis (base, gradient, delta):
         print(f"test_deflection: gradient phase difference={np.angle(z)}")
         z /= np.abs(z)
 
-    pycyc.minimize_spectral_entropy(gradient)
-
-    plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
-    try:
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-        fig.colorbar(img)
-        fig.savefig(base + "_gradient_mse.png")
-        plt.close()
-    except Exception:
-        print("##################################### gradient plot failed")
-    with open(base + "_gradient_mse.pkl", "wb") as fh:
-        pickle.dump(gradient, fh)    
-
-
 # do arg parsing here
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -108,6 +93,9 @@ CS.nthread = 8
 
 # compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
+
+# normalize each cyclic spectrum
+CS.normalize_cyclic_spectra = True
 
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
