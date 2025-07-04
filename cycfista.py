@@ -60,12 +60,15 @@ CS.save_cyclic_spectra = True
 # use a single integrated profile as the reference profile for each sub-integration
 CS.use_integrated_profile = True
 
+# align the phase and delay of time-adjacent frequency responses computed from the wavefield
+# CS.align_frequency_responses = True
+
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 8
+CS.enforce_causality = 12
 
 # use a delay-dependent threshold to perform shrinkage
-CS.delay_noise_shrinkage_threshold = 1.0
-CS.delay_noise_selection_threshold = 2.0
+# CS.delay_noise_shrinkage_threshold = 1.0
+# CS.delay_noise_selection_threshold = 2.0
 
 # CS.noise_shrinkage_threshold = 1.0
 
@@ -76,15 +79,15 @@ CS.delay_noise_selection_threshold = 2.0
 CS.conserve_wavefield_energy = True
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
-CS.reduce_temporal_phase_noise = True
+# CS.reduce_temporal_phase_noise = True
 
 # reduce temporal phase noise by minimizing the spectral entropy
-CS.minimize_spectral_entropy = True
+# CS.minimize_spectral_entropy = True
 
 # Number of iterations between profile updates
-update_profile_period = 10
-update_profile_every_iteration_until = 15
-
+update_profile_period = 2
+update_profile_every_iteration_until = 5
+plot_all = True
 
 # CS.doppler_window = ('kaiser', 8.0)
 
@@ -111,6 +114,12 @@ for file in files:
 print(f"cycfista: {CS.nsubint} spectra loaded")
 
 CS.initProfile()
+
+initial_profile_from_first_subintegration = False
+
+if initial_profile_from_first_subintegration:
+    CS.loop(isub=0, make_plots=False, ipol=0, tolfact=10, iprint=0)
+    CS.pp_intrinsic = CS.intrinsic_profiles[0,0]
 
 plt.plot(CS.pp_intrinsic)
 plt.savefig("cycfista_init_profile.png")
@@ -229,7 +238,7 @@ for i in range(max_iterations+1):
     prev_time = end_time
     print(f"Elapsed time: {elapsed_time/60} min   Iteration time: {iter_time/60} min", flush=True)
 
-    if i < 10 or i % 10 == 0:
+    if plot_all or i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:
