@@ -108,6 +108,7 @@ from scipy.fft import fft, fftshift, ifft, irfft, rfft
 from scipy.optimize import minimize
 from scipy.signal import fftconvolve
 from scipy.signal.windows import kaiser
+from plotting import plot_Doppler_vs_delay
 
 class CyclicSolver:
     def __init__(
@@ -275,36 +276,37 @@ class CyclicSolver:
         """
 
         ar = psrchive.Archive_load(filename)
+        bw = abs(ar.get_bandwidth())
         ext = ar.get_dynamic_response()
         data = ext.get_data()
         nchan = ext.get_nchan()
         ntime = ext.get_ntime()
+
+        start_time = ext.get_minimum_epoch ()
+        end_time = ext.get_maximum_epoch ()
+        dT = (end_time-start_time).in_seconds() / ntime
+
+        print(f"{ntime=} start_time={start_time.printdays(13)} end_time={end_time.printdays(13)} delta-T={dT}")
+
         data = np.reshape(data, (ntime, nchan))
 
         h_time_delay = freq2time(data, axis=1)
         h_doppler_delay = time2freq(h_time_delay, axis=0)
-        plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-        fig.colorbar(img)
-        fig.savefig("input_wavefield.png")
-        plt.close()
+        plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield.png")
 
         if self.zap_edges is not None and self.zap_edges > 0:
             zap_count = int(self.zap_edges * nchan)
             data = data[:, zap_count:-zap_count]
+            bw = bw * float(zap_count) / float(nchan)
 
             h_time_delay = freq2time(data, axis=1)
             h_doppler_delay = time2freq(h_time_delay, axis=0)
-            plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
-            fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-            fig.colorbar(img)
-            fig.savefig("input_wavefield_after_zap_edges.png")
-            plt.close()
+            plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield_after_zap_edges.png")
 
         self.initial_h_time_freq = data
-        self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
+
+        if ar.get_nsubint() == 1:
+            self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
 
     def load(self, filename):
         """
@@ -509,10 +511,17 @@ class CyclicSolver:
             self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
             self.h_doppler_delay[0, self.first_wavefield_delay] = self.nchan
         else:
-            assert self.initial_h_time_freq.shape[0] == self.nspec
-            assert self.initial_h_time_freq.shape[1] == self.nchan
-            self.h_time_delay = freq2time(self.initial_h_time_freq, axis=1)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            current_shape = (self.nspec, self.nchan)
+            if self.initial_h_time_freq.shape != current_shape:
+                print(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
+                h_time_freq = pad_wavefield(self.initial_h_time_freq, current_shape)
+                self.h_time_delay = freq2time(h_time_freq, axis=1)
+                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+                plot_Doppler_vs_delay(self.h_doppler_delay, self.mean_time_offset, self.bw, "input_wavefield_after_padding.png")
+            else:
+                h_time_freq = self.initial_h_time_freq
+                self.h_time_delay = freq2time(h_time_freq, axis=1)
+                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
@@ -1903,6 +1912,22 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
+def pad_wavefield(h_time_freq, new_shape):
+
+    old_shape = h_time_freq.shape
+    h_time_delay = freq2time(h_time_freq, axis=1)
+    h_doppler_delay = time2freq(h_time_delay, axis=0)
+
+    padded_spectrum = np.zeros(new_shape, dtype=np.complex128)
+
+    first_half_time = old_shape[0] // 2
+    last_half_time = old_shape[0] - first_half_time
+
+    padded_spectrum[:first_half_time,:old_shape[1]] = h_doppler_delay[:first_half_time,:]
+    padded_spectrum[-last_half_time:,:old_shape[1]] = h_doppler_delay[-last_half_time:,:]
+
+    h_time_delay = freq2time(padded_spectrum, axis=0)
+    return time2freq(h_time_delay, axis=1)
 
 def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
@@ -2045,7 +2070,7 @@ def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
     rmsn = rms_cs(cs, ih=cs.shape[1] - 1, bw=bw, ref_freq=ref_freq)
     normfac = np.sqrt(np.abs(rms1**2 - rmsn**2))
-    print(f"normalize_cs: normfac={normfac}")
+    # print(f"normalize_cs: normfac={normfac}")
     return cs / normfac, normfac
 
 
