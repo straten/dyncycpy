@@ -140,6 +140,7 @@ class CyclicSolver:
         self.maxchan = maxchan
         self.maxharm = maxharm
         self.save_cyclic_spectra = False
+        self.pad_cyclic_spectra = True
         self.filenames = []
         self.nspec = 0
         self.nsubint = 0
@@ -153,6 +154,7 @@ class CyclicSolver:
         self.hf_prev = None
         self.iprint = False
         self.make_plots = False
+        self.dump_residual = False
         self.niter = 0
 
         self.mean_time_offset = 0
@@ -249,6 +251,9 @@ class CyclicSolver:
 
         # initial guess for the dynamic response
         self.initial_h_time_freq = None
+
+        # project the gradient onto the subspace that is orthogonal to the null space direction defined by degenerate phase
+        self.manifold_optimization = False
 
         if filename:
             self.load(filename)
@@ -868,6 +873,7 @@ class CyclicSolver:
         if self.iprint:
             print(f"update filter isub={isub}/{self.nspec}")
 
+        self.rindex = isub
         _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
 
         if self.enforce_causality:
@@ -930,32 +936,42 @@ class CyclicSolver:
 
         phasor = 1.0 + 0.0j
 
-        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
-
         if self.shear_phasors is None:
             self.shear_phasors = create_shear_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
-        for ipol in range(self.npol):
-            self.s0 = self.intrinsic_ph[ipol]
-            self.ph_ref = self.intrinsic_ph[ipol]
+        self.compute_gradient()
 
-            self.h_time_delay = freq2time(self.h_doppler_delay)
+        if self.manifold_optimization:
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
-                future_subint = {
-                    executor.submit(self.updateWavefieldSubint, ipol, isub): isub
-                    for isub in range(self.nspec)
-                }
+            h_time_delay_grad_0 = self.h_time_delay_grad.copy()
+            h_time_delay_0 = self.h_time_delay.copy()
 
-                for future in concurrent.futures.as_completed(future_subint):
-                    isub = future_subint[future]
-                    try:
-                        _merit, _nterm = future.result()
-                        self.merit += _merit
-                        self.nterm_merit += _nterm
+            epsilon = 1e-6
 
-                    except Exception as exc:
-                        print(f"updateWavefieldSubint isub={isub} exception: {exc}")
+            self.h_time_delay = h_time_delay_0 * (1.0 + 1.0j * epsilon)
+            self.compute_gradient()
+            h_time_delay_grad_2 = self.h_time_delay_grad.copy()
+
+            self.h_time_delay = h_time_delay_0 * (1.0 - 1.0j * epsilon)
+            self.compute_gradient()
+            h_time_delay_grad_1 = self.h_time_delay_grad.copy()
+
+            #plot_Doppler_vs_delay(time2freq(h_time_delay_grad_0)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_0.png")
+
+            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad.png")
+
+            delta_grad = h_time_delay_grad_2 - h_time_delay_grad_1
+
+            plot_Doppler_vs_delay(time2freq(delta_grad)*self.nsubint, self.mean_time_offset, self.bw, "delta_grad.png")
+
+            self.h_time_delay = h_time_delay_0
+            self.h_time_delay_grad = h_time_delay_grad_0
+
+            proj = np.vdot(delta_grad, self.h_time_delay_grad)
+            print(f"{proj=}")
+            self.h_time_delay_grad -= proj * delta_grad / np.sum(np.abs(delta_grad)** 2)
+
+            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_again.png")
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -972,6 +988,29 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
+
+    def compute_gradient(self):
+        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
+
+        for ipol in range(self.npol):
+            self.s0 = self.intrinsic_ph[ipol]
+            self.ph_ref = self.intrinsic_ph[ipol]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+                future_subint = {
+                    executor.submit(self.updateWavefieldSubint, ipol, isub): isub
+                    for isub in range(self.nspec)
+                }
+
+                for future in concurrent.futures.as_completed(future_subint):
+                    isub = future_subint[future]
+                    try:
+                        _merit, _nterm = future.result()
+                        self.merit += _merit
+                        self.nterm_merit += _nterm
+
+                    except Exception as exc:
+                        print(f"compute_gradient isub={isub} exception: {exc}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
@@ -2080,12 +2119,6 @@ def rms_cs(cs, ih, bw, ref_freq):
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
 
-
-# to disable cyclic padding, rename this function `cyclic_padding`
-def disable_cyclic_padding(cs, bw, ref_freq):
-    return cs
-
-# to disable cyclic padding, rename this function something `enable_cyclic_padding`
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
@@ -2134,8 +2167,8 @@ def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """
 
     # tau[j] in seconds
-    tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
-    # tau = np.linspace(0.0, 1.0-1.0/nchan, nchan) * (nchan * 1e-6 / bw_MHz)
+    # tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
+    tau = np.linspace(0.0, 1.0-1.0/nchan, nchan) * (nchan * 1e-6 / bw_MHz)
     # alpha[k] in Hz
     alpha = freq_Hz * np.arange(nharm)
 
@@ -2160,7 +2193,7 @@ def shear_spectra(spectrum, phasors):
     return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
 
 
-def make_model_cs(hf, s0, bw, ref_freq, phasors):
+def make_model_cs(hf, s0, bw, ref_freq, phasors, padding=True):
     nchan = hf.shape[0]
     s0.shape[0]
     # profile2cs
@@ -2172,7 +2205,8 @@ def make_model_cs(hf, s0, bw, ref_freq, phasors):
 
     cs = cs * hfplus * np.conj(hfminus)
 
-    cs = cyclic_padding(cs, bw, ref_freq)
+    if padding:
+        cs = cyclic_padding(cs, bw, ref_freq)
 
     return cs, hfplus, hfminus
 
@@ -2224,7 +2258,7 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors)
+    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors, CS.pad_cyclic_spectra)
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -2239,7 +2273,11 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     # residual, R = model - data
     diff = cs_model - cs_data
 
-    # print(f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}")
+    if CS.dump_residual:
+      print(f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}")
+      filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
+      with open(filename, "wb") as fh:
+        pickle.dump(diff, fh)
 
     phasors = CS.shear_phasors
 
@@ -2415,10 +2453,18 @@ def minimize_difference(hf_ref, hf):
     Nchan = hf_ref.size
     initial_guess = np.zeros(2)
 
-    ccf = fft( np.conj(hf) * hf_ref )
-    ccf_power = np.abs(ccf)**2
-    imax = np.argmax(ccf_power)
-    ph_max = np.angle(ccf[imax])
+    align_power = True
+    if align_power:
+        ht = np.abs(ifft(hf))**2
+        ht_ref = np.abs(ifft(hf_ref))**2
+        ccf_power = np.correlate(ht, ht_ref, "same")
+        imax = np.argmax(ccf_power)
+        ph_max = 0
+    else:
+        ccf = fft( np.conj(hf) * hf_ref )
+        ccf_power = np.abs(ccf)**2
+        imax = np.argmax(ccf_power)
+        ph_max = np.angle(ccf[imax])
 
     # print(f"{imax=} {ph_max=} {Nchan=}")
 
