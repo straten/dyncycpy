@@ -9,6 +9,8 @@
 #include "Pulsar/DynamicResponse.h"
 #include "Pulsar/ProfileColumn.h"
 #include "Pulsar/Integration.h"
+
+#include "BoxMuller.h"
 #include "random.h"
 #include "strutil.h"
 #include "pairutil.h"
@@ -58,11 +60,23 @@ protected:
   //! Max profile harmonic, as a fraction of the number of phase bins
   double max_profile_harmonic = 0.0;
 
-  //! Output dynamic periodic spectra
+  //! Output simulated dynamic periodic spectra
   bool output_periodic_spectra = false;
 
+  //! Add noise to the dynamic response, as a fraction of the rms in the response
+  double dyn_resp_noise_fraction = 0.0;
+
+  //! Add instrumental noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  double instrumental_noise_fraction = 0.0;
+
+  //! Add self noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  double self_noise_fraction = 0.0;
+
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
-  std::pair<unsigned,unsigned> scattered_wave = {0,0};
+  std::vector<std::pair<int,int>> scattered_waves;
+
+  //! randomize scattered wave phases
+  bool scattered_waves_random_phase = false;
 
   //! Use a Tukey window to taper the frequency response
   double Tukey_width = 0.0;
@@ -79,8 +93,11 @@ protected:
   //! Generate a dynamic response based on a scintillation arc
   void generate_scintillation_arc (Pulsar::DynamicResponse* ext, double bw);
 
-  //! Generate a dynamic response based on a single scattered wave component
-  void generate_scattered_wave (Pulsar::DynamicResponse*);
+  // add a scattered wave component at "Doppler:delay"
+  void add_scattered_wave (const std::string&);
+
+  //! Generate a dynamic response based the scattered wave components
+  void generate_scattered_waves (Pulsar::DynamicResponse*);
 
   //! Perform an in-place 2D FFT of the input wavefield, converting it to a dynamic frequency response
   void transform_wavefield (Pulsar::DynamicResponse*);
@@ -102,7 +119,7 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 {
   CommandLine::Argument* arg;
 
-  menu.add ("\n" "General options:");
+  menu.add ("\n" "Dynamic response options:");
 
   arg = menu.add (sampling_interval, 't', "seconds");
   arg->set_help ("Sampling interval in seconds");
@@ -110,11 +127,11 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (ntime, 'n', "samples");
   arg->set_help ("Number of time samples");
 
-  arg = menu.add (max_profile_harmonic, 'm', "fraction");
-  arg->set_help ("maximum profile harmonic, as a fraction of number of phase bins");
+  arg = menu.add (this, &dyn_res_sim::add_scattered_wave, 's', "Doppler:delay");
+  arg->set_help ("add a discrete scattered wave at Doppler:delay (integer harmonic coordinates)");
 
-  arg = menu.add (scattered_wave, 's', "Doppler:delay");
-  arg->set_help ("Doppler,delay harmonic coordinates of discrete scattered wave");
+  arg = menu.add (scattered_waves_random_phase, "rand");
+  arg->set_help ("randomize the phases of scattered wave components");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -134,11 +151,25 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (Tukey_width, 'T', "flat");
   arg->set_help ("Fractional width of flat top of Tukey window");
 
+  arg = menu.add (dyn_resp_noise_fraction, 'r', "rms");
+  arg->set_help ("Standard deviation of additional noise, relative to rms of signal");
+
+  menu.add ("\n" "Periodic spectra options:");
+
   arg = menu.add (output_periodic_spectra, 'o');
   arg->set_help ("Output periodic spectrum for each time sample");
 
   arg = menu.add (degenerate_phase, 'x');
   arg->set_help ("Multiply each frequency response by a random phase");
+
+  arg = menu.add (max_profile_harmonic, 'm', "fraction");
+  arg->set_help ("Maximum spin harmonic, as a fraction of number of phase bins");
+
+  arg = menu.add (instrumental_noise_fraction, 'N', "rms");
+  arg->set_help ("Standard deviation of additional noise, relative to peak harmonic power");
+
+  arg = menu.add (self_noise_fraction, 'S', "rms");
+  arg->set_help ("Standard deviation of additional self-noise, relative to power in each phase bin");
 }
 
 std::complex<double> random_phasor()
@@ -159,20 +190,17 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   double bw = archive->get_bandwidth();
   double chanbw = bw / nchan;
 
-  double minfreq = cfreq - 0.5 * (bw - chanbw);
-  double maxfreq = cfreq + 0.5 * (bw - chanbw);
-
   Reference::To<Pulsar::DynamicResponse> ext = new Pulsar::DynamicResponse;
-  ext->set_minimum_frequency(minfreq);
-  ext->set_maximum_frequency(maxfreq);
+  ext->set_centre_frequency(cfreq);
+  ext->set_bandwidth(bw);
 
   ext->set_nchan(nchan);
   ext->set_ntime(ntime);
   ext->set_npol(1);
   ext->resize_data();
 
-  if (scattered_wave.first != 0 || scattered_wave.second != 0)
-    generate_scattered_wave (ext);
+  if (scattered_waves.size() != 0)
+    generate_scattered_waves (ext);
   else
     generate_scintillation_arc (ext, bw);
 
@@ -289,18 +317,23 @@ void add_response (complex<double>* data, unsigned jomega, unsigned jtau, unsign
   data[jomega*nchan + jtau] += amplitude * random_phasor();
 
   if (arc_width)
-  {    
-    for (unsigned iom=0; iom < ntime; iom++)
-    {
-      double dist_om = (double(iom) - double(jomega)) / arc_width;
+  {
+    // compute the Gaussian out to where the amplitude falls to 10^-9
+    int fizzle = sqrt(arc_width * 9 * log(10.0));
+    // cerr << "add_response compute Gaussian out to " << fizzle << " pixels from arc" << endl;
 
-      for (unsigned itau=0; itau < nchan; itau++)
+    for (int iom=int(jomega)-fizzle; iom <= int(jomega)+fizzle; iom++)
+      for (int itau=int(jtau)-fizzle; itau <= int(jtau)+fizzle; itau++)
       {
+        double dist_om = (double(iom) - double(jomega)) / arc_width;
         double dist_tau = (double(itau) - double(jtau)) / arc_width;
         double amp = exp( -dist_om*dist_om -dist_tau*dist_tau );
-        data[iom*nchan + itau] += amplitude * amp * random_phasor();
+
+        unsigned kom = (iom + ntime) % ntime;
+        unsigned ktau = (itau + nchan) % nchan;
+
+        data[kom*nchan + ktau] += amplitude * amp * random_phasor();
       }
-    }
   }
 }
 
@@ -350,6 +383,26 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
   auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
+
+  unsigned ndat = nchan * ntime;
+  double total_power = 0.0;
+  for (unsigned idat=0; idat < ndat; idat++)
+    total_power += norm(data[idat]);
+
+  double rms = sqrt(total_power/ndat);
+  cerr << "dyn_res_sim::transform_wavefield normalizing by rms of dynamic response=" << rms << endl;
+  for (unsigned idat=0; idat < ndat; idat++)
+    data[idat] /= rms;
+
+  if (dyn_resp_noise_fraction > 0.0)
+  {
+    cerr << "dyn_res_sim::transform_wavefield adding noise with fractional rms=" << dyn_resp_noise_fraction << endl;
+    BoxMuller gasdev (usec_seed());
+    for (unsigned idat=0; idat < ndat; idat++)
+    {
+      data[idat] += dyn_resp_noise_fraction * complex<double>(gasdev(),gasdev());
+    }
+  }
 
   if (Tukey_width)
   {
@@ -416,34 +469,19 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
   }
 }
 
+void dyn_res_sim::add_scattered_wave (const std::string& arg)
+{
+  auto coords = fromstring<std::pair<int,int>> (arg);
+  cerr << "dyn_res_sim::add_scattered_wave coords=" << coords << endl;
+  scattered_waves.push_back(coords);
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
+void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
 {
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
+
+  cerr << "dyn_res_sim::generate_scattered_waves dimensions=" << ntime << ":" << nchan << endl;
 
   auto data = ext->get_data().data();
 
@@ -451,16 +489,26 @@ void dyn_res_sim::generate_scattered_wave(Pulsar::DynamicResponse* ext)
     for (unsigned itime=0; itime < ntime; itime++)
       data[itime*nchan + ichan] = 0;
 
-  unsigned itime = scattered_wave.first;
-  unsigned ichan = scattered_wave.second;
-
   data[0] = 1.0;
 
-  /* Reflect Doppler coordinate because a single forward 2D FFT 
-     is performed by transform_wavefield, when it should be forward 
-     along delay-to-frequency backward along Doppler-to-time. */
-  unsigned jtime = ntime - itime;
-  data[jtime*nchan + ichan] = {1.0, 1.0};
+  for (auto wave: scattered_waves)
+  {
+    int itime = wave.first;
+    int ichan = wave.second;
+
+    // reverse the time axis ... see note about conjugation at dyn_res_sim::transform_wavefield
+    int jtime = (ntime-itime) % ntime;
+    int jchan = (nchan+ichan) % nchan;
+
+    cerr << "dyn_res_sim::generate_scattered_waves coords=" << jtime << ":" << jchan << endl;
+
+    complex<double> value = 1.0;
+    if (scattered_waves_random_phase)
+      value = random_phasor();
+
+    data[jtime*nchan + jchan] = value;
+  
+  }
 
   transform_wavefield (ext);
 }
@@ -603,25 +651,41 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   for (unsigned ibin=0; ibin<nbin; ibin++)
     intrinsic_spectrum[ibin] = f_amps[ibin];
 
+  if (self_noise_fraction > 0.0)
+  {
+    cerr << "dyn_res_sim::generate_periodic_spectra adding self noise with fractional rms=" << self_noise_fraction << endl;
+    BoxMuller gasdev (usec_seed());
+    for (unsigned ibin=0; ibin < nbin; ibin++)
+    {
+      intrinsic_spectrum[ibin] *= 1.0 + self_noise_fraction*gasdev();
+    }
+  }
+
   auto fftin = reinterpret_cast<fftw_complex*>(intrinsic_spectrum.data());
   auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
   // verify that the intrinsic spectrum has the expected Hermiticity
-  double power = 0;
+  double total_power = 0;
   double diff_power = 0;
+  double max_power = 0;
   for (unsigned ibin=1; ibin < nbin/2; ibin++)
   {
     auto diff = intrinsic_spectrum[ibin] - conj(intrinsic_spectrum[nbin - ibin]);
-    power += norm(intrinsic_spectrum[ibin]);
+    double power = norm(intrinsic_spectrum[ibin]);
+    if (power > max_power)
+      max_power = power;
+    total_power += power;
     diff_power += norm(diff);
   }
 
-  if (diff_power > power * 1e-20)
+  if (diff_power > total_power * 1e-20)
   {
-    cerr << "Intrinsic spectrum does not appear to be Hermitian power=" << power << " diff power=" << diff_power << endl;
+    cerr << "Intrinsic spectrum does not appear to be Hermitian power=" << total_power << " diff power=" << diff_power << endl;
   }
+
+  double instrumental_noise_power = instrumental_noise_fraction * sqrt(max_power);
 
   vector<std::complex<double>> temp (nbin);
   vector<std::complex<double>> profile (nbin);
@@ -635,21 +699,23 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
   fftin = reinterpret_cast<fftw_complex*>( frequency_response.data() );
   fftout = reinterpret_cast<fftw_complex*>( impulse_response.data() );
-  auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
+  auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
-  // re-use frequency reponse for the shifted frequency response
+  // re-use frequency response for the shifted frequency response
   fftin = reinterpret_cast<fftw_complex*>( shifted_impulse_response.data() );
   fftout = reinterpret_cast<fftw_complex*>( frequency_response.data() );
-  auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
+  auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
 
   vector<std::complex<double>> cyclic_spectrum (nbin * nchan);
 
   prototype = archive->clone();
   prototype->pscrunch();
 
+  double scalefac = 0.5/sqrt(2* nbin * nchan);
+
   for (unsigned itime=0; itime < ntime; itime++)
   {
-    // initialize a cyclic spectrum that is nchan copies of the profile FFT
+    // initialize a cyclic spectrum that is nchan copies of the intrinsic spectrum
     for (unsigned ichan=0; ichan < nchan; ichan++)
     {
       memcpy(cyclic_spectrum.data() + ichan*nbin, intrinsic_spectrum.data(), nbin * sizeof(complex<double>));
@@ -657,10 +723,17 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
     // copy from the dynamic response to the input frequency response
     memcpy(frequency_response.data(), data + itime * nchan, sizeof(complex<double>) * nchan);
-    fftw_execute(fwd_plan);
-    // impulse_response now contains the FFT of the frequency response
+    fftw_execute(bwd_plan);
+    // impulse_response now contains the inverse FFT of the frequency response
 
-    for (unsigned ibin=1; ibin < nbin/2; ibin++)
+    // the combination of fwd and bwd plans results in scaling by nchan
+    for (unsigned ichan=0; ichan < nchan; ichan++)
+      impulse_response[ichan] /= nchan;
+
+    double total_power = 0.0;
+    double total_cs_power = 0.0;
+
+    for (unsigned ibin=0; ibin < nbin/2; ibin++)
     {
       for (int sign: {-1, 1})
       {
@@ -670,12 +743,14 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
         shifted_impulse_response = impulse_response;
         for (unsigned ichan=1; ichan < nchan; ichan++)
         {
-          double phase = slope * double(ichan) / nchan;
+          // treat the upper half of the array as -ve delays
+          int jchan = (ichan < nchan/2) ? ichan : int(ichan) - int(nchan);
+          double phase = slope * double(jchan) / nchan;
           complex<double> phasor (cos(phase), sin(phase));
           shifted_impulse_response[ichan] *= phasor;
         }
 
-        fftw_execute(bwd_plan);
+        fftw_execute(fwd_plan);
         // frequency_response now contains the shifted frequency response function
 
         for (unsigned ichan=0; ichan < nchan; ichan++)
@@ -683,11 +758,43 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
           if (sign == 1)
             frequency_response[ichan] = conj(frequency_response[ichan]);
 
+          total_power += norm(frequency_response[ichan]);
+
           auto spectrum = cyclic_spectrum.data() + ichan*nbin;
 
           spectrum[ibin] *= frequency_response[ichan];
-          spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
+          if (ibin > 0)
+            spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
+
+          if (sign == 1)
+            total_cs_power += norm(spectrum[ibin]);
         }
+
+      }
+    }
+
+    double rms = sqrt(total_power / (nchan * 2 * (nbin/2 - 1)));
+
+    // cerr << "standard deviation of frequency response = " << rms << endl;
+    cerr << "total power in cyclic spectrum = " << total_cs_power << endl;
+
+    if (instrumental_noise_power > 0.0)
+    {
+      BoxMuller gasdev (usec_seed());
+
+      // cerr << "adding noise with rms=" << instrumental_noise_power << endl;
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+      {
+        auto spectrum = cyclic_spectrum.data() + ichan*nbin;
+
+        for (unsigned ibin=1; ibin < nbin/2; ibin++)
+        {
+          complex<double> noise (instrumental_noise_power*gasdev(), instrumental_noise_power*gasdev());
+          spectrum[ibin] += noise;
+          spectrum[nbin-ibin] += conj(noise);  // Hermitian spectrum
+        }
+        spectrum[0] += instrumental_noise_power*gasdev();
+        spectrum[nbin/2] += instrumental_noise_power*gasdev();
       }
     }
 
@@ -703,6 +810,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
       copy(f_amps, profile);
+      subint->get_Profile(ipol,ichan)->scale(scalefac);
     }
 
     string filename = "periodic_spectrum_" + stringprintf("%05d",itime) + ".ar";
@@ -710,8 +818,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     output->unload(filename);
   }
 
-  fftw_destroy_plan(fwd_plan);
   fftw_destroy_plan(bwd_plan);
+  fftw_destroy_plan(fwd_plan);
   fftw_destroy_plan(plan);
 }
 

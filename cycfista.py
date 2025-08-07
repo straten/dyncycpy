@@ -45,8 +45,11 @@ max_iterations = args.iter
 
 CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
+# initial value of alpha
+alpha_init = 1e-9
+
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
-alpha_history = 5
+alpha_history = 10
 
 # should probably estimate this as described in Oslowski & Walker (2023)
 alpha_init = 1e-6
@@ -69,24 +72,36 @@ CS.conserve_wavefield_energy = True
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
 # CS.low_pass_filter_Doppler = 0.5
 
-# include a separate gain variation term for each sub-integration
-# CS.model_gain_variations = True
+# align the phase and delay of time-adjacent frequency responses computed from the wavefield
+# CS.align_frequency_responses = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 8
+CS.enforce_causality = 12
+
+# use a delay-dependent threshold to perform shrinkage
+# CS.delay_noise_shrinkage_threshold = 1.0
+# CS.delay_noise_selection_threshold = 2.0
+
+# CS.noise_shrinkage_threshold = 1.0
+
+# include a separate gain variation term for each sub-integration
+# CS.model_gain_variations = True
 
 # when updating the profile, minimize phase differences between h(tau,t) and h(tau,t+1)
 # CS.reduce_temporal_phase_noise = True
 
-# Number of iterations between profile updates
-update_profile_period = 10
-update_profile_every_iteration_until = 15
+# reduce temporal phase noise by minimizing the spectral entropy
+# CS.minimize_spectral_entropy = True
 
-# CS.noise_shrinkage_threshold = 1.0
+# Number of iterations between profile updates
+update_profile_period = 2
+update_profile_every_iteration_until = 5
+plot_all = True
+
 # CS.doppler_window = ('kaiser', 8.0)
 
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+# maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
+# CS.low_pass_filter_Doppler = 0.5
 
 # CS.temporal_taper_alpha = 0.25
 # CS.spectral_taper_alpha = 0.25
@@ -108,6 +123,12 @@ for file in files:
 print(f"cycfista: {CS.nsubint} spectra loaded")
 
 CS.initProfile()
+
+initial_profile_from_first_subintegration = False
+
+if initial_profile_from_first_subintegration:
+    CS.loop(isub=0, make_plots=False, ipol=0, tolfact=10, iprint=0)
+    CS.pp_intrinsic = CS.intrinsic_profiles[0,0]
 
 plt.plot(CS.pp_intrinsic)
 plt.savefig("cycfista_init_profile.png")
@@ -147,10 +168,10 @@ bad_step = 0
 prev_merit = best_merit
 
 # Start timer
-start_time = time.time()
+prev_time = start_time = time.time()
 min_step_factor = 0.5
 
-for i in range(max_iterations):
+for i in range(max_iterations+1):
     CS.nopt += 1
 
     if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
@@ -185,35 +206,50 @@ for i in range(max_iterations):
     if i == 0 or L > L_max:
         L_max = L
 
-    if CS.get_reduced_chisq() < best_merit:
-        best_merit = CS.get_reduced_chisq()
+    reduced_chisq = CS.get_reduced_chisq()
+
+    if reduced_chisq < best_merit:
+        best_merit = reduced_chisq
         best_x = np.copy(x_n)
     else:
         print(f"\n** greater than best={best_merit}")
 
-    if CS.get_reduced_chisq() > prev_merit:
+    if reduced_chisq > prev_merit:
         print("**** bad step")
 
-    if CS.get_reduced_chisq() > 100.0 * prev_merit:
+    really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
+
+    if really_bad:
         print("**** really bad step - RESET")
         t_n = 1
-        x_n[:] = best_x[:]
+        CS.h_doppler_delay[:] = y_n[:] = x_n[:] = best_x[:]
     else:
         alphas = np.append(alphas, 1.0 / L)
-        prev_merit = CS.get_reduced_chisq()
+        prev_merit = reduced_chisq
 
-    if alpha_history == 0 or alphas.size < alpha_history:
+    if alphas.size == 0:
+        alpha = 1.0 / L  # this should happen only if the first step is bad
+        printf ("alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
+    elif alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
         alpha = np.min(alphas[-alpha_history:])
 
-    print(f"\n{i:03d} demerit={CS.get_reduced_chisq()} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
+    if really_bad:
+        alpha *= 0.2
+        print(f"reducing alpha to {alpha}")
+        alphas = np.append(alphas, alpha)
+
+    print(f"\n{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
     end_time = time.time()
 
+    iter_time = end_time - prev_time
     elapsed_time = end_time - start_time
-    print(f"Elapsed time: {elapsed_time/60} min", flush=True)
 
-    if i < 10 or i % 10 == 0:
+    prev_time = end_time
+    print(f"Elapsed time: {elapsed_time/60} min   Iteration time: {iter_time/60} min", flush=True)
+
+    if plot_all or i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
         plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:
@@ -227,19 +263,20 @@ for i in range(max_iterations):
         with open(base + "_wavefield.pkl", "wb") as fh:
             pickle.dump(x_n, fh)
 
-        try:
-            fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(CS.optimal_gains)
-            fig.savefig(base + "_optimal_gains.png")
-            plt.close()
-        except Exception:
-            print("##################################### optimal gains plot failed")
-        with open(base + "_optimal_gains.pkl", "wb") as fh:
-            pickle.dump(CS.optimal_gains, fh)
+        if CS.model_gain_variations:
+            try:
+                fig, ax = plt.subplots(figsize=(12, 8))
+                ax.plot(CS.optimal_gains)
+                fig.savefig(base + "_optimal_gains.png")
+                plt.close()
+            except Exception:
+                print("##################################### optimal gains plot failed")
+            with open(base + "_optimal_gains.pkl", "wb") as fh:
+                pickle.dump(CS.optimal_gains, fh)
 
         try:
             fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2 + 1e-5, axis=0)))
+            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2 + 1e-16, axis=0)))
             fig.savefig(base + "_impulse_response.png")
             plt.close()
         except Exception:

@@ -107,8 +107,9 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from scipy.fft import fft, fftshift, ifft, irfft, rfft
 from scipy.optimize import minimize
-from scipy.signal import fftconvolve, kaiser
-
+from scipy.signal import fftconvolve
+from scipy.signal.windows import kaiser
+from plotting import plot_Doppler_vs_delay
 
 class CyclicSolver:
     def __init__(
@@ -140,6 +141,7 @@ class CyclicSolver:
         self.maxchan = maxchan
         self.maxharm = maxharm
         self.save_cyclic_spectra = False
+        self.pad_cyclic_spectra = True
         self.filenames = []
         self.nspec = 0
         self.nsubint = 0
@@ -150,9 +152,10 @@ class CyclicSolver:
         self.pp_intrinsic = None
         self.shear_phasors = None
         self.cs_norm = None
-
+        self.hf_prev = None
         self.iprint = False
         self.make_plots = False
+        self.dump_residual = False
         self.niter = 0
 
         self.mean_time_offset = 0
@@ -173,17 +176,20 @@ class CyclicSolver:
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
 
+        # reduce temporal phase noise by minimizing the spectral entropy
+        self.minimize_spectral_entropy = False
+
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
 
-        # reduce phase noise by minimizing the spectral entropy
-        self.minimize_spectral_entropy = False
-
-        # align the phases of time-adjacent frequency responses computed from the wavefield
+        # align the phases of time-adjacent impulse responses computed from the wavefield
         self.reduce_temporal_phase_noise = False
 
-        # align the phases of time-adjacent frequency responses computed from the wavefield gradient
+        # align the phases of time-adjacent impulse responses computed from the wavefield gradient
         self.reduce_temporal_phase_noise_grad = False
+
+        # align the phase and delay of time-adjacent frequency responses computed from the wavefield
+        self.align_frequency_responses = False
 
         # set all wavefield components less than theshold*rms to zero
         # the rms is computed over all doppler shifts between 5/8 and 7/8 of the largest delay
@@ -213,6 +219,9 @@ class CyclicSolver:
 
         # include separate temporal gain variations in the model
         self.model_gain_variations = False
+
+        # normalize each cyclic spectrum
+        self.normalize_cyclic_spectra = False
 
         # derive a first guest for the wavefield using the harmonic with the highest S/N
         self.first_wavefield_from_best_harmonic = 0
@@ -244,6 +253,9 @@ class CyclicSolver:
         # initial guess for the dynamic response
         self.initial_h_time_freq = None
 
+        # project the gradient onto the subspace that is orthogonal to the null space direction defined by degenerate phase
+        self.manifold_optimization = False
+
         if filename:
             self.load(filename)
 
@@ -270,36 +282,37 @@ class CyclicSolver:
         """
 
         ar = psrchive.Archive_load(filename)
+        bw = abs(ar.get_bandwidth())
         ext = ar.get_dynamic_response()
         data = ext.get_data()
         nchan = ext.get_nchan()
         ntime = ext.get_ntime()
+
+        start_time = ext.get_minimum_epoch ()
+        end_time = ext.get_maximum_epoch ()
+        dT = (end_time-start_time).in_seconds() / ntime
+
+        print(f"{ntime=} start_time={start_time.printdays(13)} end_time={end_time.printdays(13)} delta-T={dT}")
+
         data = np.reshape(data, (ntime, nchan))
 
         h_time_delay = freq2time(data, axis=1)
         h_doppler_delay = time2freq(h_time_delay, axis=0)
-        plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-        fig.colorbar(img)
-        fig.savefig("input_wavefield.png")
-        plt.close()
+        plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield.png")
 
         if self.zap_edges is not None and self.zap_edges > 0:
             zap_count = int(self.zap_edges * nchan)
             data = data[:, zap_count:-zap_count]
+            bw = bw * float(zap_count) / float(nchan)
 
             h_time_delay = freq2time(data, axis=1)
             h_doppler_delay = time2freq(h_time_delay, axis=0)
-            plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
-            fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-            fig.colorbar(img)
-            fig.savefig("input_wavefield_after_zap_edges.png")
-            plt.close()
+            plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield_after_zap_edges.png")
 
         self.initial_h_time_freq = data
-        self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
+
+        if ar.get_nsubint() == 1:
+            self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
 
     def load(self, filename):
         """
@@ -498,17 +511,9 @@ class CyclicSolver:
 
         self.nspec = self.nsubint
 
-        hf_prev = np.ones((self.nchan,), dtype=np.complex128)
-        self.hf_prev = hf_prev
+        self.hf_prev = np.ones((self.nchan,), dtype=np.complex128)
 
-        if self.initial_h_time_freq is not None:
-            assert self.initial_h_time_freq.shape[0] == self.nspec
-            assert self.initial_h_time_freq.shape[1] == self.nchan
-            self.h_time_delay = freq2time(self.initial_h_time_freq, axis=1)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
-            self.expected_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
-
-        else:
+        if self.initial_h_time_freq is None:
             self.expected_power = self.nchan * self.nspec
             self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
             self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.expected_power)
@@ -521,6 +526,19 @@ class CyclicSolver:
                 for ichan in range(self.nchan):
                     if np.abs(hf[ichan] - 1.0) > 1e-6:
                         print(f"unexpected initial response[{ichan}]={hf[ichan]}")
+
+        else:
+            current_shape = (self.nspec, self.nchan)
+            if self.initial_h_time_freq.shape != current_shape:
+                print(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
+                h_time_freq = pad_wavefield(self.initial_h_time_freq, current_shape)
+                self.h_time_delay = freq2time(h_time_freq, axis=1)
+                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+                plot_Doppler_vs_delay(self.h_doppler_delay, self.mean_time_offset, self.bw, "input_wavefield_after_padding.png")
+            else:
+                h_time_freq = self.initial_h_time_freq
+                self.h_time_delay = freq2time(h_time_freq, axis=1)
+                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.iprint:
             print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
@@ -743,11 +761,20 @@ class CyclicSolver:
 
         self.h_time_delay = freq2time(self.h_doppler_delay)
 
+        if self.align_frequency_responses:
+            print(f"reduce temporal phase and delay noise")
+            h_time_freq = time2freq(self.h_time_delay, axis=1)
+            align_to_neighbour(h_time_freq)
+            self.h_time_delay = freq2time(h_time_freq, axis=1)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
         if self.reduce_temporal_phase_noise:
+            print(f"reduce temporal phase noise")
             minimize_temporal_phase_noise(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.minimize_spectral_entropy:
+            print(f"minimize spectral entropy")
             minimize_spectral_entropy(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
@@ -823,8 +850,10 @@ class CyclicSolver:
 
         if self.model_gain_variations:
             cs, norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
-        else:
+        elif self.normalize_cyclic_spectra:
             cs, norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
+        else:
+            norm = 1
         cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
             cs[:, self.maxharm + 1 :] = 0.0
@@ -857,6 +886,7 @@ class CyclicSolver:
         if self.iprint:
             print(f"update filter isub={isub}/{self.nspec}")
 
+        self.rindex = isub
         _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
 
         if self.enforce_causality:
@@ -919,32 +949,42 @@ class CyclicSolver:
 
         phasor = 1.0 + 0.0j
 
-        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
-
         if self.shear_phasors is None:
             self.shear_phasors = create_shear_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
-        for ipol in range(self.npol):
-            self.s0 = self.intrinsic_ph[ipol]
-            self.ph_ref = self.intrinsic_ph[ipol]
+        self.compute_gradient()
 
-            self.h_time_delay = freq2time(self.h_doppler_delay)
+        if self.manifold_optimization:
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
-                future_subint = {
-                    executor.submit(self.updateWavefieldSubint, ipol, isub): isub
-                    for isub in range(self.nspec)
-                }
+            h_time_delay_grad_0 = self.h_time_delay_grad.copy()
+            h_time_delay_0 = self.h_time_delay.copy()
 
-                for future in concurrent.futures.as_completed(future_subint):
-                    isub = future_subint[future]
-                    try:
-                        _merit, _nterm = future.result()
-                        self.merit += _merit
-                        self.nterm_merit += _nterm
+            epsilon = 1e-6
 
-                    except Exception as exc:
-                        print(f"updateWavefieldSubint isub={isub} exception: {exc}")
+            self.h_time_delay = h_time_delay_0 * (1.0 + 1.0j * epsilon)
+            self.compute_gradient()
+            h_time_delay_grad_2 = self.h_time_delay_grad.copy()
+
+            self.h_time_delay = h_time_delay_0 * (1.0 - 1.0j * epsilon)
+            self.compute_gradient()
+            h_time_delay_grad_1 = self.h_time_delay_grad.copy()
+
+            #plot_Doppler_vs_delay(time2freq(h_time_delay_grad_0)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_0.png")
+
+            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad.png")
+
+            delta_grad = h_time_delay_grad_2 - h_time_delay_grad_1
+
+            plot_Doppler_vs_delay(time2freq(delta_grad)*self.nsubint, self.mean_time_offset, self.bw, "delta_grad.png")
+
+            self.h_time_delay = h_time_delay_0
+            self.h_time_delay_grad = h_time_delay_grad_0
+
+            proj = np.vdot(delta_grad, self.h_time_delay_grad)
+            print(f"{proj=}")
+            self.h_time_delay_grad -= proj * delta_grad / np.sum(np.abs(delta_grad)** 2)
+
+            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_again.png")
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -973,6 +1013,29 @@ class CyclicSolver:
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
+
+    def compute_gradient(self):
+        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
+
+        for ipol in range(self.npol):
+            self.s0 = self.intrinsic_ph[ipol]
+            self.ph_ref = self.intrinsic_ph[ipol]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+                future_subint = {
+                    executor.submit(self.updateWavefieldSubint, ipol, isub): isub
+                    for isub in range(self.nspec)
+                }
+
+                for future in concurrent.futures.as_completed(future_subint):
+                    isub = future_subint[future]
+                    try:
+                        _merit, _nterm = future.result()
+                        self.merit += _merit
+                        self.nterm_merit += _nterm
+
+                    except Exception as exc:
+                        print(f"compute_gradient isub={isub} exception: {exc}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
@@ -1065,6 +1128,8 @@ class CyclicSolver:
             cs, norm = self.get_cs(ps)
 
         if hf_prev is None:
+            if self.hf_prev is None:
+                self.hf_prev = np.ones((self.nchan,), dtype=np.complex128)
             _hf_prev = self.hf_prev
         else:
             _hf_prev = hf_prev
@@ -1909,6 +1974,22 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
+def pad_wavefield(h_time_freq, new_shape):
+
+    old_shape = h_time_freq.shape
+    h_time_delay = freq2time(h_time_freq, axis=1)
+    h_doppler_delay = time2freq(h_time_delay, axis=0)
+
+    padded_spectrum = np.zeros(new_shape, dtype=np.complex128)
+
+    first_half_time = old_shape[0] // 2
+    last_half_time = old_shape[0] - first_half_time
+
+    padded_spectrum[:first_half_time,:old_shape[1]] = h_doppler_delay[:first_half_time,:]
+    padded_spectrum[-last_half_time:,:old_shape[1]] = h_doppler_delay[-last_half_time:,:]
+
+    h_time_delay = freq2time(padded_spectrum, axis=0)
+    return time2freq(h_time_delay, axis=1)
 
 def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
@@ -2051,6 +2132,7 @@ def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
     rmsn = rms_cs(cs, ih=cs.shape[1] - 1, bw=bw, ref_freq=ref_freq)
     normfac = np.sqrt(np.abs(rms1**2 - rmsn**2))
+    # print(f"normalize_cs: normfac={normfac}")
     return cs / normfac, normfac
 
 
@@ -2059,7 +2141,6 @@ def rms_cs(cs, ih, bw, ref_freq):
     imin, imax = chan_limits_cs(ih, nchan, bw, ref_freq)
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
-
 
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
@@ -2078,7 +2159,6 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
     if ichan > nchan / 2:
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
-
 
 def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """Construct the two-dimensional array of phasors used to shift the spectral response function
@@ -2101,7 +2181,8 @@ def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """
 
     # tau[j] in seconds
-    tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
+    # tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
+    tau = np.linspace(0.0, 1.0-1.0/nchan, nchan) * (nchan * 1e-6 / bw_MHz)
     # alpha[k] in Hz
     alpha = freq_Hz * np.arange(nharm)
 
@@ -2126,7 +2207,7 @@ def shear_spectra(spectrum, phasors):
     return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
 
 
-def make_model_cs(hf, s0, bw, ref_freq, phasors):
+def make_model_cs(hf, s0, bw, ref_freq, phasors, padding=True):
     nchan = hf.shape[0]
     s0.shape[0]
     # profile2cs
@@ -2138,7 +2219,8 @@ def make_model_cs(hf, s0, bw, ref_freq, phasors):
 
     cs = cs * hfplus * np.conj(hfminus)
 
-    cs = cyclic_padding(cs, bw, ref_freq)
+    if padding:
+        cs = cyclic_padding(cs, bw, ref_freq)
 
     return cs, hfplus, hfminus
 
@@ -2190,7 +2272,7 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors)
+    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors, CS.pad_cyclic_spectra)
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -2204,6 +2286,13 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     # residual, R = model - data
     diff = cs_model - cs_data
+
+    if CS.dump_residual:
+      print(f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}")
+      filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
+      with open(filename, "wb") as fh:
+        pickle.dump(diff, fh)
+
     phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
@@ -2211,11 +2300,21 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     cc1 = cs2cc(diff * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0)  # WDvS Equation 37
-    grad = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum1 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0
-    grad += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum2 += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+
+    test_conjugacy = False
+    if test_conjugacy:
+        test = grad_sum1 - np.conj(grad_sum2)
+        test_power = (np.abs(test) ** 2).sum()
+        sum1_power = (np.abs(grad_sum1) ** 2).sum()
+        sum2_power = (np.abs(grad_sum2) ** 2).sum()
+        print(f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}")
+
+    grad = grad_sum1 + grad_sum2
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
@@ -2256,12 +2355,17 @@ def spectral_entropy_grad(phi, h_time_delay):
 
     gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
     grad_power = np.sum(gradient**2)
-
     rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
-    print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
+    # print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
 
     return entropy, gradient[1:]
 
+
+def spectral_entropy(h_time_delay):
+    ntime = h_time_delay.shape[0]
+    phi = np.zeros(ntime - 1)
+    entropy, grad = spectral_entropy_grad(phi,h_time_delay)
+    return entropy
 
 def minimize_temporal_phase_noise(x):
     nspec = x.shape[0]
@@ -2282,12 +2386,10 @@ def circular(x):
 
 
 def minimize_spectral_entropy(h_time_delay):
-    minimize_temporal_phase_noise(h_time_delay)
-
     ntime = h_time_delay.shape[0]
     initial_guess = np.zeros(ntime - 1)
 
-    options = {"maxiter": 1000, "disp": True}
+    S_init = spectral_entropy(h_time_delay)
 
     result = minimize(
         spectral_entropy_grad,
@@ -2296,13 +2398,127 @@ def minimize_spectral_entropy(h_time_delay):
         method="BFGS",
         jac=True,
         callback=circular,
-        options=options,
     )
 
     optimal_phases = np.zeros(ntime)
     optimal_phases[1:] = result.x
     phasors = np.exp(1.0j * optimal_phases)
     h_time_delay *= phasors[:, np.newaxis]
+
+    S_final = spectral_entropy(h_time_delay)
+
+    print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
+
+
+def spectral_shift(alpha, hf):
+    """
+    Return the input mupltiplied by a phase and phase gradient
+
+    Args:
+    alpha: A 1D array of two values: phase, and slope
+    hf: the complex-valued spectra that is transformed
+
+    Returns:
+    The transformed input
+    """
+
+    phase = alpha[0]
+    slope = alpha[1]
+    nus = np.fft.fftfreq(hf.size)
+    return hf * np.exp(1j * (phase + slope * nus)), nus
+
+
+def spectral_distance(alpha, hf_ref, hf):
+    """
+    Calculates the magnitude of the difference between the two spectra in hf_ref and hf
+    after mupltiplying the second one by a phase and phase gradient
+
+    Args:
+    alpha: A 1D array of two values: phase, and slope
+    hf_ref: the complex-valued spectra used as a reference
+    hf: the complex-valued spectra that is aligned to hf_ref by minimizing distance
+
+    Returns:
+    The distance and its gradient with respect to the 3 parameters in alpha
+    """
+
+    phase = alpha[0]
+    slope = alpha[1]
+    # print(f"{phase=} {slope=}")
+
+    hfprime, nus = spectral_shift(alpha, hf)
+    delta = hf_ref - hfprime
+
+    diff = np.sum(np.abs(delta)**2)
+
+    del_phase = 1j * hfprime
+    del_slope = 1j * nus * hfprime
+
+    ddiff_dphs = -2 * np.sum ( np.real( np.conj(delta) * del_phase ) )
+    ddiff_dslo = -2 * np.sum ( np.real( np.conj(delta) * del_slope ) )
+
+    # print(f"{diff=} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
+    return diff, [ddiff_dphs, ddiff_dslo]
+
+
+def minimize_difference(hf_ref, hf):
+
+    Nchan = hf_ref.size
+    initial_guess = np.zeros(2)
+
+    align_power = True
+    if align_power:
+        ht = np.abs(ifft(hf))**2
+        ht_ref = np.abs(ifft(hf_ref))**2
+        ccf_power = np.correlate(ht, ht_ref, "same")
+        imax = np.argmax(ccf_power)
+        ph_max = 0
+    else:
+        ccf = fft( np.conj(hf) * hf_ref )
+        ccf_power = np.abs(ccf)**2
+        imax = np.argmax(ccf_power)
+        ph_max = np.angle(ccf[imax])
+
+    # print(f"{imax=} {ph_max=} {Nchan=}")
+
+    initial_guess[0] = ph_max
+
+    if imax < Nchan // 2:
+        slope = imax
+    else:
+        slope = imax - Nchan
+
+    initial_guess[1] = slope * 2.0 * np.pi
+
+    options = {"maxiter": 1000, "gtol": 1e-9}
+
+    result = minimize(
+        spectral_distance,
+        initial_guess,
+        args=(hf_ref,hf),
+        method="BFGS",
+        jac=True,
+        options=options,
+    )
+
+    alpha = result.x
+    hf[:], nus = spectral_shift(alpha, hf)
+
+    # cross-correlation at lag 0
+    ccf0 = np.sum(np.conj(hf) * hf_ref)
+    # total spectral power in reference spectrum
+    tsp0 = np.sum(np.abs(hf_ref)**2)
+    tsp = np.sum(np.abs(hf)**2)
+    return ccf0 / np.sqrt(tsp0 * tsp)
+
+def align_to_neighbour(h_time_freq):
+    nt, nf = h_time_freq.shape
+    hf0 = h_time_freq[0]
+    for it in range(1,nt):
+        hf = h_time_freq[it]
+        minimize_difference(hf0,hf)
+        hf0 = hf
+        h_time_freq[it,:] = hf
 
 
 def shifted(input_array, fraction_of_bin, axis=0):

@@ -14,11 +14,14 @@ def list_nonzero(filename, threshold) -> None:
     nchan=wavefield.shape[1]
     nsub=wavefield.shape[0]
 
-    indeces = np.where(abs(wavefield) > threshold)
+    abs_wav = np.abs(wavefield)
+    abs_max = np.max(abs_wav)
+
+    indeces = np.where(abs(abs_wav) > abs_max*threshold)
     coords = np.transpose(indeces)
     print(f"{filename} nsub={nsub} nchan={nchan}")
     for coord in coords:
-        print(f"{coord[0]-nsub//2} {coord[1]-nchan//2} {np.real(wavefield[coord[0],coord[1]])}")
+        print(f"{coord[0]-nsub//2} {coord[1]-nchan//2} {wavefield[coord[0],coord[1]]}")
 
     minx = np.min(indeces[0])
     maxx = np.max(indeces[0]) + 1
