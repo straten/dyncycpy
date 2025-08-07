@@ -634,7 +634,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   fftout = reinterpret_cast<fftw_complex*>( impulse_response.data() );
   auto bwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
-  // re-use frequency reponse for the shifted frequency response
+  // re-use frequency response for the shifted frequency response
   fftin = reinterpret_cast<fftw_complex*>( shifted_impulse_response.data() );
   fftout = reinterpret_cast<fftw_complex*>( frequency_response.data() );
   auto fwd_plan = fftw_plan_dft_1d (nchan, fftin, fftout, FFTW_FORWARD, FFTW_ESTIMATE);
@@ -643,6 +643,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
   prototype = archive->clone();
   prototype->pscrunch();
+
+  double scalefac = 0.5/sqrt(2* nbin * nchan);
 
   for (unsigned itime=0; itime < ntime; itime++)
   {
@@ -741,6 +743,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
       copy(f_amps, profile);
+      subint->get_Profile(ipol,ichan)->scale(scalefac);
     }
 
     string filename = "periodic_spectrum_" + stringprintf("%05d",itime) + ".ar";
