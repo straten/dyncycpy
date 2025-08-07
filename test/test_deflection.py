@@ -76,10 +76,15 @@ parser.add_argument('--dc', dest='dc', action='store_true', help="deflect the DC
 parser.add_argument('--no-dc', dest='dc', action='store_false', help="do not deflect the DC bin")
 parser.set_defaults(dc=True)
 
+parser.add_argument('--deflect', dest='deflect', action='store_true', help="test deflection")
+parser.add_argument('--no-deflect', dest='deflect', action='store_false', help="test only no deflection")
+parser.set_defaults(deflect=True)
+
 args, files = parser.parse_known_args()
 init = args.init
 relative_deflection = args.amp
 deflect_dc = args.dc
+deflection = args.deflect
 
 if deflect_dc:
     print("\ntest_deflection: deflecting DC")
@@ -95,7 +100,10 @@ CS.nthread = 8
 CS.save_cyclic_spectra = True
 
 # normalize each cyclic spectrum
-CS.normalize_cyclic_spectra = True
+CS.normalize_cyclic_spectra = False
+
+# pad each cyclic spectrum with zeros
+CS.pad_cyclic_spectra = False
 
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
@@ -128,24 +136,27 @@ CS.initWavefield()
 initial_doppler_delay = np.copy(CS.h_doppler_delay)
 
 print(f"\ntest_deflection: no deflection baseline")
+CS.dump_residual = True
 y_val, gradient = CS.evaluate(initial_doppler_delay)
+CS.dump_residual = False
 analysis("no_deflection", gradient, None)
 
-for i in range(4):
+if deflection:
+    for i in range(4):
 
-    ph = 0.5 * i * np.pi
+        ph = 0.5 * i * np.pi
 
-    print(f"\ntest_deflection: deflecting with phase shifted by={ph} radians")
+        print(f"\ntest_deflection: deflecting with phase shifted by={ph} radians")
 
-    delta_factor = relative_deflection * np.exp(1.j * ph)
-    delta = delta_factor * initial_doppler_delay
-    
-    if not deflect_dc:
-        delta[0,0] = 0.0
+        delta_factor = relative_deflection * np.exp(1.j * ph)
+        delta = delta_factor * initial_doppler_delay
+        
+        if not deflect_dc:
+            delta[0,0] = 0.0
 
-    offset_doppler_delay = initial_doppler_delay + delta
+        offset_doppler_delay = initial_doppler_delay + delta
 
-    y_val, gradient = CS.evaluate(offset_doppler_delay)
+        y_val, gradient = CS.evaluate(offset_doppler_delay)
 
-    base = "test_deflection_" + f"{i}"
-    analysis (base,gradient,delta)
+        base = "test_deflection_" + f"{i}"
+        analysis (base,gradient,delta)
