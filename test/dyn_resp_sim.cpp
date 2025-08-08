@@ -42,6 +42,9 @@ protected:
   //! Number of time samples
   unsigned ntime = 256;
 
+  //! Include Nyquist (if zero, Nyquist frequency is zeroed)
+  unsigned include_Nyquist = 1;
+
   //! Timescale of exponential decay of impulse response
   double arc_decay = 0.0;
 
@@ -262,16 +265,19 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
   unsigned ibin_min = 1;
   unsigned ibin_max = 0.5 * max_profile_harmonic * nbin;
 
-  double log10_slope = ( log10_min - log10_max ) / (ibin_max - ibin_min);
-
+  double log10_curvature = ( log10_min - log10_max ) / (ibin_max * ibin_max);
+ 
   // DC bin
   profile[0] = 0.0;
 
   for (unsigned ibin=1; ibin < nbin/2; ibin++)
   {
-    double log10_amp = log10_max + (ibin - ibin_min) * log10_slope;
+    double log10_amp = log10_max + log10_curvature * ibin * ibin;
     profile[nbin-ibin] = profile[ibin] = pow(10.0, log10_amp);
   }
+
+  if (!include_Nyquist)
+    profile[nbin/2] = 0;
 
   auto fftinout = reinterpret_cast<fftw_complex*>( profile.data() );
   auto plan = fftw_plan_dft_1d (nbin, fftinout, fftinout, FFTW_BACKWARD, FFTW_ESTIMATE);
@@ -666,6 +672,9 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
+  if (!include_Nyquist)
+    intrinsic_spectrum[nbin/2] = 0.0;
+
   // verify that the intrinsic spectrum has the expected Hermiticity
   double total_power = 0;
   double diff_power = 0;
@@ -691,7 +700,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   vector<std::complex<double>> profile (nbin);
   fftin = reinterpret_cast<fftw_complex*>( temp.data() );
   auto fftout = reinterpret_cast<fftw_complex*>( profile.data() );
-  plan = fftw_plan_dft_1d (nbin, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
+  auto bin_plan = fftw_plan_dft_1d (nbin, fftin, fftout, FFTW_BACKWARD, FFTW_ESTIMATE);
 
   vector<std::complex<double>> frequency_response (nchan);
   vector<std::complex<double>> impulse_response (nchan);
@@ -733,12 +742,12 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     double total_power = 0.0;
     double total_cs_power = 0.0;
 
-    for (unsigned ibin=0; ibin < nbin/2; ibin++)
+    for (unsigned ibin=0; ibin < nbin/2 + include_Nyquist; ibin++)
     {
       for (int sign: {-1, 1})
       {
         double alpha = ibin * spin_frequency;
-        double slope = sign * M_PI * alpha / chanbw_Hz; // 2pi * alpha/2
+        double slope = -sign * M_PI * alpha / chanbw_Hz; // 2pi * alpha/2
 
         shifted_impulse_response = impulse_response;
         for (unsigned ichan=1; ichan < nchan; ichan++)
@@ -755,21 +764,28 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
         for (unsigned ichan=0; ichan < nchan; ichan++)
         {
-          if (sign == 1)
-            frequency_response[ichan] = conj(frequency_response[ichan]);
-
           total_power += norm(frequency_response[ichan]);
+
+          if (sign == -1)
+            frequency_response[ichan] = conj(frequency_response[ichan]);
 
           auto spectrum = cyclic_spectrum.data() + ichan*nbin;
 
+          // S'(nu;alpha) = H(nu + alpha/2) H^*(nu - alpha/2) S(nu;alpha)
           spectrum[ibin] *= frequency_response[ichan];
           if (ibin > 0)
             spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
 
+          if (ibin == nbin/2)
+          {
+            // can happen only if include_Nyquist == 1
+            // the Nyquist bin of a real-valued signal is real-valued
+            spectrum[ibin] = spectrum[ibin].real();
+          }
+
           if (sign == 1)
             total_cs_power += norm(spectrum[ibin]);
         }
-
       }
     }
 
@@ -805,7 +821,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     for (unsigned ichan=0; ichan < nchan; ichan++)
     {
       memcpy(temp.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
-      fftw_execute(plan);
+      fftw_execute(bin_plan);
       // profile now contains the periodic spectrum for ichan
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
@@ -820,7 +836,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
   fftw_destroy_plan(bwd_plan);
   fftw_destroy_plan(fwd_plan);
-  fftw_destroy_plan(plan);
+  fftw_destroy_plan(bin_plan);
 }
 
 /*!

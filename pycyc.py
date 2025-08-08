@@ -109,7 +109,9 @@ from scipy.fft import fft, fftshift, ifft, irfft, rfft
 from scipy.optimize import minimize
 from scipy.signal import fftconvolve
 from scipy.signal.windows import kaiser
+
 from plotting import plot_Doppler_vs_delay
+
 
 class CyclicSolver:
     def __init__(
@@ -140,6 +142,7 @@ class CyclicSolver:
         self.offp = offp
         self.maxchan = maxchan
         self.maxharm = maxharm
+        self.include_Nyquist = 1
         self.save_cyclic_spectra = False
         self.pad_cyclic_spectra = True
         self.filenames = []
@@ -288,11 +291,13 @@ class CyclicSolver:
         nchan = ext.get_nchan()
         ntime = ext.get_ntime()
 
-        start_time = ext.get_minimum_epoch ()
-        end_time = ext.get_maximum_epoch ()
-        dT = (end_time-start_time).in_seconds() / ntime
+        start_time = ext.get_minimum_epoch()
+        end_time = ext.get_maximum_epoch()
+        dT = (end_time - start_time).in_seconds() / ntime
 
-        print(f"{ntime=} start_time={start_time.printdays(13)} end_time={end_time.printdays(13)} delta-T={dT}")
+        print(
+            f"{ntime=} start_time={start_time.printdays(13)} end_time={end_time.printdays(13)} delta-T={dT}"
+        )
 
         data = np.reshape(data, (ntime, nchan))
 
@@ -370,7 +375,8 @@ class CyclicSolver:
             self.nsubint, self.npol, self.nchan, self.nbin = data.shape
             self.nlag = self.nchan
             self.nphase = self.nbin
-            self.nharm = int(self.nphase / 2) + 1
+            self.nharm = self.nphase // 2 + self.include_Nyquist
+            print(f"load nlag={self.nlag} nharm={self.nharm}")
             if self.maxharm is not None:
                 print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
 
@@ -534,7 +540,9 @@ class CyclicSolver:
                 h_time_freq = pad_wavefield(self.initial_h_time_freq, current_shape)
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
-                plot_Doppler_vs_delay(self.h_doppler_delay, self.mean_time_offset, self.bw, "input_wavefield_after_padding.png")
+                plot_Doppler_vs_delay(
+                    self.h_doppler_delay, self.mean_time_offset, self.bw, "input_wavefield_after_padding.png"
+                )
             else:
                 h_time_freq = self.initial_h_time_freq
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
@@ -708,8 +716,9 @@ class CyclicSolver:
             update_gain = self.model_gain_variations and ipol == 0
 
             if self.compute_scattered_profile:
-                ph = fscrunch_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
-                pp = harm2phase(ph)
+                ph = fscrunch_cs(cs, bw=self.bw, ref_freq=self.ref_freq, padding=self.pad_cyclic_spectra)
+                # print(f"updateProfileSubint {ph.shape=}")
+                pp = self.harm2phase(ph)
                 self.scattered_profiles[isub, :] += pp
 
             ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
@@ -724,12 +733,13 @@ class CyclicSolver:
                 ph[0] = 0.0
             if self.maxinitharm:
                 ph[self.maxinitharm :] = 0.0
-            pp = harm2phase(ph)
+            pp = self.harm2phase(ph)
 
             if self.iprint:
                 print(f"update profile isub={isub}/{self.nsubint}")
 
             self.intrinsic_profiles[isub, ipol, :] = pp
+            return 0
 
     def updateProfile(self):
         """
@@ -786,9 +796,23 @@ class CyclicSolver:
             print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
             self.h_doppler_delay *= np.conj(ph)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+        if self.nthread == 1:
             for isub in range(self.nspec):
-                executor.submit(self.updateProfileSubint, isub)
+                self.updateProfileSubint(isub)
+
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+                future_subint = {
+                    executor.submit(self.updateProfileSubint, isub): isub
+                    for isub in range(self.nspec)
+                }
+
+                for future in concurrent.futures.as_completed(future_subint):
+                    isub = future_subint[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        print(f"updateProfile isub={isub} exception: {exc}")
 
         self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0, 1))
 
@@ -809,7 +833,8 @@ class CyclicSolver:
         for ipol in range(self.npol):
             ph_numer = np.average(self.ph_numer[ipol], axis=0)
             ph_denom = np.average(self.ph_denom[ipol], axis=0)
-            self.intrinsic_ph[ipol] = ph_numer / ph_denom
+
+            self.intrinsic_ph[ipol] = safely_divide(ph_numer, ph_denom)
             self.intrinsic_ph[ipol] *= mean_gain
             self.intrinsic_ph_sum += self.intrinsic_ph[ipol]
             self.intrinsic_ph_sumsq += np.abs(self.intrinsic_ph[ipol]) ** 2
@@ -817,7 +842,8 @@ class CyclicSolver:
         # sum over all polarizations and sub-integrations
         ph_numer = np.average(self.ph_numer, axis=(0, 1))
         ph_denom = np.average(self.ph_denom, axis=(0, 1))
-        self.pp_intrinsic = harm2phase(ph_numer / ph_denom) * mean_gain
+
+        self.pp_intrinsic = self.harm2phase(safely_divide(ph_numer, ph_denom)) * mean_gain
         print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
     def initWavefield(self):
@@ -848,13 +874,19 @@ class CyclicSolver:
 
         cs = ps2cs(tmp)
 
+        if not self.include_Nyquist:
+            cs = cs[:,:self.nharm]
+
+        # print (f"get_cs power in cs={np.sum(np.abs(cs)**2)}")
+
         if self.model_gain_variations:
             cs, norm = normalize_cs_by_noise_rms(cs, bw=self.bw, ref_freq=self.ref_freq)
         elif self.normalize_cyclic_spectra:
             cs, norm = normalize_cs(cs, bw=self.bw, ref_freq=self.ref_freq)
         else:
             norm = 1
-        cs = cyclic_padding(cs, self.bw, self.ref_freq)
+        if self.pad_cyclic_spectra:
+          cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
             cs[:, self.maxharm + 1 :] = 0.0
         return cs, norm
@@ -955,7 +987,6 @@ class CyclicSolver:
         self.compute_gradient()
 
         if self.manifold_optimization:
-
             h_time_delay_grad_0 = self.h_time_delay_grad.copy()
             h_time_delay_0 = self.h_time_delay.copy()
 
@@ -969,22 +1000,24 @@ class CyclicSolver:
             self.compute_gradient()
             h_time_delay_grad_1 = self.h_time_delay_grad.copy()
 
-            #plot_Doppler_vs_delay(time2freq(h_time_delay_grad_0)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_0.png")
+            # plot_Doppler_vs_delay(time2freq(h_time_delay_grad_0)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_0.png")
 
-            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad.png")
+            # plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad.png")
 
             delta_grad = h_time_delay_grad_2 - h_time_delay_grad_1
 
-            plot_Doppler_vs_delay(time2freq(delta_grad)*self.nsubint, self.mean_time_offset, self.bw, "delta_grad.png")
+            plot_Doppler_vs_delay(
+                time2freq(delta_grad) * self.nsubint, self.mean_time_offset, self.bw, "delta_grad.png"
+            )
 
             self.h_time_delay = h_time_delay_0
             self.h_time_delay_grad = h_time_delay_grad_0
 
             proj = np.vdot(delta_grad, self.h_time_delay_grad)
             print(f"{proj=}")
-            self.h_time_delay_grad -= proj * delta_grad / np.sum(np.abs(delta_grad)** 2)
+            self.h_time_delay_grad -= proj * delta_grad / np.sum(np.abs(delta_grad) ** 2)
 
-            #plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_again.png")
+            # plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_again.png")
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -1047,19 +1080,20 @@ class CyclicSolver:
 
         if update_gain and self.intrinsic_ph_sum is not None:
             # Equation A11 numerator
-            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph_sum, bw=bw, ref_freq=ref_freq)
+            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph_sum, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra)
             gain_numer = tmp[1:].sum()  # sum over all harmonics
             # Equation A11 denominator
-            tmp = fscrunch_cs(maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq)
+            tmp = fscrunch_cs(maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra)
             gain_denom = tmp[1:].sum()  # sum over all harmonics
             gain = np.real(gain_numer) / np.real(gain_denom)
-            # print(f' gain={gain}')
+            print(f'optimize_profile gain={gain}')
         else:
             gain = 1
 
         # fscrunch
-        ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq) * gain
-        ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq) * gain**2
+        # print("optimize_profile fscrunch_cs")
+        ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain
+        ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain**2
         s0 = ph_numer / ph_denom
         s0[np.real(ph_denom) <= 0.0] = 0
         return s0, gain, ph_numer, ph_denom
@@ -1249,7 +1283,7 @@ class CyclicSolver:
         if self.omit_dc:
             ph[0] = 0.0
 
-        pp = harm2phase(ph)
+        pp = self.harm2phase(ph)
 
         self.intrinsic_profiles[isub, :] = pp
         self.pp_intrinsic += pp
@@ -1265,7 +1299,7 @@ class CyclicSolver:
         writeArray(fbase + ".dynspec.txt", self.dynamic_spectrum)
 
     def cyclic_variance(self, cs):
-        ih = self.nharm - 1
+        ih = self.nharm
 
         imin, imax = chan_limits_cs(
             iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq
@@ -1274,7 +1308,7 @@ class CyclicSolver:
         nvalid = imax - imin
         var = var / nvalid
 
-        for ih in range(1, self.nharm - 1):
+        for ih in range(1, self.nharm):
             imin, imax = chan_limits_cs(iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq)
             nvalid += imax - imin
         return var, nvalid * 2
@@ -1324,6 +1358,15 @@ class CyclicSolver:
 
         self.statefile = orig_statefile
         print("Saved state in:", filename)
+
+    def harm2phase(self, ph, workers=1):
+        if self.include_Nyquist:
+            tmp = ph
+        else:
+            nharm = ph.shape[0]
+            tmp = np.zeros(nharm+1,dtype=np.complex128)
+            tmp[:nharm]=ph[:]
+        return irfft(tmp, workers=workers, norm="ortho")
 
     def plotCurrentSolution(self, plot_cs):
         cs_model = self.model
@@ -1548,10 +1591,10 @@ class CyclicSolver:
             transform=ax5.transAxes,
         )
         ax6 = fig.add_subplot(4, 3, 12)
-        pref = harm2phase(self.s0)
+        pref = self.harm2phase(self.s0)
         ax6.plot(pref, label="Reference", linewidth=2)
-        ax6.plot(harm2phase(sopt), "r", label="Intrinsic")
-        ax6.plot(harm2phase(smeas), "g", label="Measured")
+        ax6.plot(self.harm2phase(sopt), "r", label="Intrinsic")
+        ax6.plot(self.harm2phase(smeas), "g", label="Measured")
         legend = ax6.legend(loc="upper left", prop=dict(size="xx-small"), title="Profiles")
         legend.get_frame().set_alpha(0.5)
         ax6.set_xlim(0, pref.shape[0])
@@ -1571,6 +1614,12 @@ class CyclicSolver:
         fname = os.path.join(self.plotdir, ("%s_%04d_%04d.png" % (self.source, self.nopt, self.niter)))
         canvas.print_figure(fname)
 
+
+def safely_divide(numer,denom):
+    safe_denom = np.where(denom == 0, 1, denom)
+    result = numer / safe_denom
+    result[denom == 0] = 0
+    return result
 
 def plotSimulation(CS, mlag=100):
     if CS.ht0 is None:
@@ -1638,7 +1687,7 @@ def plotSimulation(CS, mlag=100):
     pt = 1e3 * np.linspace(0, 1, CS.nphase) / CS.ref_freq
     ax3.plot(pt, fftshift(CS.pp_meas), "r", label="measured")
     ax3.plot(pt, fftshift(CS.pp_intrinsic), "cyan", alpha=0.7, label="deconvolved")
-    ax3.plot(pt, fftshift(harm2phase(CS.s0)), "k", label="original")
+    ax3.plot(pt, fftshift(self.harm2phase(CS.s0)), "k", label="original")
     ax3.errorbar(
         [pt[len(pt) / 4]],
         [CS.pp_meas.max() / 2.0],
@@ -1912,42 +1961,49 @@ def loadProfile(fname):
     """
     Load profile in format generated by filter_profile
     """
-
     x = np.loadtxt(fname)
     return x[:, 1]
 
+#
+# norm="ortho" is used in the following definitions in order to preserve power
+#
 
-# np.fft does /n for all iffts, unlike fftw. So for now we keep normalization same for cross check
-# by multiplying by n
-
-# Note: for routines using rfft (ps2cs and phase2harm), the filter_profile code attempts to
-# normalize the result so that ps2cs(cs2ps(x)) = x by dividing by the length of the output array
-# However the fftw documentation indicates that one should instead divide by the length of the
-# input array.
-# I've left the bug in for now to compare directly to filter_profile
-
-
-def ps2cs(ps, workers=2, axis=1):
-    return rfft(ps, axis=axis, workers=workers, norm="ortho")
-
-
-def ps2pc(ps, workers=2, axis=0):
-    return rfft(ps, axis=axis, workers=workers, norm="ortho")
+def ps2cs(ps, workers=2):
+    """
+    real-valued periodic spectrum to complex-valued cyclic spectrum
+    real-to-complex forward FFT transforms pulse phase to cycle frequency
+    the Nyquist harmonic is removed because it typically contains little information,
+    and its removal facilitates comparison with simulated cyclic spectra
+    """
+    return rfft(ps, axis=1, workers=workers, norm="ortho")
 
 
 def cc2cs(cs, workers=2, axis=0):
+    """
+    complex-valued periodic correlation to cyclic correlation
+    complex-to-complex forward FFT transforms lag to radio frequency
+    """
     return fft(cs, axis=axis, workers=workers, norm="ortho")
 
-
 def cs2cc(cc, workers=2, axis=0):
+    """
+    complex-valued periodic correlation to cyclic correlation
+    complex-to-complex backward/inverse FFT transforms radio frequency to lag
+    """
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
-
 
 def cc2pc(cc, workers=2, axis=1):
+    """
+    complex-valued periodic correlation to cyclic correlation
+    complex-to-complex backward/inverse FFT transforms cycle frequency to pulse phase
+    """
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
-
 def pc2cc(pc, workers=2, axis=1):
+    """
+    complex-valued periodic correlation to cyclic correlation
+    complex-to-complex forward FFT transforms pulse phase to cycle frequency
+    """
     return fft(pc, axis=axis, workers=workers, norm="ortho")
 
 
@@ -1957,10 +2013,6 @@ def time2freq(ht, workers=1, axis=0):
 
 def freq2time(hf, workers=1, axis=0):
     return ifft(hf, axis=axis, workers=workers, norm="ortho")
-
-
-def harm2phase(ph, workers=1):
-    return irfft(ph, workers=workers, norm="ortho")
 
 
 def phase2harm(pp, workers=1):
@@ -1974,8 +2026,8 @@ def match_two_filters(hf1, hf2):
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
 
-def pad_wavefield(h_time_freq, new_shape):
 
+def pad_wavefield(h_time_freq, new_shape):
     old_shape = h_time_freq.shape
     h_time_delay = freq2time(h_time_freq, axis=1)
     h_doppler_delay = time2freq(h_time_delay, axis=0)
@@ -1985,11 +2037,12 @@ def pad_wavefield(h_time_freq, new_shape):
     first_half_time = old_shape[0] // 2
     last_half_time = old_shape[0] - first_half_time
 
-    padded_spectrum[:first_half_time,:old_shape[1]] = h_doppler_delay[:first_half_time,:]
-    padded_spectrum[-last_half_time:,:old_shape[1]] = h_doppler_delay[-last_half_time:,:]
+    padded_spectrum[:first_half_time, : old_shape[1]] = h_doppler_delay[:first_half_time, :]
+    padded_spectrum[-last_half_time:, : old_shape[1]] = h_doppler_delay[-last_half_time:, :]
 
     h_time_delay = freq2time(padded_spectrum, axis=0)
     return time2freq(h_time_delay, axis=1)
+
 
 def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
@@ -2120,7 +2173,7 @@ def rms_wavefield(h):
 def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     nchan = cs.shape[0]
     nharm = cs.shape[1]
-    cmin, cmax = chan_limits_cs(nharm - 1, nchan, bw, ref_freq)
+    cmin, cmax = chan_limits_cs(nharm, nchan, bw, ref_freq)
     hmin = nharm // 2
     extracted_noise = cs[cmin:cmax, hmin:]
     # print(f'normalize_cs_by_noise_rms nonzero={np.count_nonzero(noise)} size={noise.size}')
@@ -2142,6 +2195,7 @@ def rms_cs(cs, ih, bw, ref_freq):
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
 
+
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
@@ -2159,6 +2213,7 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
     if ichan > nchan / 2:
         ichan = int(nchan / 2)
     return (ichan, nchan - ichan)  # min,max
+
 
 def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """Construct the two-dimensional array of phasors used to shift the spectral response function
@@ -2181,11 +2236,12 @@ def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     """
 
     # tau[j] in seconds
-    # tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
-    tau = np.linspace(0.0, 1.0-1.0/nchan, nchan) * (nchan * 1e-6 / bw_MHz)
+    tau = np.fft.fftfreq(nchan) * (nchan * 1e-6 / bw_MHz)
+    # tau = np.linspace(0.0, 1.0 - 1.0 / nchan, nchan) * (nchan * 1e-6 / bw_MHz)
     # alpha[k] in Hz
     alpha = freq_Hz * np.arange(nharm)
 
+    # shift by 2 pi alpha / 2
     return np.exp(1j * np.pi * np.outer(tau, alpha))
 
 
@@ -2225,9 +2281,10 @@ def make_model_cs(hf, s0, bw, ref_freq, phasors, padding=True):
     return cs, hfplus, hfminus
 
 
-def fscrunch_cs(cs, bw, ref_freq):
+def fscrunch_cs(cs, bw, ref_freq, padding):
     cstmp = cs[:]
-    cstmp = cyclic_padding(cstmp, bw, ref_freq)
+    if padding:
+        cstmp = cyclic_padding(cstmp, bw, ref_freq)
     #    rm = np.abs(cs-cstmp).sum()
     #    print "fscrunch saved:",rm
     return cstmp.sum(0)
@@ -2272,7 +2329,9 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors, CS.pad_cyclic_spectra)
+    cs_model, hfplus, hfminus = make_model_cs(
+        hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors, CS.pad_cyclic_spectra
+    )
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -2288,10 +2347,12 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     diff = cs_model - cs_data
 
     if CS.dump_residual:
-      print(f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}")
-      filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
-      with open(filename, "wb") as fh:
-        pickle.dump(diff, fh)
+        print(
+            f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}"
+        )
+        filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
+        with open(filename, "wb") as fh:
+            pickle.dump(diff, fh)
 
     phasors = CS.shear_phasors
 
@@ -2304,7 +2365,7 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
 
     cc1 = cs2cc(np.conj(diff) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0
-    grad_sum2 += grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum2 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
 
     test_conjugacy = False
     if test_conjugacy:
@@ -2312,7 +2373,9 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         test_power = (np.abs(test) ** 2).sum()
         sum1_power = (np.abs(grad_sum1) ** 2).sum()
         sum2_power = (np.abs(grad_sum2) ** 2).sum()
-        print(f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}")
+        print(
+            f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}"
+        )
 
     grad = grad_sum1 + grad_sum2
 
@@ -2354,8 +2417,8 @@ def spectral_entropy_grad(phi, h_time_delay):
     weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
 
     gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
-    grad_power = np.sum(gradient**2)
-    rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
+    np.sum(gradient**2)
+    np.sqrt(np.sum(phi**2) / (Ntime - 1))
     # print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
 
     return entropy, gradient[1:]
@@ -2364,8 +2427,9 @@ def spectral_entropy_grad(phi, h_time_delay):
 def spectral_entropy(h_time_delay):
     ntime = h_time_delay.shape[0]
     phi = np.zeros(ntime - 1)
-    entropy, grad = spectral_entropy_grad(phi,h_time_delay)
+    entropy, grad = spectral_entropy_grad(phi, h_time_delay)
     return entropy
+
 
 def minimize_temporal_phase_noise(x):
     nspec = x.shape[0]
@@ -2442,40 +2506,39 @@ def spectral_distance(alpha, hf_ref, hf):
     The distance and its gradient with respect to the 3 parameters in alpha
     """
 
-    phase = alpha[0]
-    slope = alpha[1]
+    alpha[0]
+    alpha[1]
     # print(f"{phase=} {slope=}")
 
     hfprime, nus = spectral_shift(alpha, hf)
     delta = hf_ref - hfprime
 
-    diff = np.sum(np.abs(delta)**2)
+    diff = np.sum(np.abs(delta) ** 2)
 
     del_phase = 1j * hfprime
     del_slope = 1j * nus * hfprime
 
-    ddiff_dphs = -2 * np.sum ( np.real( np.conj(delta) * del_phase ) )
-    ddiff_dslo = -2 * np.sum ( np.real( np.conj(delta) * del_slope ) )
+    ddiff_dphs = -2 * np.sum(np.real(np.conj(delta) * del_phase))
+    ddiff_dslo = -2 * np.sum(np.real(np.conj(delta) * del_slope))
 
     # print(f"{diff=} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
     return diff, [ddiff_dphs, ddiff_dslo]
 
 
 def minimize_difference(hf_ref, hf):
-
     Nchan = hf_ref.size
     initial_guess = np.zeros(2)
 
     align_power = True
     if align_power:
-        ht = np.abs(ifft(hf))**2
-        ht_ref = np.abs(ifft(hf_ref))**2
+        ht = np.abs(ifft(hf)) ** 2
+        ht_ref = np.abs(ifft(hf_ref)) ** 2
         ccf_power = np.correlate(ht, ht_ref, "same")
         imax = np.argmax(ccf_power)
         ph_max = 0
     else:
-        ccf = fft( np.conj(hf) * hf_ref )
-        ccf_power = np.abs(ccf)**2
+        ccf = fft(np.conj(hf) * hf_ref)
+        ccf_power = np.abs(ccf) ** 2
         imax = np.argmax(ccf_power)
         ph_max = np.angle(ccf[imax])
 
@@ -2495,7 +2558,7 @@ def minimize_difference(hf_ref, hf):
     result = minimize(
         spectral_distance,
         initial_guess,
-        args=(hf_ref,hf),
+        args=(hf_ref, hf),
         method="BFGS",
         jac=True,
         options=options,
@@ -2507,18 +2570,19 @@ def minimize_difference(hf_ref, hf):
     # cross-correlation at lag 0
     ccf0 = np.sum(np.conj(hf) * hf_ref)
     # total spectral power in reference spectrum
-    tsp0 = np.sum(np.abs(hf_ref)**2)
-    tsp = np.sum(np.abs(hf)**2)
+    tsp0 = np.sum(np.abs(hf_ref) ** 2)
+    tsp = np.sum(np.abs(hf) ** 2)
     return ccf0 / np.sqrt(tsp0 * tsp)
+
 
 def align_to_neighbour(h_time_freq):
     nt, nf = h_time_freq.shape
     hf0 = h_time_freq[0]
-    for it in range(1,nt):
+    for it in range(1, nt):
         hf = h_time_freq[it]
-        minimize_difference(hf0,hf)
+        minimize_difference(hf0, hf)
         hf0 = hf
-        h_time_freq[it,:] = hf
+        h_time_freq[it, :] = hf
 
 
 def shifted(input_array, fraction_of_bin, axis=0):

@@ -16,13 +16,15 @@ mpl.rcParams["image.aspect"] = "auto"
 
 def analysis (base, gradient, delta):
 
+    log_floor = 1e-16
+
     re_gradient = np.real(gradient)
     im_gradient = np.imag(gradient)
     print(f"test_deflection: power in gradient={np.real(np.vdot(gradient, gradient))}")
     print(f"test_deflection: power in Re[gradient]={np.vdot(re_gradient,re_gradient)}")
     print(f"test_deflection: power in Im[gradient]={np.vdot(im_gradient,im_gradient)}")
 
-    plotthis = np.log10(np.abs(fftshift(gradient)) + 1e-2)
+    plotthis = np.log10(np.abs(fftshift(gradient)) + log_floor)
     try:
         fig, ax = plt.subplots(figsize=(8, 9))
         img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
@@ -40,7 +42,7 @@ def analysis (base, gradient, delta):
         print(f"test_deflection: power in delta={np.real(np.vdot(delta, delta))}")
         print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
         print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")        
-        plotthis = np.log10(np.abs(fftshift(delta)) + 1e-2)
+        plotthis = np.log10(np.abs(fftshift(delta)) + log_floor)
         try:
             fig, ax = plt.subplots(figsize=(8, 9))
             img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
@@ -56,7 +58,6 @@ def analysis (base, gradient, delta):
         z = np.vdot(gradient, delta)
 
         print(f"test_deflection: gradient phase difference={np.angle(z)}")
-        z /= np.abs(z)
 
 # do arg parsing here
 parser = argparse.ArgumentParser()
@@ -93,8 +94,8 @@ else:
 
 CS = pycyc.CyclicSolver()
 
-# solve sub-integrations in parallel using nthread threads
-CS.nthread = 8
+# solve sub-integrations in a single thread when using 'dump_residual'
+CS.nthread = 1
 
 # compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
@@ -104,6 +105,9 @@ CS.normalize_cyclic_spectra = False
 
 # pad each cyclic spectrum with zeros
 CS.pad_cyclic_spectra = False
+
+# set the maximum harmonic
+# CS.maxharm = 128
 
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")

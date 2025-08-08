@@ -128,7 +128,7 @@ initial_profile_from_first_subintegration = False
 
 if initial_profile_from_first_subintegration:
     CS.loop(isub=0, make_plots=False, ipol=0, tolfact=10, iprint=0)
-    CS.pp_intrinsic = CS.intrinsic_profiles[0,0]
+    CS.pp_intrinsic = CS.intrinsic_profiles[0, 0]
 
 plt.plot(CS.pp_intrinsic)
 plt.savefig("cycfista_init_profile.png")
@@ -171,7 +171,7 @@ prev_merit = best_merit
 prev_time = start_time = time.time()
 min_step_factor = 0.5
 
-for i in range(max_iterations+1):
+for i in range(max_iterations + 1):
     CS.nopt += 1
 
     if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
@@ -229,7 +229,7 @@ for i in range(max_iterations+1):
 
     if alphas.size == 0:
         alpha = 1.0 / L  # this should happen only if the first step is bad
-        printf ("alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
+        printf("alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
     elif alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
