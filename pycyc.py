@@ -142,7 +142,6 @@ class CyclicSolver:
         self.offp = offp
         self.maxchan = maxchan
         self.maxharm = maxharm
-        self.include_Nyquist = 1
         self.save_cyclic_spectra = False
         self.pad_cyclic_spectra = True
         self.filenames = []
@@ -169,9 +168,16 @@ class CyclicSolver:
         # By default, use the integrated pulse profile for all sub-integrations
         self.use_integrated_profile = True
 
+        # Remove the baseline from input data
+        self.remove_baseline = True
+
         # omit the spin harmonic DC bin from the definition of the merit function
         # set to 0 or 1; this flag is used as an integer
-        self.omit_dc = 1
+        self.exclude_DC = 1
+
+        # incldue the Nyquist spin harmonic
+        # set to 0 or 1; this flag is used as an integer
+        self.include_Nyquist = 1
 
         # maintain constant total power in the wavefield
         self.conserve_wavefield_energy = False
@@ -329,7 +335,7 @@ class CyclicSolver:
         if self.pscrunch:
             ar.pscrunch()
 
-        if not self.omit_dc:
+        if not self.remove_baseline:
             ar.remove_baseline()
 
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
@@ -729,7 +735,7 @@ class CyclicSolver:
             if update_gain:
                 self.optimal_gains[isub] = gain
 
-            if self.omit_dc:
+            if self.exclude_DC:
                 ph[0] = 0.0
             if self.maxinitharm:
                 ph[self.maxinitharm :] = 0.0
@@ -889,6 +895,9 @@ class CyclicSolver:
           cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
             cs[:, self.maxharm + 1 :] = 0.0
+        if self.exclude_DC:
+            cs[:,0] = 0.0
+
         return cs, norm
 
     def normalize(self, h_doppler_delay):
@@ -1173,7 +1182,7 @@ class CyclicSolver:
         self.ph_ref = phase2harm(self.pp_intrinsic)
         self.ph_ref = normalize_profile(self.ph_ref)
 
-        if self.omit_dc:
+        if self.exclude_DC:
             self.ph_ref[0] = 0
 
         ph = self.ph_ref[:]
@@ -1280,7 +1289,7 @@ class CyclicSolver:
         update_gain = False
         ph, gain, ph_numer, ph_denom = self.optimize_profile(cs, hf, self.bw, self.ref_freq, update_gain)
 
-        if self.omit_dc:
+        if self.exclude_DC:
             ph[0] = 0.0
 
         pp = self.harm2phase(ph)
@@ -1469,10 +1478,10 @@ class CyclicSolver:
         sopt, gain, ph_numer, ph_denom = self.optimize_profile(plot_cs, hf, self.bw, self.ref_freq)
         sopt = normalize_profile(sopt)
 
-        if self.omit_dc:
+        if self.exclude_DC:
             sopt[0] = 0.0
         smeas = normalize_profile(plot_cs.mean(0))
-        if self.omit_dc:
+        if self.exclude_DC:
             smeas[0] = 0.0
         #        cs_model0,hfplus,hfminus,phases = make_model_cs(hf,sopt,self.bw,self.ref_freq)
 
@@ -2195,7 +2204,13 @@ def rms_cs(cs, ih, bw, ref_freq):
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
 
-
+def total_cyclic_power(cs):
+    """
+    returns the sum of the power in all radio frequencies and cycle frequencies,
+    excluding the DC cycle frequency (mean of periodic spectrum)
+    """
+    return np.sum(np.abs(cs[:, 1:])**2)
+          
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
@@ -2337,35 +2352,36 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     if CS.maxharm is not None:
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
-    extract = cs_model[:, CS.omit_dc :]
+    extract = cs_model[:, CS.exclude_DC :]
     nonzero = np.count_nonzero(extract)
 
     # WDvS13 Equation 19 and eqn:merit_function of appendix
-    merit = (np.abs(extract - cs_data[:, CS.omit_dc :]) ** 2).sum()
+    merit = (np.abs(extract - cs_data[:, CS.exclude_DC :]) ** 2).sum()
 
     # residual, R = model - data
-    diff = cs_model - cs_data
+    residual = cs_model - cs_data
 
     if CS.dump_residual:
-        print(
-            f"complex_cyclic_merit_lag power in diff={np.sum(np.abs(diff)**2)} model={np.sum(np.abs(cs_model)**2)} data={np.sum(np.abs(cs_data)**2)}"
-        )
+        P_residual = total_cyclic_power(residual)
+        P_model = total_cyclic_power(cs_model)
+        P_data = total_cyclic_power(cs_data)
+        print(f"complex_cyclic_merit_lag power in residual={P_residual} model={P_model} data={P_data}")
         filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
         with open(filename, "wb") as fh:
-            pickle.dump(diff, fh)
+            pickle.dump(residual, fh)
 
     phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
     cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
 
-    cc1 = cs2cc(diff * hfminus)
+    cc1 = cs2cc(residual * hfminus)
     grad2 = cc1 * phasors * np.conj(cs0)  # WDvS Equation 37
-    grad_sum1 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum1 = grad2[:, CS.exclude_DC :].sum(1)  # sum over all harmonics
 
-    cc1 = cs2cc(np.conj(diff) * hfplus)
+    cc1 = cs2cc(np.conj(residual) * hfplus)
     grad2 = cc1 * np.conj(phasors) * cs0
-    grad_sum2 = grad2[:, CS.omit_dc :].sum(1)  # sum over all harmonics
+    grad_sum2 = grad2[:, CS.exclude_DC :].sum(1)  # sum over all harmonics
 
     test_conjugacy = False
     if test_conjugacy:
@@ -2534,7 +2550,7 @@ def minimize_difference(hf_ref, hf):
         ht = np.abs(ifft(hf)) ** 2
         ht_ref = np.abs(ifft(hf_ref)) ** 2
         ccf_power = np.correlate(ht, ht_ref, "same")
-        imax = np.argmax(ccf_power)
+        imax = np.argmax(ccf_power) + Nchan // 2
         ph_max = 0
     else:
         ccf = fft(np.conj(hf) * hf_ref)
