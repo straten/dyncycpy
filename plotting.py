@@ -92,15 +92,15 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
         fig.savefig(savefig)
 
 
-def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename):
+def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename=None):
 
-    ntime, ntap = h_doppler_delay.shape
+    ntime, ndelay = h_doppler_delay.shape
 
     if dT == 0 or bw == 0:
         extent = None
     else:
         delta_delay_mus = np.abs(1.0 / bw)
-        max_delay_ms = delta_delay_mus * ntap * 0.5e-3
+        max_delay_ms = delta_delay_mus * ndelay * 0.5e-3
         max_Doppler_Hz = .5 / dT
         
         extent=[-max_Doppler_Hz, max_Doppler_Hz, -max_delay_ms, max_delay_ms]
@@ -113,5 +113,33 @@ def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename):
     ax.set_ylabel("Delay [ms]")
     img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=plotmed, extent=extent, interpolation='none')
     fig.colorbar(img)
-    fig.savefig(filename)
-    plt.close()
+
+    if filename is not None:
+        fig.savefig(filename)
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_power_vs_delay (h_doppler_delay, bw, filename=None):
+
+    ntime, ndelay = h_doppler_delay.shape
+
+    if bw == 0:
+        x = np.linspace(0, ndelay, ndelay)
+    else:
+        delta_delay_mus = np.abs(1.0 / bw)
+        max_delay_ms = delta_delay_mus * ndelay * 0.5e-3        
+        x = np.linspace(-max_delay_ms, max_delay_ms, ndelay)
+
+    toplot = np.log10(np.sum(np.abs(h_doppler_delay) ** 2, axis=0) + 1e-16)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlabel("Delay [ms]")
+    ax.set_ylabel("$\log_{10}$(Power)")
+    ax.plot(x, fftshift(toplot))
+    if filename is not None:
+        fig.savefig(filename)
+        plt.close()
+    else:
+        plt.show()

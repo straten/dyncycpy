@@ -13,7 +13,7 @@ from scipy.fft import fftshift
 
 import fista
 import pycyc
-from plotting import plot_intrinsic_vs_observed
+from plotting import plot_intrinsic_vs_observed, plot_power_vs_delay, plot_Doppler_vs_delay
 
 mpl.rcParams["image.aspect"] = "auto"
 
@@ -251,13 +251,8 @@ for i in range(max_iterations + 1):
 
     if plot_all or i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
-        plotthis = np.log10(np.abs(fftshift(x_n)) + 1e-2)
         try:
-            fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=-1)
-            fig.colorbar(img)
-            fig.savefig(base + "_wavefield.png")
-            plt.close()
+            plot_Doppler_vs_delay(x_n, CS.mean_time_offset, CS.bw, base + "_wavefield.png")
         except Exception:
             print("##################################### wavefield plot failed")
         with open(base + "_wavefield.pkl", "wb") as fh:
@@ -275,10 +270,7 @@ for i in range(max_iterations + 1):
                 pickle.dump(CS.optimal_gains, fh)
 
         try:
-            fig, ax = plt.subplots(figsize=(12, 8))
-            ax.plot(np.log10(np.sum(np.abs(x_n) ** 2 + 1e-16, axis=0)))
-            fig.savefig(base + "_impulse_response.png")
-            plt.close()
+            plot_power_vs_delay(x_n, CS.bw, base + "_impulse_response.png")
         except Exception:
             print("##################################### impulse response plot failed")
 
