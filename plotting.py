@@ -12,7 +12,6 @@ mpl.rcParams["xtick.minor.size"] = 4
 mpl.rcParams["ytick.minor.size"] = 4
 mpl.rcParams["figure.figsize"] = [8.0, 6.0]
 
-
 def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     fig, axs = plt.subplots(nrows=2, ncols=1, figsize=(8, 12))
 
@@ -96,21 +95,29 @@ def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename=None):
 
     ntime, ndelay = h_doppler_delay.shape
 
-    if dT == 0 or bw == 0:
-        extent = None
+    if dT == 0:
+        max_Doppler_Hz = ntime/2
+        xlabel="Temporal Cycles"
+    else:
+        max_Doppler_Hz = .5 / dT
+        xlabel="Cycle Frequency [Hz]"
+
+    if bw == 0:
+        max_delay_ms = ndelay/2
+        ylabel="Spectral Cycles"
     else:
         delta_delay_mus = np.abs(1.0 / bw)
         max_delay_ms = delta_delay_mus * ndelay * 0.5e-3
-        max_Doppler_Hz = .5 / dT
-        
-        extent=[-max_Doppler_Hz, max_Doppler_Hz, -max_delay_ms, max_delay_ms]
+        ylabel="Delay [ms]"
+
+    extent=[-max_Doppler_Hz, max_Doppler_Hz, -max_delay_ms, max_delay_ms]
     
-    plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-2)
+    plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-6)
     plotmed = np.median(plotthis)
     fig, ax = plt.subplots(figsize=(8, 9))
 
-    ax.set_xlabel("Cycle Frequency [Hz]")
-    ax.set_ylabel("Delay [ms]")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=plotmed, extent=extent, interpolation='none')
     fig.colorbar(img)
 
