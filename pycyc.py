@@ -312,11 +312,11 @@ class CyclicSolver:
 
         if self.zap_edges is not None and self.zap_edges > 0:
             # nsubint, nchan = data.shape
-            # print(f"load_initial_guess before zapping {self.zap_edges}: {nsubint=} {nchan=}")   
+            # print(f"load_initial_guess before zapping {self.zap_edges}: {nsubint=} {nchan=}")
             zap_count = int(self.zap_edges * nchan)
             data = data[:, zap_count:-zap_count]
             # nsubint, nchan = data.shape
-            # print(f"load_initial_guess after zapping: {nsubint=} {nchan=}")            
+            # print(f"load_initial_guess after zapping: {nsubint=} {nchan=}")
             bw = bw * float(zap_count) / float(nchan)
 
             h_time_delay = freq2time(data, axis=1)
@@ -819,8 +819,7 @@ class CyclicSolver:
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
                 future_subint = {
-                    executor.submit(self.updateProfileSubint, isub): isub
-                    for isub in range(self.nspec)
+                    executor.submit(self.updateProfileSubint, isub): isub for isub in range(self.nspec)
                 }
 
                 for future in concurrent.futures.as_completed(future_subint):
@@ -891,7 +890,7 @@ class CyclicSolver:
         cs = ps2cs(tmp)
 
         if not self.include_Nyquist:
-            cs = cs[:,:self.nharm]
+            cs = cs[:, : self.nharm]
 
         # print (f"get_cs power in cs={np.sum(np.abs(cs)**2)}")
 
@@ -902,11 +901,11 @@ class CyclicSolver:
         else:
             norm = 1
         if self.pad_cyclic_spectra:
-          cs = cyclic_padding(cs, self.bw, self.ref_freq)
+            cs = cyclic_padding(cs, self.bw, self.ref_freq)
         if self.maxharm is not None:
             cs[:, self.maxharm + 1 :] = 0.0
         if self.exclude_DC:
-            cs[:,0] = 0.0
+            cs[:, 0] = 0.0
 
         return cs, norm
 
@@ -1099,13 +1098,20 @@ class CyclicSolver:
 
         if update_gain and self.intrinsic_ph_sum is not None:
             # Equation A11 numerator
-            tmp = fscrunch_cs(np.conj(cshmhp) * self.intrinsic_ph_sum, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra)
+            tmp = fscrunch_cs(
+                np.conj(cshmhp) * self.intrinsic_ph_sum,
+                bw=bw,
+                ref_freq=ref_freq,
+                padding=self.pad_cyclic_spectra,
+            )
             gain_numer = tmp[1:].sum()  # sum over all harmonics
             # Equation A11 denominator
-            tmp = fscrunch_cs(maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra)
+            tmp = fscrunch_cs(
+                maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra
+            )
             gain_denom = tmp[1:].sum()  # sum over all harmonics
             gain = np.real(gain_numer) / np.real(gain_denom)
-            print(f'optimize_profile gain={gain}')
+            print(f"optimize_profile gain={gain}")
         else:
             gain = 1
 
@@ -1383,8 +1389,8 @@ class CyclicSolver:
             tmp = ph
         else:
             nharm = ph.shape[0]
-            tmp = np.zeros(nharm+1,dtype=np.complex128)
-            tmp[:nharm]=ph[:]
+            tmp = np.zeros(nharm + 1, dtype=np.complex128)
+            tmp[:nharm] = ph[:]
         return irfft(tmp, workers=workers, norm="ortho")
 
     def plotCurrentSolution(self, plot_cs):
@@ -1634,11 +1640,12 @@ class CyclicSolver:
         canvas.print_figure(fname)
 
 
-def safely_divide(numer,denom):
+def safely_divide(numer, denom):
     safe_denom = np.where(denom == 0, 1, denom)
     result = numer / safe_denom
     result[denom == 0] = 0
     return result
+
 
 def plotSimulation(CS, mlag=100):
     if CS.ht0 is None:
@@ -1983,9 +1990,11 @@ def loadProfile(fname):
     x = np.loadtxt(fname)
     return x[:, 1]
 
+
 #
 # norm="ortho" is used in the following definitions in order to preserve power
 #
+
 
 def ps2cs(ps, workers=2):
     """
@@ -2004,6 +2013,7 @@ def cc2cs(cs, workers=2, axis=0):
     """
     return fft(cs, axis=axis, workers=workers, norm="ortho")
 
+
 def cs2cc(cc, workers=2, axis=0):
     """
     complex-valued periodic correlation to cyclic correlation
@@ -2011,12 +2021,14 @@ def cs2cc(cc, workers=2, axis=0):
     """
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
+
 def cc2pc(cc, workers=2, axis=1):
     """
     complex-valued periodic correlation to cyclic correlation
     complex-to-complex backward/inverse FFT transforms cycle frequency to pulse phase
     """
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
+
 
 def pc2cc(pc, workers=2, axis=1):
     """
@@ -2214,13 +2226,15 @@ def rms_cs(cs, ih, bw, ref_freq):
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
 
+
 def total_cyclic_power(cs):
     """
     returns the sum of the power in all radio frequencies and cycle frequencies,
     excluding the DC cycle frequency (mean of periodic spectrum)
     """
-    return np.sum(np.abs(cs[:, 1:])**2)
-          
+    return np.sum(np.abs(cs[:, 1:]) ** 2)
+
+
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
     nchan = cs.shape[0]
@@ -2382,7 +2396,7 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         filename = f"complex_cyclic_merit_lag_data_{CS.rindex:03d}.pkl"
         with open(filename, "wb") as fh:
             pickle.dump(cs_data, fh)
-    
+
     phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
@@ -2620,7 +2634,7 @@ def minimize_difference(hf_ref, hf):
         best_imax = best_imax - Nchan_use
         alpha[1] = best_imax * 2.0 * np.pi
         print(f"{best_imax=}")
-    
+
     hf[:], nus = spectral_shift(alpha, hf)
 
     # cross-correlation at lag 0

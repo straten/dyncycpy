@@ -9,11 +9,10 @@ import time
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.fft import fftshift
 
 import fista
 import pycyc
-from plotting import plot_intrinsic_vs_observed, plot_power_vs_delay, plot_Doppler_vs_delay
+from plotting import plot_Doppler_vs_delay, plot_intrinsic_vs_observed, plot_power_vs_delay
 
 mpl.rcParams["image.aspect"] = "auto"
 
