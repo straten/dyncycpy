@@ -10,6 +10,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.fft import fftshift
+from plotting import plot_Doppler_vs_delay
 
 
 mpl.rcParams["image.aspect"] = "auto"
@@ -24,15 +25,8 @@ def analysis (base, gradient, delta):
     print(f"test_deflection: power in Re[gradient]={np.vdot(re_gradient,re_gradient)}")
     print(f"test_deflection: power in Im[gradient]={np.vdot(im_gradient,im_gradient)}")
 
-    plotthis = np.log10(np.abs(fftshift(gradient)) + log_floor)
-    try:
-        fig, ax = plt.subplots(figsize=(8, 9))
-        img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-        fig.colorbar(img)
-        fig.savefig(base + "_gradient.png")
-        plt.close()
-    except Exception:
-        print("##################################### gradient plot failed")
+    plot_Doppler_vs_delay(gradient, 0, 0, base + "_gradient.png")
+
     with open(base + "_gradient.pkl", "wb") as fh:
         pickle.dump(gradient, fh)
 
@@ -41,16 +35,10 @@ def analysis (base, gradient, delta):
         im_delta = np.imag(delta)
         print(f"test_deflection: power in delta={np.real(np.vdot(delta, delta))}")
         print(f"test_deflection: power in Re[delta]={np.vdot(re_delta,re_delta)}")
-        print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")        
-        plotthis = np.log10(np.abs(fftshift(delta)) + log_floor)
-        try:
-            fig, ax = plt.subplots(figsize=(8, 9))
-            img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r")
-            fig.colorbar(img)
-            fig.savefig(base + "_deflection.png")
-            plt.close()
-        except Exception:
-            print("##################################### deflection plot failed")
+        print(f"test_deflection: power in Im[delta]={np.vdot(im_delta,im_delta)}")
+
+        plot_Doppler_vs_delay(delta, 0, 0, base + "_deflection.png")
+
         with open(base + "_deflection.pkl", "wb") as fh:
             pickle.dump(delta, fh)
 
@@ -105,6 +93,9 @@ CS.normalize_cyclic_spectra = False
 
 # pad each cyclic spectrum with zeros
 CS.pad_cyclic_spectra = False
+
+# Remove the baseline from input data
+CS.remove_baseline = True
 
 # set the maximum harmonic
 # CS.maxharm = 128
