@@ -7,11 +7,14 @@ import scipy.stats
 
 import numpy as np
 import psrchive
+from plotting import plot_Doppler_vs_delay
+from pycyc import freq2time, time2freq
 
 def plot_response(dynamic_response,bw,cf):
 
-    delay_Doppler = ifft2(dynamic_response)
-    # delay_Doppler = ifft(dynamic_response, axis=1)
+    h_time_delay = freq2time(dynamic_response, axis=1)
+    h_doppler_delay = time2freq(h_time_delay, axis=0)
+    plot_Doppler_vs_delay(h_doppler_delay, 0, 0, "wavefield.png")
 
     ntime=dynamic_response.shape[0]
     nchan=dynamic_response.shape[1]
@@ -65,35 +68,26 @@ def plot_response(dynamic_response,bw,cf):
     plt.savefig(filename)
     plt.close()
 
-    fig, axs = plt.subplots(1,1)
-
-    toplot=np.log10(np.abs(delay_Doppler))
-    max_plot=np.max(toplot,axis=None)
-    min_plot=max_plot - 5
-    axs.imshow(toplot, vmin=min_plot, vmax=max_plot, aspect="auto", origin="lower", cmap="binary", interpolation='none', extent=[min_delay_mus, max_delay_mus, 0, max_omega])
-    axs.set(xlabel="Delay ($\mu$s)", ylabel="Diff. Doppler (Hz)")
-
-    filename = "wavefield.png"
-
-    plt.savefig(filename)
-    plt.close()
-
 def plot_spectra(filename) -> None:
     ar = psrchive.Archive_load(filename)
 
-    bw = ar.get_bandwidth()
+    bw = abs(ar.get_bandwidth())
     cf = ar.get_centre_frequency()
 
     ext = ar.get_dynamic_response()
-    data=ext.get_data()
+    data = ext.get_data()
     nchan = ext.get_nchan()
     ntime = ext.get_ntime()
     data = np.reshape(data, (ntime, nchan))
 
+    start_time = ext.get_minimum_epoch()
+    end_time = ext.get_maximum_epoch()
+    dT = (end_time - start_time).in_seconds() / ntime
+
     plot_response(data,bw,cf)
 
 def main() -> None:
-    """Plot the cyclic spectrum in four different ways."""
+    """Plot the dynamic frequency response."""
     import argparse
 
     # do arg parsing here
