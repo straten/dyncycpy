@@ -113,7 +113,7 @@ def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename=None):
     extent=[-max_Doppler_Hz, max_Doppler_Hz, -max_delay_ms, max_delay_ms]
     
     plotthis = np.log10(np.abs(fftshift(h_doppler_delay)) + 1e-6)
-    plotmed = np.median(plotthis)
+    plotmed = np.median(plotthis[:,ndelay//2:])
     fig, ax = plt.subplots(figsize=(8, 9))
 
     ax.set_xlabel(xlabel)
