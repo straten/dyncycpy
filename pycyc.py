@@ -301,10 +301,9 @@ class CyclicSolver:
         end_time = ext.get_maximum_epoch()
         dT = (end_time - start_time).in_seconds() / ntime
 
-        print(
-            f"{ntime=} start_time={start_time.printdays(13)} end_time={end_time.printdays(13)} delta-T={dT}"
-        )
-
+        print("load_initial_guess loaded:")
+        print(f"\t start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
+        print(f"\t {ntime=} delta-T={dT} -- {nchan=} {bw=}")
         data = np.reshape(data, (ntime, nchan))
 
         h_time_delay = freq2time(data, axis=1)
@@ -312,8 +311,12 @@ class CyclicSolver:
         plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield.png")
 
         if self.zap_edges is not None and self.zap_edges > 0:
+            # nsubint, nchan = data.shape
+            # print(f"load_initial_guess before zapping {self.zap_edges}: {nsubint=} {nchan=}")   
             zap_count = int(self.zap_edges * nchan)
             data = data[:, zap_count:-zap_count]
+            # nsubint, nchan = data.shape
+            # print(f"load_initial_guess after zapping: {nsubint=} {nchan=}")            
             bw = bw * float(zap_count) / float(nchan)
 
             h_time_delay = freq2time(data, axis=1)
@@ -341,8 +344,14 @@ class CyclicSolver:
         data = ar.get_data()  # we load all data here, so this should probably change in the long run
         if self.zap_edges is not None and self.zap_edges > 0:
             zap_count = int(self.zap_edges * data.shape[2])
+            # print(f"{zap_count=}")
+            # nsubint, npol, nchan, nbin = data.shape
+            # print(f"before zapping {self.zap_edges}: {nsubint=} {npol=} {nchan=} {nbin=}")
             data = data[:, :, zap_count:-zap_count, :]
             bwfact = 1.0 - self.zap_edges * 2
+            # nsubint, npol, nchan, nbin = data.shape
+            # print(f"after zapping {self.zap_edges}: {nsubint=} {npol=} {nchan=} {nbin=}")
+
         elif self.maxchan:
             # bwfact used to indicate the actual bandwidth of the data if we're not using all channels.
             bwfact = self.maxchan / (1.0 * data.shape[2])
@@ -540,6 +549,7 @@ class CyclicSolver:
                         print(f"unexpected initial response[{ichan}]={hf[ichan]}")
 
         else:
+            self.expected_power = np.sum(np.abs(self.initial_h_time_freq) ** 2)
             current_shape = (self.nspec, self.nchan)
             if self.initial_h_time_freq.shape != current_shape:
                 print(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
@@ -2369,7 +2379,10 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
         with open(filename, "wb") as fh:
             pickle.dump(residual, fh)
-
+        filename = f"complex_cyclic_merit_lag_data_{CS.rindex:03d}.pkl"
+        with open(filename, "wb") as fh:
+            pickle.dump(cs_data, fh)
+    
     phasors = CS.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
@@ -2545,27 +2558,47 @@ def minimize_difference(hf_ref, hf):
     Nchan = hf_ref.size
     initial_guess = np.zeros(2)
 
-    align_power = True
+    # This value was found with a bit of trial and error, and should be a parameter
+    # This limits the duration of the pulse used to estimate delay/shift
+    # Including too many samples reduces the S/N of the delay detection
+    Nchan_use = 512
+    if Nchan > Nchan_use:
+        ht_ref = freq2time(hf_ref)
+        ht = freq2time(hf)
+        use_hf_ref = time2freq(ht_ref[:Nchan_use])
+        use_hf = time2freq(ht[:Nchan_use])
+    else:
+        Nchan_use = Nchan
+        use_hf_ref = hf_ref
+        use_hf = hf
+
+    align_power = False
     if align_power:
-        ht = np.abs(ifft(hf)) ** 2
-        ht_ref = np.abs(ifft(hf_ref)) ** 2
+        ht = np.abs(ifft(use_hf)) ** 2
+        ht_ref = np.abs(ifft(use_hf_ref)) ** 2
         ccf_power = np.correlate(ht, ht_ref, "same")
         imax = np.argmax(ccf_power) + Nchan // 2
         ph_max = 0
     else:
-        ccf = fft(np.conj(hf) * hf_ref)
+        ccf = fft(np.conj(use_hf) * use_hf_ref)
         ccf_power = np.abs(ccf) ** 2
         imax = np.argmax(ccf_power)
         ph_max = np.angle(ccf[imax])
 
-    # print(f"{imax=} {ph_max=} {Nchan=}")
+    print(f"{imax=} {ph_max=} {Nchan=}")
+
+    limit = 0
+    if limit > 0 and imax > limit and imax < Nchan_use - limit:
+        print(f"{imax=} beyond {limit=}")
+        imax = 0
+        ph_max = 0
 
     initial_guess[0] = ph_max
 
-    if imax < Nchan // 2:
+    if imax < Nchan_use // 2:
         slope = imax
     else:
-        slope = imax - Nchan
+        slope = imax - Nchan_use
 
     initial_guess[1] = slope * 2.0 * np.pi
 
@@ -2574,13 +2607,20 @@ def minimize_difference(hf_ref, hf):
     result = minimize(
         spectral_distance,
         initial_guess,
-        args=(hf_ref, hf),
+        args=(use_hf_ref, use_hf),
         method="BFGS",
         jac=True,
         options=options,
     )
 
     alpha = result.x
+
+    best_imax = alpha[1] / (2.0 * np.pi)
+    if best_imax > Nchan_use / 2:
+        best_imax = best_imax - Nchan_use
+        alpha[1] = best_imax * 2.0 * np.pi
+        print(f"{best_imax=}")
+    
     hf[:], nus = spectral_shift(alpha, hf)
 
     # cross-correlation at lag 0
@@ -2588,7 +2628,8 @@ def minimize_difference(hf_ref, hf):
     # total spectral power in reference spectrum
     tsp0 = np.sum(np.abs(hf_ref) ** 2)
     tsp = np.sum(np.abs(hf) ** 2)
-    return ccf0 / np.sqrt(tsp0 * tsp)
+    R = ccf0 / np.sqrt(tsp0 * tsp)
+    return R
 
 
 def align_to_neighbour(h_time_freq):
@@ -2596,8 +2637,13 @@ def align_to_neighbour(h_time_freq):
     hf0 = h_time_freq[0]
     for it in range(1, nt):
         hf = h_time_freq[it]
-        minimize_difference(hf0, hf)
-        hf0 = hf
+        R = minimize_difference(hf0, hf)
+        # try to skip intervals with bad fit / low S/N
+        if np.abs(R) > 0.05:
+            hf0 = hf
+        else:
+            print(f"align_to_neighbour i={it} {R=}")
+
         h_time_freq[it, :] = hf
 
 
