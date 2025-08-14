@@ -14,7 +14,7 @@ def plot_response(dynamic_response,bw,cf):
 
     h_time_delay = freq2time(dynamic_response, axis=1)
     h_doppler_delay = time2freq(h_time_delay, axis=0)
-    plot_Doppler_vs_delay(h_doppler_delay, 0, 0, "wavefield.png")
+    plot_Doppler_vs_delay(h_doppler_delay, 0, bw, "wavefield.png")
 
     ntime=dynamic_response.shape[0]
     nchan=dynamic_response.shape[1]
