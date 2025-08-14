@@ -9,6 +9,7 @@
 #include "Pulsar/DynamicResponse.h"
 #include "Pulsar/ProfileColumn.h"
 #include "Pulsar/Integration.h"
+#include "Pulsar/Predictor.h"
 
 #include "BoxMuller.h"
 #include "random.h"
@@ -60,11 +61,20 @@ protected:
   //! Maximum Doppler shift of arc, as a fraction of the maximum Doppler shift sampled
   double arc_max_Doppler = 0.9;
 
+  //! Output simulated dynamic periodic spectra
+  bool output_periodic_spectra = false;
+
   //! Max profile harmonic, as a fraction of the number of phase bins
   double max_profile_harmonic = 0.0;
 
-  //! Output simulated dynamic periodic spectra
-  bool output_periodic_spectra = false;
+  //! Asymmetry amplitude
+  double asymmetry = 0.0;
+
+  //! Phase bins per delay bin
+  double phase_bin_per_delay = 0.0;
+
+  //! Intrinsic profile is a delta function
+  bool delta_profile = false;
 
   //! Add noise to the dynamic response, as a fraction of the rms in the response
   double dyn_resp_noise_fraction = 0.0;
@@ -104,7 +114,10 @@ protected:
 
   //! Perform an in-place 2D FFT of the input wavefield, converting it to a dynamic frequency response
   void transform_wavefield (Pulsar::DynamicResponse*);
-    
+
+  //! Randomize the phase of each frequency response
+  void randomize_phase (Pulsar::DynamicResponse*);
+
   //! Verify that the extension written to filename is equivalent to the first argument
   void verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename);
 
@@ -168,6 +181,15 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg = menu.add (max_profile_harmonic, 'm', "fraction");
   arg->set_help ("Maximum spin harmonic, as a fraction of number of phase bins");
 
+  arg = menu.add (asymmetry, 'a', "amplitude");
+  arg->set_help ("Amplitude of asymmetry, in radians");
+
+  arg = menu.add (phase_bin_per_delay, 'R', "ratio");
+  arg->set_help ("Phase bins per delay bin");  
+
+  arg = menu.add (delta_profile, "delta");
+  arg->set_help ("Intrinsic profile is a delta function"); 
+
   arg = menu.add (instrumental_noise_fraction, 'N', "rms");
   arg->set_help ("Standard deviation of additional noise, relative to peak harmonic power");
 
@@ -186,8 +208,33 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   if (!name.empty())
     archive->set_source (name);
 
+  archive->pscrunch();
+  archive->tscrunch();
+
   unsigned nchan = archive->get_nchan();
   unsigned npol = archive->get_npol();
+  unsigned nbin = archive->get_nbin();
+
+  if (phase_bin_per_delay)
+  {
+    nbin = nchan/2;
+    archive->resize (1, 1, nchan, nbin);
+    cerr << "dyn_res_sim::process nchan=" << nchan << " nbin=" << nbin << endl;
+
+    // each phase bin is 1 fake millisecond
+    double phase_bin_time_interval = 1e-3;
+    double period = nbin * phase_bin_time_interval;
+
+    // get rid of the phase predictor
+    delete archive->get_model();
+    auto subint = archive->get_Integration(0);
+    subint->set_folding_period(period);
+
+    double time_interval = phase_bin_time_interval * phase_bin_per_delay;
+    double bw = 1.0 / time_interval;
+    cerr << "dyn_res_sim::process simulated bandwidth=" << bw << " Hz" << endl;
+    archive->set_bandwidth(bw*1e-6); // stored in MHz
+  }
 
   double cfreq = archive->get_centre_frequency();
   double bw = archive->get_bandwidth();
@@ -207,7 +254,7 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   else
     generate_scintillation_arc (ext, bw);
 
-  if (max_profile_harmonic)
+  if (max_profile_harmonic || delta_profile)
     generate_intrinsic_profile (archive);
 
   Reference::To<Pulsar::Archive> clone = archive->clone();
@@ -244,7 +291,10 @@ void copy (float* amps, vector<complex<double>>& profile)
     amps[ibin] = re;
   }
 
-  assert (imag_power < real_power * 1e-20);
+  if (real_power > 0 && imag_power >= real_power * 1e-20)
+  {
+    throw Error (InvalidState, "copy", "power real=%f imag=%f", real_power, imag_power);
+  }
 }
 
 void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
@@ -254,6 +304,23 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
 
   unsigned nbin = archive->get_nbin();
   unsigned nchan = archive->get_nchan();
+
+  if (delta_profile)
+  {
+    cerr << "dyn_res_sim::generate_intrinsic_profile delta function nchan=" << nchan << endl;
+    Pulsar::Integration* subint = archive->get_Integration(0);
+    subint->zero();
+
+    unsigned ipol = 0;
+    for (unsigned ichan = 0; ichan < nchan; ichan++)
+    {
+      subint->set_weight(ichan, 1.0);
+      auto profile = subint->get_Profile(ipol,ichan);
+      auto f_amps = profile->get_amps();
+      f_amps[0] = 1.0;
+    }
+    return;
+  }
 
   vector<std::complex<double>> profile (nbin, 0.0);
 
@@ -273,7 +340,17 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
   for (unsigned ibin=1; ibin < nbin/2; ibin++)
   {
     double log10_amp = log10_max + log10_curvature * ibin * ibin;
-    profile[nbin-ibin] = profile[ibin] = pow(10.0, log10_amp);
+    double amp = pow(10.0, log10_amp);
+
+    profile[ibin] = amp;
+
+    if (asymmetry)
+    {
+      double im_amp = 1.0 / (1.0 + exp(-0.5*ibin/double(ibin_max)));
+      profile[ibin] = std::complex<double>(amp, -asymmetry*im_amp);
+    }
+
+    profile[nbin-ibin] = std::conj(profile[ibin]);
   }
 
   if (!include_Nyquist)
@@ -422,56 +499,65 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
 
   if (degenerate_phase)
   {
-    vector<complex<double>> phasors (ntime);
-    vector<complex<double>> sums (ntime);
+    randomize_phase(ext);
+  }
+}
 
-    for (unsigned itime=0; itime < ntime; itime++)
+void dyn_res_sim::randomize_phase (Pulsar::DynamicResponse* ext)
+{
+  unsigned nchan = ext->get_nchan();
+  unsigned ntime = ext->get_ntime();
+  auto data = ext->get_data().data();
+
+  vector<complex<double>> phasors (ntime);
+  vector<complex<double>> sums (ntime);
+
+  for (unsigned itime=0; itime < ntime; itime++)
+  {
+    auto phasor = random_phasor();
+    phasors[itime] = phasor;
+
+    complex<double> sum = 0.0;
+
+    for (unsigned ichan=0; ichan < nchan; ichan++)
     {
-      auto phasor = random_phasor();
-      phasors[itime] = phasor;
-
-      complex<double> sum = 0.0;
-
-      for (unsigned ichan=0; ichan < nchan; ichan++)
-      {
-        unsigned idx = itime*nchan + ichan;
-        data[idx] *= phasor;
-        sum += data[idx];
-      }
+      unsigned idx = itime*nchan + ichan;
+      data[idx] *= phasor;
+      sum += data[idx];
+    }
 
 #if MINIMIZE_DC_PHASE
 
-      sums[itime] = sum;
-      phasor = conj(sum) / abs(sum);
+    sums[itime] = sum;
+    phasor = conj(sum) / abs(sum);
 
-      for (unsigned ichan=0; ichan < nchan; ichan++)
-      {
-        unsigned idx = itime*nchan + ichan;
-        data[idx] *= phasor;
-      }
+    for (unsigned ichan=0; ichan < nchan; ichan++)
+    {
+      unsigned idx = itime*nchan + ichan;
+      data[idx] *= phasor;
+    }
 
 #else
 
-      if (itime > 0)
+    if (itime > 0)
+    {
+      auto s0 = data + (itime-1)*nchan;
+      auto s1 = data + itime*nchan;
+
+      sum = 0.0;
+      for (unsigned ichan=0; ichan < nchan; ichan++)
       {
-        auto s0 = data + (itime-1)*nchan;
-        auto s1 = data + itime*nchan;
-
-        sum = 0.0;
-        for (unsigned ichan=0; ichan < nchan; ichan++)
-        {
-          sum += s0[ichan] * conj(s1[ichan]);
-        }
-
-        phasor = sum / abs(sum);
-        for (unsigned ichan=0; ichan < nchan; ichan++)
-        {
-          s1[ichan] *= phasor;
-        }
+        sum += s0[ichan] * conj(s1[ichan]);
       }
 
-#endif
+      phasor = sum / abs(sum);
+      for (unsigned ichan=0; ichan < nchan; ichan++)
+      {
+        s1[ichan] *= phasor;
+      }
     }
+
+#endif
   }
 }
 
@@ -629,7 +715,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
 }
 
 //! Generate a periodic spectrum for each time sample of the response
-void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext, const Pulsar::Archive* archive)
+void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext, const Pulsar::Archive* archive) try
 {
   auto data = ext->get_data().data();
   unsigned nchan = ext->get_nchan();
@@ -818,7 +904,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     auto subint = output->get_Integration(0);
     unsigned ipol = 0;
 
-    for (unsigned ichan=0; ichan < nchan; ichan++)
+    for (unsigned ichan=0; ichan < nchan; ichan++) try
     {
       memcpy(temp.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
       fftw_execute(bin_plan);
@@ -827,6 +913,10 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
       copy(f_amps, profile);
       subint->get_Profile(ipol,ichan)->scale(scalefac);
+    }
+    catch (Error& error)
+    {
+      throw error += "dyn_res_sim::generate_periodic_spectra ichan=" + tostring(ichan);
     }
 
     string filename = "periodic_spectrum_" + stringprintf("%05d",itime) + ".ar";
@@ -838,7 +928,10 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   fftw_destroy_plan(fwd_plan);
   fftw_destroy_plan(bin_plan);
 }
-
+catch (Error& error)
+{
+  throw error += "dyn_res_sim::generate_periodic_spectra";
+}
 /*!
 
   The standard C/C++ main function simply calls Application::main
