@@ -22,15 +22,15 @@ def plot_intrinsic_vs_observed(CS, pp_ref=None,savefig=None):
     nbin = pp_ref.size
 
     offset = 100 * nbin//1024
-    off_start = 0
-    off_end = 200 * nbin//1024
 
-    base_ref = np.mean(pp_ref[off_start:off_end])
+    # estimate the baseline, assuming that on-pulse phase bins are in the minority
+    # such that they are effectively outliers that do not significantly impact the median
+    base_ref = np.median(pp_ref)
     ref = pp_ref - base_ref
     ref /= np.max(ref) / target_max
     roll = -np.argmax(ref) + offset
     ref = np.roll(ref, roll)
-    base_int = np.mean(CS.pp_intrinsic[off_start:off_end])
+    base_int = np.median(CS.pp_intrinsic)
     _int = CS.pp_intrinsic - base_int
     _int /= np.max(_int) / target_max
     _int = np.roll(_int, roll)
@@ -103,6 +103,7 @@ def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename=None):
         xlabel="Cycle Frequency [Hz]"
 
     if bw == 0:
+        print("plot_Doppler_vs_delay bandwidth is zero")
         max_delay_ms = ndelay/2
         ylabel="Spectral Cycles"
     else:
@@ -118,6 +119,8 @@ def plot_Doppler_vs_delay (h_doppler_delay, dT, bw, filename=None):
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    ax.grid()
+
     img = ax.imshow(plotthis.T, aspect="auto", origin="lower", cmap="cubehelix_r", vmin=plotmed, extent=extent, interpolation='none')
     fig.colorbar(img)
 
