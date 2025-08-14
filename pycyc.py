@@ -332,7 +332,6 @@ class CyclicSolver:
             h_doppler_delay = time2freq(h_time_delay, axis=0)
             plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield_after_zap_edges.png")
 
-
         self.initial_h_time_freq = data
 
         if ar.get_nsubint() == 1:
@@ -575,10 +574,10 @@ class CyclicSolver:
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
             if self.zero_initial_delay:
-                h_time_power = np.sum(np.abs(self.h_time_delay)**2 , axis=0)
+                h_time_power = np.sum(np.abs(self.h_time_delay) ** 2, axis=0)
                 peak = np.argmax(h_time_power)
                 print(f"{peak=}")
-                self.h_time_delay=np.roll(self.h_time_delay, -peak, axis=1)
+                self.h_time_delay = np.roll(self.h_time_delay, -peak, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.iprint:
@@ -641,13 +640,15 @@ class CyclicSolver:
             phase = delay * self.ref_freq
             bins = phase * self.nbin
             phase_roll = -int(bins)
-            print(f"roll initial guesses by {self.roll_initial_guess} time samples and {phase_roll} phase bins")
+            print(
+                f"roll initial guesses by {self.roll_initial_guess} time samples and {phase_roll} phase bins"
+            )
             self.intrinsic_ph = np.roll(self.intrinsic_ph, phase_roll, axis=1)
             self.intrinsic_profiles = np.roll(self.intrinsic_profiles, phase_roll, axis=2)
             self.scattered_profiles = np.roll(self.scattered_profiles, phase_roll, axis=1)
             self.pp_intrinsic = np.roll(self.pp_intrinsic, phase_roll)
             self.pp_scattered = np.roll(self.pp_scattered, phase_roll)
-            self.h_time_delay= np.roll(self.h_time_delay, self.roll_initial_guess, axis=1)
+            self.h_time_delay = np.roll(self.h_time_delay, self.roll_initial_guess, axis=1)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
     def compute_first_wavefield_from_best_harmonic(self):
@@ -1154,7 +1155,6 @@ class CyclicSolver:
         return s0, gain, ph_numer, ph_denom
 
     def unload_solution(self, filename):
-
         arch = psrchive.Archive_new_Archive("PSRFITS")
 
         ext = arch.add_dynamic_response()
@@ -1170,13 +1170,13 @@ class CyclicSolver:
         end_time = start_time + self.mean_time_offset * self.nsubint
 
         print(f"unload_solution start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
-        ext.set_minimum_epoch (start_time)
-        ext.set_maximum_epoch (end_time)
+        ext.set_minimum_epoch(start_time)
+        ext.set_maximum_epoch(end_time)
 
-        ext.set_centre_frequency (self.rf)
-        ext.set_bandwidth (self.bw)
-        arch.set_centre_frequency (self.rf)
-        arch.set_bandwidth (self.bw)
+        ext.set_centre_frequency(self.rf)
+        ext.set_bandwidth(self.bw)
+        arch.set_centre_frequency(self.rf)
+        arch.set_bandwidth(self.bw)
 
         arch.unload(filename)
 
