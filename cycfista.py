@@ -65,6 +65,12 @@ CS.use_integrated_profile = True
 # maintain constant total energy
 CS.conserve_wavefield_energy = True
 
+# set cyclic spectra to zero where shifted content is out of band
+CS.pad_cyclic_spectra = True
+
+# set h(tau,omega) to zero for tau < 0 for the first N iterations
+CS.enforce_causality = 15
+
 # reduce phase noise by minimizing the spectral entropy
 # CS.minimize_spectral_entropy = True
 
@@ -73,9 +79,6 @@ CS.conserve_wavefield_energy = True
 
 # align the phase and delay of time-adjacent frequency responses computed from the wavefield
 # CS.align_frequency_responses = True
-
-# set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 12
 
 # use a delay-dependent threshold to perform shrinkage
 # CS.delay_noise_shrinkage_threshold = 1.0
@@ -228,7 +231,7 @@ for i in range(max_iterations + 1):
 
     if alphas.size == 0:
         alpha = 1.0 / L  # this should happen only if the first step is bad
-        printf("alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
+        print(f"alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
     elif alpha_history == 0 or alphas.size < alpha_history:
         alpha = np.min(alphas)
     else:
@@ -275,3 +278,5 @@ for i in range(max_iterations + 1):
 
         plot_intrinsic_vs_observed(CS, pp_scattered, base + "_compare.png")
         plt.close()
+
+CS.unload_solution("cycfista_best.fits")
