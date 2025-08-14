@@ -17,8 +17,6 @@ mpl.rcParams["image.aspect"] = "auto"
 
 def analysis (base, gradient, delta):
 
-    log_floor = 1e-16
-
     re_gradient = np.real(gradient)
     im_gradient = np.imag(gradient)
     print(f"test_deflection: power in gradient={np.real(np.vdot(gradient, gradient))}")
@@ -97,8 +95,8 @@ CS.pad_cyclic_spectra = False
 # Remove the baseline from input data
 CS.remove_baseline = True
 
-# set the maximum harmonic
-# CS.maxharm = 128
+# Exclude the Nyquist bin from consideration
+CS.include_Nyquist = 0
 
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
