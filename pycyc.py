@@ -262,6 +262,15 @@ class CyclicSolver:
         # initial guess for the dynamic response
         self.initial_h_time_freq = None
 
+        # roll the initial guess to place peak in power at zero delay
+        self.zero_initial_delay = False
+
+        # roll the initial guess to place peak in power at specified delay
+        self.roll_initial_guess = 0
+
+        # zap the edges of the initial_guess
+        self.zap_initial_guess = False
+
         # project the gradient onto the subspace that is orthogonal to the null space direction defined by degenerate phase
         self.manifold_optimization = False
 
@@ -310,7 +319,7 @@ class CyclicSolver:
         h_doppler_delay = time2freq(h_time_delay, axis=0)
         plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield.png")
 
-        if self.zap_edges is not None and self.zap_edges > 0:
+        if self.zap_initial_guess and self.zap_edges is not None and self.zap_edges > 0:
             # nsubint, nchan = data.shape
             # print(f"load_initial_guess before zapping {self.zap_edges}: {nsubint=} {nchan=}")
             zap_count = int(self.zap_edges * nchan)
@@ -322,6 +331,7 @@ class CyclicSolver:
             h_time_delay = freq2time(data, axis=1)
             h_doppler_delay = time2freq(h_time_delay, axis=0)
             plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield_after_zap_edges.png")
+
 
         self.initial_h_time_freq = data
 
@@ -564,6 +574,13 @@ class CyclicSolver:
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
+            if self.zero_initial_delay:
+                h_time_power = np.sum(np.abs(self.h_time_delay)**2 , axis=0)
+                peak = np.argmax(h_time_power)
+                print(f"{peak=}")
+                self.h_time_delay=np.roll(self.h_time_delay, -peak, axis=1)
+                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
         if self.iprint:
             print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
@@ -618,6 +635,20 @@ class CyclicSolver:
         self.updateProfile()
         self.save_dynamic_spectrum = False
         self.save_cs_norm = False
+
+        if self.roll_initial_guess != 0:
+            delay = self.roll_initial_guess / (self.bw * 1e6)
+            phase = delay * self.ref_freq
+            bins = phase * self.nbin
+            phase_roll = -int(bins)
+            print(f"roll initial guesses by {self.roll_initial_guess} time samples and {phase_roll} phase bins")
+            self.intrinsic_ph = np.roll(self.intrinsic_ph, phase_roll, axis=1)
+            self.intrinsic_profiles = np.roll(self.intrinsic_profiles, phase_roll, axis=2)
+            self.scattered_profiles = np.roll(self.scattered_profiles, phase_roll, axis=1)
+            self.pp_intrinsic = np.roll(self.pp_intrinsic, phase_roll)
+            self.pp_scattered = np.roll(self.pp_scattered, phase_roll)
+            self.h_time_delay= np.roll(self.h_time_delay, self.roll_initial_guess, axis=1)
+            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
     def compute_first_wavefield_from_best_harmonic(self):
         initial_total_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
@@ -767,7 +798,6 @@ class CyclicSolver:
         self.compute_scattered_profile = False
         if self.pp_scattered is None:
             self.compute_scattered_profile = True
-            self.pp_scattered = np.zeros(self.nphase)  # scattered profile
 
         self.optimal_gains = np.ones(self.nsubint)
         self.ph_numer = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
@@ -1122,6 +1152,33 @@ class CyclicSolver:
         s0 = ph_numer / ph_denom
         s0[np.real(ph_denom) <= 0.0] = 0
         return s0, gain, ph_numer, ph_denom
+
+    def unload_solution(self, filename):
+
+        arch = psrchive.Archive_new_Archive("PSRFITS")
+
+        ext = arch.add_dynamic_response()
+        ext.set_nchan(self.nchan)
+        ext.set_ntime(self.nsubint)
+        ext.set_npol(1)
+        ext.resize_data()
+
+        h_time_freq = time2freq(self.h_time_delay, axis=1)
+        ext.set_data(h_time_freq.flatten())
+
+        start_time = self.reference_epoch
+        end_time = start_time + self.mean_time_offset * self.nsubint
+
+        print(f"unload_solution start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
+        ext.set_minimum_epoch (start_time)
+        ext.set_maximum_epoch (end_time)
+
+        ext.set_centre_frequency (self.rf)
+        ext.set_bandwidth (self.bw)
+        arch.set_centre_frequency (self.rf)
+        arch.set_bandwidth (self.bw)
+
+        arch.unload(filename)
 
     def loop(
         self,
