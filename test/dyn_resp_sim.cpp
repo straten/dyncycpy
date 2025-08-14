@@ -217,8 +217,6 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
 
   if (phase_bin_per_delay)
   {
-    nbin = nchan/2;
-    archive->resize (1, 1, nchan, nbin);
     cerr << "dyn_res_sim::process nchan=" << nchan << " nbin=" << nbin << endl;
 
     // each phase bin is 1 fake millisecond
