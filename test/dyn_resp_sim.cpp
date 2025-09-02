@@ -763,6 +763,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   double total_power = 0;
   double diff_power = 0;
   double max_power = 0;
+
   for (unsigned ibin=1; ibin < nbin/2; ibin++)
   {
     auto diff = intrinsic_spectrum[ibin] - conj(intrinsic_spectrum[nbin - ibin]);
@@ -817,11 +818,14 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     // copy from the dynamic response to the input frequency response
     memcpy(frequency_response.data(), data + itime * nchan, sizeof(complex<double>) * nchan);
     fftw_execute(bwd_plan);
+
     // impulse_response now contains the inverse FFT of the frequency response
 
     // the combination of fwd and bwd plans results in scaling by nchan
     for (unsigned ichan=0; ichan < nchan; ichan++)
+    {
       impulse_response[ichan] /= nchan;
+    }
 
     double total_power = 0.0;
     double total_cs_power = 0.0;
@@ -862,9 +866,8 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
           if (ibin == nbin/2)
           {
-            // can happen only if include_Nyquist == 1
             // the Nyquist bin of a real-valued signal is real-valued
-            spectrum[ibin] = spectrum[ibin].real();
+            spectrum[ibin] = std::abs(spectrum[ibin]);
           }
 
           if (sign == 1)
