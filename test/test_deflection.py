@@ -95,9 +95,6 @@ CS.pad_cyclic_spectra = False
 # Remove the baseline from input data
 CS.remove_baseline = True
 
-# Exclude the Nyquist bin from consideration
-CS.include_Nyquist = 0
-
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
     CS.load_initial_guess(init)

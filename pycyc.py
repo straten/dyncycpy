@@ -290,7 +290,7 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs = make_model_cs(hf, self.s0, self.bw, self.ref_freq, self.shear_phasors)
+        cs = make_model_cs(self, hf, self.s0)
 
         return cs[0]
 
@@ -400,7 +400,7 @@ class CyclicSolver:
             self.nlag = self.nchan
             self.nphase = self.nbin
             self.nharm = self.nphase // 2 + self.include_Nyquist
-            print(f"load nlag={self.nlag} nharm={self.nharm}")
+            print(f"load nphase={self.nphase} nlag={self.nlag} nharm={self.nharm} inc_Nyquist={self.include_Nyquist}")
             if self.maxharm is not None:
                 print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
 
@@ -2359,9 +2359,14 @@ def shear_spectra(spectrum, phasors):
     return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
 
 
-def make_model_cs(hf, s0, bw, ref_freq, phasors, padding=True):
+def make_model_cs(CS, hf, s0):
+    bw = CS.bw
+    ref_freq = CS.ref_freq
+    phasors = CS.shear_phasors
+    padding = CS.pad_cyclic_spectra
+
     nchan = hf.shape[0]
-    s0.shape[0]
+    nharm = s0.shape[0]
     # profile2cs
     cs = np.repeat(
         s0[np.newaxis, :], nchan, axis=0
@@ -2370,6 +2375,10 @@ def make_model_cs(hf, s0, bw, ref_freq, phasors, padding=True):
     hfplus, hfminus = shear_spectra(hf, phasors)
 
     cs = cs * hfplus * np.conj(hfminus)
+
+    # force the Nyquist harmonic to be real-valued
+    if CS.include_Nyquist:
+        cs[:,nharm-1] = np.abs(cs[:,nharm-1])
 
     if padding:
         cs = cyclic_padding(cs, bw, ref_freq)
@@ -2425,9 +2434,7 @@ def cyclic_merit_lag(x, CS):
 
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(
-        hf, s0, CS.bw, CS.ref_freq, CS.shear_phasors, CS.pad_cyclic_spectra
-    )
+    cs_model, hfplus, hfminus = make_model_cs(CS, hf, s0)
     cs_model *= gain
 
     if CS.maxharm is not None:
@@ -2446,7 +2453,7 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         P_residual = total_cyclic_power(residual)
         P_model = total_cyclic_power(cs_model)
         P_data = total_cyclic_power(cs_data)
-        print(f"complex_cyclic_merit_lag power in residual={P_residual} model={P_model} data={P_data}")
+        print(f"complex_cyclic_merit_lag nharm={residual.shape[1]} power in residual={P_residual} model={P_model} data={P_data}")
         filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
         with open(filename, "wb") as fh:
             pickle.dump(residual, fh)
