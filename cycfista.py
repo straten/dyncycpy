@@ -56,6 +56,8 @@ alpha_init = 1e-6
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
 
+CS.enforce_real_at_origin = True
+
 # compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
 
@@ -66,10 +68,16 @@ CS.use_integrated_profile = True
 CS.conserve_wavefield_energy = True
 
 # set cyclic spectra to zero where shifted content is out of band
-CS.pad_cyclic_spectra = True
+CS.pad_cyclic_spectra = False
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
 CS.enforce_causality = 15
+
+# subtract degenerate degrees of freedom from gradient
+# CS.subtract_degenerate_projections = True
+
+# still under development
+# CS.zap_gradient_harmonics = 0
 
 # reduce phase noise by minimizing the spectral entropy
 # CS.minimize_spectral_entropy = True
@@ -202,8 +210,10 @@ for i in range(max_iterations + 1):
     assert math.isfinite(CS.get_reduced_chisq())
 
     if CS.enforce_causality:
-        CS.enforce_causality -= 1
         print(f"enforcing causality for {CS.enforce_causality} more iterations")
+        CS.enforce_causality -= 1
+        if CS.enforce_causality == 0:
+            CS.zap_gradient_harmonics = 0
 
     if i == 0 or L > L_max:
         L_max = L

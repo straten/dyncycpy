@@ -278,7 +278,7 @@ class CyclicSolver:
         self.zap_initial_guess = False
 
         # project the gradient onto the subspace that is orthogonal to the null space direction defined by degenerate phase
-        self.manifold_optimization = False
+        self.subtract_degenerate_projections = False
 
         if filename:
             self.load(filename)
@@ -1055,7 +1055,7 @@ class CyclicSolver:
 
         self.compute_gradient()
 
-        if self.manifold_optimization:
+        if self.subtract_degenerate_projections:
             self.h_time_delay_grad = subtract_degenerate_dof(self.h_time_delay_grad, self.h_time_delay)
 
         if self.enforce_causality:
@@ -2573,44 +2573,49 @@ def minimize_temporal_phase_noise(x):
         xprev = x[isub]
 
 
+def subtract_degenerate_delay_and_phase(h_delay_grad,h_delay):
+    """
+    Subtract phase and delay terms from the gradient
+    """
+    h_freq_grad = time2freq(h_delay_grad)
+    h_freq = time2freq(h_delay)
+    nchan = h_freq.shape[0]
+
+    # phase basis vector
+    v_phase = 1.0j * h_freq
+    v_phase /= np.sqrt(np.sum(np.abs(v_phase) ** 2))
+    # linear phase gradient along frequency basis vector
+    v_delay = 1.0j * np.fft.fftfreq(nchan) * h_freq
+    v_delay /= np.sqrt(np.sum(np.abs(v_delay) ** 2))
+
+    # verify orthogonality of basis vectors
+    dot12 = np.sum(np.conj(v_phase) * v_delay)
+    print(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
+
+    # project gradient onto basis vectors, then subtract the projections from the gradient
+    a_phase = np.sum(np.conj(v_phase) * h_freq_grad)
+    h_freq_grad -= a_phase * v_phase
+
+    b_phase = np.sum(np.conj(v_phase) * h_freq_grad)
+    print(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
+
+    a_delay = np.sum(np.conj(v_delay) * h_freq_grad)
+    h_freq_grad -= a_delay * v_delay
+
+    b_delay = np.sum(np.conj(v_delay) * h_freq_grad)
+    print(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay}")
+
+    return freq2time(h_freq_grad)
+
+
 def subtract_degenerate_dof(h_time_delay_grad,h_time_delay):
     """
     Subtract phase and two linear phase gradients from the gradient
     """
-    h_time_freq_grad = time2freq(h_time_delay_grad, axis=1)
-    h_time_freq = time2freq(h_time_delay, axis=1)
-    nchan = h_time_freq.shape[0]
-    ntime = h_time_freq.shape[1]
-
-    # phase basis vector
-    v_phase = 1.0j * h_time_freq
-    v_phase /= np.sqrt(np.sum(np.abs(v_phase) ** 2))
-    # linear phase gradient basis vector along frequency
-    v_freq = 1.0j * np.fft.fftfreq(nchan)[:, np.newaxis] * h_time_freq
-    v_freq /= np.sqrt(np.sum(np.abs(v_freq) ** 2))
-    # linear phase gradient basis vector along time
-    v_time = 1.0j * np.fft.fftfreq(ntime)[np.newaxis, :] * h_time_freq
-    v_time /= np.sqrt(np.sum(np.abs(v_time) ** 2))
-
-    # verify orthogonality of basis vectors
-    dot12 = np.sum(np.conj(v_phase) * v_freq)
-    dot13 = np.sum(np.conj(v_phase) * v_time)
-    dot23 = np.sum(np.conj(v_freq) * v_time)
-    print(f"subtract_degenerate_dof dot products: {dot12=} {dot13=} {dot23=}")
-
-    # project gradient onto basis vectors
-    a_phase = np.sum(np.conj(v_phase) * h_time_freq_grad)
-    a_freq = np.sum(np.conj(v_freq) * h_time_freq_grad)
-    a_time = np.sum(np.conj(v_time) * h_time_freq_grad)
-    print(f"subtract_degenerate_dof projections: {a_phase=} {a_freq=} {a_time=}")
-
-    # subtract the projections from the gradient
-    h_time_freq_grad -= a_phase * v_phase
-    h_time_freq_grad -= a_freq * v_freq
-    h_time_freq_grad -= a_time * v_time
-
-    return freq2time(h_time_freq_grad, axis=1)
-
+    ntime = h_time_delay.shape[0]
+    for itime in range(ntime):
+        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(h_time_delay_grad[itime, :],h_time_delay[itime, :])
+    return h_time_delay_grad
 
 def circular(x):
     x[:] = np.fmod(x, 2.0 * np.pi)
