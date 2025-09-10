@@ -171,7 +171,7 @@ class CyclicSolver:
         # Remove the baseline from input data
         self.remove_baseline = True
 
-        # omit the spin harmonic DC bin from the definition of the merit function
+        # omit the DC spin harmonic from the definition of the merit function
         # set to 0 or 1; this flag is used as an integer
         self.exclude_DC = 1
 
@@ -184,6 +184,12 @@ class CyclicSolver:
 
         # set the wavefield at all negative delays to zero
         self.enforce_causality = False
+
+        # set the wavefield to a real value at the origin
+        self.enforce_real_at_origin = False
+
+        # set harmonically related elements of the wavefield gradient to zero
+        self.zap_gradient_harmonics = 0
 
         # reduce temporal phase noise by minimizing the spectral entropy
         self.minimize_spectral_entropy = False
@@ -235,7 +241,7 @@ class CyclicSolver:
         # derive a first guest for the wavefield using the harmonic with the highest S/N
         self.first_wavefield_from_best_harmonic = 0
 
-        # delay the initial wavefield estimate by this many pixels
+        # delay the initial wavefield estimate by this many samples
         self.first_wavefield_delay = 0
 
         # taper data (cyclic spectra) in frequency using the specified window
@@ -317,6 +323,10 @@ class CyclicSolver:
 
         h_time_delay = freq2time(data, axis=1)
         h_doppler_delay = time2freq(h_time_delay, axis=0)
+
+        if self.enforce_real_at_origin:
+            h_doppler_delay[0, 0] = np.real(h_doppler_delay[0, 0])
+
         plot_Doppler_vs_delay(h_doppler_delay, dT, bw, "input_wavefield.png")
 
         if self.zap_initial_guess and self.zap_edges is not None and self.zap_edges > 0:
@@ -342,6 +352,7 @@ class CyclicSolver:
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
         """
 
+        print(f"loading {filename}")
         self.filenames.append(filename)
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
@@ -446,6 +457,10 @@ class CyclicSolver:
             next_offset = diff.in_seconds()
             gap = next_offset - last_offset
 
+            if gap < 0:
+                print(f"last_offset={last_offset} next_offset={next_offset} gap={gap}")
+                raise ValueError("new file starts before previous one ended (sort files by time)")
+
             missing_subints = 0
             if self.mean_time_offset > 0:
                 missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
@@ -463,6 +478,7 @@ class CyclicSolver:
             new_nsubint = self.nsubint + nsubint + missing_subints
             start_isubint = self.nsubint + missing_subints
 
+            # print(f"load expanding to {new_nsubint} sub-integrations {self.nsubint=} {nsubint=} {missing_subints=}")
             self.time_offsets.resize(new_nsubint)
             total_offset = 0
             count_offset = 0
@@ -579,6 +595,9 @@ class CyclicSolver:
                 print(f"{peak=}")
                 self.h_time_delay = np.roll(self.h_time_delay, -peak, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+
+            if self.enforce_real_at_origin:
+                self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
 
         if self.iprint:
             print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
@@ -842,6 +861,11 @@ class CyclicSolver:
             abs_origin = np.abs(self.h_doppler_delay[0, 0])
             print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
             self.h_doppler_delay *= np.conj(ph)
+            self.h_time_delay = freq2time(self.h_doppler_delay)
+
+        if self.enforce_real_at_origin:
+            self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
+            self.h_time_delay = freq2time(self.h_doppler_delay)
 
         if self.nthread == 1:
             for isub in range(self.nspec):
@@ -970,10 +994,6 @@ class CyclicSolver:
         self.rindex = isub
         _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
 
-        if self.enforce_causality:
-            half_nchan = self.nchan // 2
-            grad[half_nchan:] = 0
-
         self.h_time_delay_grad[isub, :] += grad
 
         return _merit, _nterm
@@ -1036,37 +1056,11 @@ class CyclicSolver:
         self.compute_gradient()
 
         if self.manifold_optimization:
-            h_time_delay_grad_0 = self.h_time_delay_grad.copy()
-            h_time_delay_0 = self.h_time_delay.copy()
+            self.h_time_delay_grad = subtract_degenerate_dof(self.h_time_delay_grad, self.h_time_delay)
 
-            epsilon = 1e-6
-
-            self.h_time_delay = h_time_delay_0 * (1.0 + 1.0j * epsilon)
-            self.compute_gradient()
-            h_time_delay_grad_2 = self.h_time_delay_grad.copy()
-
-            self.h_time_delay = h_time_delay_0 * (1.0 - 1.0j * epsilon)
-            self.compute_gradient()
-            h_time_delay_grad_1 = self.h_time_delay_grad.copy()
-
-            # plot_Doppler_vs_delay(time2freq(h_time_delay_grad_0)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_0.png")
-
-            # plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad.png")
-
-            delta_grad = h_time_delay_grad_2 - h_time_delay_grad_1
-
-            plot_Doppler_vs_delay(
-                time2freq(delta_grad) * self.nsubint, self.mean_time_offset, self.bw, "delta_grad.png"
-            )
-
-            self.h_time_delay = h_time_delay_0
-            self.h_time_delay_grad = h_time_delay_grad_0
-
-            proj = np.vdot(delta_grad, self.h_time_delay_grad)
-            print(f"{proj=}")
-            self.h_time_delay_grad -= proj * delta_grad / np.sum(np.abs(delta_grad) ** 2)
-
-            # plot_Doppler_vs_delay(time2freq(self.h_time_delay_grad)*self.nsubint, self.mean_time_offset, self.bw, "h_time_delay_grad_again.png")
+        if self.enforce_causality:
+            half_nchan = self.nchan // 2
+            self.h_time_delay_grad[:,half_nchan:] = 0
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -1079,6 +1073,33 @@ class CyclicSolver:
                 pickle.dump(self.h_time_delay_grad, fh)
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
+
+        if self.zap_gradient_harmonics > 0:
+            grad_power = np.abs(self.h_doppler_delay_grad) ** 2
+            largest = find_n_largest_indices(grad_power, self.zap_gradient_harmonics)
+            max_power = grad_power[largest[0]]
+            for idx in range(self.zap_gradient_harmonics):
+                ilargest = largest[idx]
+                print(f"{idx=} power at {ilargest} = {grad_power[ilargest]}")
+                if grad_power[ilargest] < 1e-6 * max_power:
+                    print("stopping zap_gradient_harmonics search")
+                    break
+
+                for jdx in range(idx+1,self.zap_gradient_harmonics):
+                    jlargest = largest[jdx]
+                    print(f"{jdx=} power at {jlargest} = {grad_power[jlargest]}")
+                    if grad_power[jlargest] > 1e-6 * max_power:
+                        print(f"zeroing harmonics of {ilargest} and {jlargest} in gradient")
+                        x_offset = abs(jlargest[0] - ilargest[0])
+                        y_offset = abs(jlargest[1] - ilargest[1])
+                        x = max(jlargest[0], ilargest[0])
+                        y = max(jlargest[1], ilargest[1])
+                        while (x < grad_power.shape[0]) and (y < grad_power.shape[1]):
+                            # print(f"zeroing {x},{y} in gradient")
+                            self.h_doppler_delay_grad[x, y] = 0
+                            x += x_offset
+                            y += y_offset
+
 
         if dumps:
             with open("h_doppler_delay_grad.pkl", "wb") as fh:
@@ -2552,6 +2573,45 @@ def minimize_temporal_phase_noise(x):
         xprev = x[isub]
 
 
+def subtract_degenerate_dof(h_time_delay_grad,h_time_delay):
+    """
+    Subtract phase and two linear phase gradients from the gradient
+    """
+    h_time_freq_grad = time2freq(h_time_delay_grad, axis=1)
+    h_time_freq = time2freq(h_time_delay, axis=1)
+    nchan = h_time_freq.shape[0]
+    ntime = h_time_freq.shape[1]
+
+    # phase basis vector
+    v_phase = 1.0j * h_time_freq
+    v_phase /= np.sqrt(np.sum(np.abs(v_phase) ** 2))
+    # linear phase gradient basis vector along frequency
+    v_freq = 1.0j * np.fft.fftfreq(nchan)[:, np.newaxis] * h_time_freq
+    v_freq /= np.sqrt(np.sum(np.abs(v_freq) ** 2))
+    # linear phase gradient basis vector along time
+    v_time = 1.0j * np.fft.fftfreq(ntime)[np.newaxis, :] * h_time_freq
+    v_time /= np.sqrt(np.sum(np.abs(v_time) ** 2))
+
+    # verify orthogonality of basis vectors
+    dot12 = np.sum(np.conj(v_phase) * v_freq)
+    dot13 = np.sum(np.conj(v_phase) * v_time)
+    dot23 = np.sum(np.conj(v_freq) * v_time)
+    print(f"subtract_degenerate_dof dot products: {dot12=} {dot13=} {dot23=}")
+
+    # project gradient onto basis vectors
+    a_phase = np.sum(np.conj(v_phase) * h_time_freq_grad)
+    a_freq = np.sum(np.conj(v_freq) * h_time_freq_grad)
+    a_time = np.sum(np.conj(v_time) * h_time_freq_grad)
+    print(f"subtract_degenerate_dof projections: {a_phase=} {a_freq=} {a_time=}")
+
+    # subtract the projections from the gradient
+    h_time_freq_grad -= a_phase * v_phase
+    h_time_freq_grad -= a_freq * v_freq
+    h_time_freq_grad -= a_time * v_time
+
+    return freq2time(h_time_freq_grad, axis=1)
+
+
 def circular(x):
     x[:] = np.fmod(x, 2.0 * np.pi)
 
@@ -2762,3 +2822,63 @@ if __name__ == "__main__":
     np.save(("%s_profile.npy" % CS.source), CS.pp_intrinsic)
     CS.loop(make_plots=True, tolfact=20)
     CS.saveResults()
+
+def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
+    """
+    Given a 2D NumPy array and an integer N, this function returns a list of
+    the (row, column) pairs for the N largest values in the array.
+
+    This routine is optimized for memory efficiency by using `np.argpartition`
+    which avoids a full sort of the flattened array. It finds the indices of
+    the N largest values and then converts them to 2D coordinates.
+
+    Written by Gemini.
+
+    Args:
+        arr (np.ndarray): A 2D NumPy array of values.
+        n (int): The number of largest values to find.
+
+    Returns:
+        list: A list of tuples, where each tuple is an (x, y) coordinate
+              (row, column) of one of the N largest values.
+    """
+    if not isinstance(arr, np.ndarray) or arr.ndim != 2:
+        print("Error: Input must be a 2D NumPy array.")
+        return []
+    
+    if n <= 0:
+        print("Error: N must be a positive integer.")
+        return []
+
+    # Get a flattened view of the array. This is an O(1) operation
+    # that does not create a copy of the data.
+    arr_flat = arr.ravel()
+
+    # Determine the number of elements to partition. If N is larger than
+    # the total number of elements, we just take all of them.
+    kth_element = max(0, arr_flat.size - n)
+
+    # Use `np.argpartition` to find the indices of the N largest elements.
+    # This is much more efficient than a full sort as it only guarantees
+    # that the kth element is in its sorted position. The elements to the
+    # right of it are the largest ones, but not necessarily sorted among
+    # themselves. This is all done without creating a copy of the data.
+    top_n_flattened_indices = np.argpartition(arr_flat, kth_element)[kth_element:]
+
+    # Map the flattened indices back to 2D coordinates.
+    # np.unravel_index is a handy function for this. It takes a
+    # flattened index and the shape of the original array and
+    # returns the multi-dimensional index.
+    row_indices, col_indices = np.unravel_index(
+        top_n_flattened_indices, arr.shape
+    )
+
+    # Combine the row and column indices into a list of (row, column) tuples.
+    result_indices = list(zip(row_indices, col_indices))
+    
+    # Sort the results by value to match the previous behavior, if desired.
+    # This step is optional but provides a consistent output. It can be
+    # commented out if sorting is not needed for your use case.
+    result_indices.sort(key=lambda coord: arr[coord], reverse=True)
+
+    return result_indices
