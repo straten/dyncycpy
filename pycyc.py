@@ -150,9 +150,12 @@ class CyclicSolver:
         self.intrinsic_ph = None
         self.intrinsic_ph_sum = None
         self.intrinsic_ph_sumsq = None
+        self.ph_numer = None
+        self.ph_denom = None
         self.pp_scattered = None
         self.pp_intrinsic = None
         self.shear_phasors = None
+        self.optimal_gains = None
         self.cs_norm = None
         self.hf_prev = None
         self.iprint = False
@@ -344,8 +347,21 @@ class CyclicSolver:
 
         self.initial_h_time_freq = data
 
-        if ar.get_nsubint() == 1:
-            self.pp_intrinsic = np.copy(ar.get_Profile(0, 0, 0).get_amps())
+        self.load_initial_profile(filename)
+        ar = None
+
+
+    def load_initial_profile(self, filename):
+        """
+        Load initial guess for intrinsic profile from file
+        """
+
+        ar = psrchive.Archive_load(filename)
+        assert(ar.get_nsubint() >= 1)
+        self.pp_intrinsic[:] = ar.get_Profile(0, 0, 0).get_amps()
+        self.intrinsic_ph[0,:] = phase2harm(self.pp_intrinsic)
+        ar = None
+
 
     def load(self, filename):
         """
@@ -411,7 +427,7 @@ class CyclicSolver:
             self.nlag = self.nchan
             self.nphase = self.nbin
             self.nharm = self.nphase // 2 + self.include_Nyquist
-            print(f"load nphase={self.nphase} nlag={self.nlag} nharm={self.nharm} inc_Nyquist={self.include_Nyquist}")
+            # print(f"load nphase={self.nphase} nlag={self.nlag} nharm={self.nharm} inc_Nyquist={self.include_Nyquist}")
             if self.maxharm is not None:
                 print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
 
@@ -543,6 +559,7 @@ class CyclicSolver:
         If loadFile is not specified, will compute an initial profile from the data
         If loadFile ends with .txt, it is assumed to be a filter_profile output file
         If loadFile ends with .npy, it is assumed to be a numpy data file
+        If loadFile ends with .fits, it is assumed to be a PSRFITS file
 
         Resulting profile is assigned to self.pp_intrinsic
         The results of this routine have been checked to agree with filter_profile -i
@@ -638,14 +655,8 @@ class CyclicSolver:
         self.intrinsic_profiles = np.zeros((self.nsubint, self.npol, self.nbin))
         self.scattered_profiles = np.zeros((self.nsubint, self.nbin))
 
-        if loadFile:
-            if loadFile.endswith(".npy"):
-                self.pp_intrinsic = np.load(loadFile)
-            elif loadFile.endswith(".txt"):
-                self.pp_intrinsic = loadProfile(loadFile)
-            else:
-                raise Exception("Filename must end with .txt or .npy to indicate type")
-            return
+        if (self.optimal_gains is None) or (len(self.optimal_gains) != self.nsubint):
+            self.optimal_gains = np.ones(self.nsubint)
 
         self.maxinitharm = maxinitharm
         self.save_dynamic_spectrum = True
@@ -653,6 +664,17 @@ class CyclicSolver:
         self.updateProfile()
         self.save_dynamic_spectrum = False
         self.save_cs_norm = False
+
+        # The first guess for the intrinsic profile should be loaded afer updateProfile creates various arrays
+        if loadFile:
+            if loadFile.endswith(".npy"):
+                self.pp_intrinsic = np.load(loadFile)
+            elif loadFile.endswith(".txt"):
+                self.pp_intrinsic = loadProfile(loadFile)
+            elif loadFile.endswith(".fits") or loadFile.endswith(".ar"):
+                self.load_initial_profile(loadFile)
+            else:
+                raise Exception("Filename must end with .txt or .npy to indicate type")
 
         if self.roll_initial_guess != 0:
             delay = self.roll_initial_guess / (self.bw * 1e6)
@@ -819,10 +841,20 @@ class CyclicSolver:
         if self.pp_scattered is None:
             self.compute_scattered_profile = True
 
-        self.optimal_gains = np.ones(self.nsubint)
-        self.ph_numer = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
-        self.ph_denom = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
-        self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
+        if (self.ph_numer is None) or (self.ph_numer.shape != (self.npol, self.nspec, self.nharm)):
+            self.ph_numer = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
+        else:
+            self.ph_numer.fill(0.0)
+
+        if (self.ph_denom is None) or (self.ph_denom.shape != (self.npol, self.nspec, self.nharm)):
+            self.ph_denom = np.zeros((self.npol, self.nspec, self.nharm), dtype=np.complex128)
+        else:
+            self.ph_denom.fill(0.0)
+
+        if (self.intrinsic_ph is None) or (self.intrinsic_ph.shape != (self.npol, self.nharm)):
+            self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
+        else:
+            self.intrinsic_ph.fill(0.0)
 
         if self.cs_norm is None:
             self.cs_norm = np.zeros((self.nsubint, self.npol))
@@ -1149,7 +1181,7 @@ class CyclicSolver:
         maghmhp = (np.abs(hfminus) * np.abs(hfplus)) ** 2
 
         if update_gain and self.intrinsic_ph_sum is not None:
-            # Equation A11 numerator
+            # Equation A5 numerator
             tmp = fscrunch_cs(
                 np.conj(cshmhp) * self.intrinsic_ph_sum,
                 bw=bw,
@@ -1157,7 +1189,7 @@ class CyclicSolver:
                 padding=self.pad_cyclic_spectra,
             )
             gain_numer = tmp[1:].sum()  # sum over all harmonics
-            # Equation A11 denominator
+            # Equation A5 denominator
             tmp = fscrunch_cs(
                 maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra
             )
@@ -1167,21 +1199,33 @@ class CyclicSolver:
         else:
             gain = 1
 
-        # fscrunch
-        # print("optimize_profile fscrunch_cs")
+        # Equation A7 numerator
         ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain
+        # Equation A7 denominator
         ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain**2
+
+        # When the denominator is zero, set the intrinsic profile to zero
         s0 = ph_numer / ph_denom
         s0[np.real(ph_denom) <= 0.0] = 0
+
         return s0, gain, ph_numer, ph_denom
 
     def unload_solution(self, filename):
+
         arch = psrchive.Archive_new_Archive("PSRFITS")
 
+        # use the first file and all of its metadata to create a new archive
+        copy = psrchive.Archive_load(self.filenames[0])
+        copy.fscrunch()
+        arch.copy(copy)
+
+        # unload the wavefield as a dynamic response
         ext = arch.add_dynamic_response()
+
         ext.set_nchan(self.nchan)
         ext.set_ntime(self.nsubint)
         ext.set_npol(1)
+
         ext.resize_data()
 
         h_time_freq = time2freq(self.h_time_delay, axis=1)
@@ -1196,9 +1240,22 @@ class CyclicSolver:
 
         ext.set_centre_frequency(self.rf)
         ext.set_bandwidth(self.bw)
-        arch.set_centre_frequency(self.rf)
-        arch.set_bandwidth(self.bw)
 
+        # unload the intrinsic profile
+
+        print("resizing archive sub-integrations")
+
+        nsub = nchan = 1
+        arch.resize(nsub, self.npol, nchan, self.nbin)
+
+        print("setting profile data")
+        for subint in arch:
+            for ipol in range(self.npol):
+                for ichan in range(nchan):
+                    prof = subint.get_Profile(ipol,ichan)
+                    prof.get_amps()[:] = self.pp_intrinsic
+
+        print("unload_solution writing to", filename)
         arch.unload(filename)
 
     def loop(

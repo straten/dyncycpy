@@ -25,6 +25,12 @@ p.add_argument(
 )
 
 p.add_argument(
+    "--init-profile",
+    type=str,
+    help="file containing the initial intrinsic profile",
+)
+
+p.add_argument(
     "--zap",
     type=float,
     default=0.05556,
@@ -40,6 +46,8 @@ p.add_argument(
 
 args, files = p.parse_known_args()
 init = args.init
+init_profile = args.init_profile
+
 max_iterations = args.iter
 
 CS = pycyc.CyclicSolver(zap_edges=args.zap)
@@ -106,6 +114,7 @@ CS.enforce_causality = 15
 # Number of iterations between profile updates
 update_profile_period = 2
 update_profile_every_iteration_until = 5
+update_profile_after = 0
 plot_all = True
 
 # CS.doppler_window = ('kaiser', 8.0)
@@ -133,6 +142,12 @@ for file in files:
 print(f"cycfista: {CS.nsubint} spectra loaded")
 
 CS.initProfile()
+
+if init_profile is not None:
+    print(f"cycfista: loading initial intrinsic profile from {init_profile}")
+    CS.load_initial_profile(init_profile)
+    update_profile_after = 10
+    update_profile_every_iteration_until = 0
 
 initial_profile_from_first_subintegration = False
 
@@ -184,7 +199,7 @@ min_step_factor = 0.5
 for i in range(max_iterations + 1):
     CS.nopt += 1
 
-    if i < update_profile_every_iteration_until or (i + 1) % update_profile_period == 0:
+    if i < update_profile_every_iteration_until or ( (update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0 ):
         print("cycfista: update profile")
         CS.updateProfile()
 
@@ -252,14 +267,14 @@ for i in range(max_iterations + 1):
         print(f"reducing alpha to {alpha}")
         alphas = np.append(alphas, alpha)
 
-    print(f"\n{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}")
+    print(f"{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}", flush=True)
     end_time = time.time()
 
     iter_time = end_time - prev_time
     elapsed_time = end_time - start_time
 
     prev_time = end_time
-    print(f"Elapsed time: {elapsed_time/60} min   Iteration time: {iter_time/60} min", flush=True)
+    print(f"Elapsed time: {elapsed_time/60} min   Iteration time: {iter_time/60} min\n", flush=True)
 
     if plot_all or i < 10 or i % 10 == 0:
         base = "cycfista_" + f"{i:03d}"
