@@ -91,6 +91,9 @@ protected:
   //! randomize scattered wave phases
   bool scattered_waves_random_phase = false;
 
+  //! Place a scattered wave at the origin
+  bool scattered_wave_origin = true;
+
   //! Use a Tukey window to taper the frequency response
   double Tukey_width = 0.0;
 
@@ -148,6 +151,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 
   arg = menu.add (scattered_waves_random_phase, "rand");
   arg->set_help ("randomize the phases of scattered wave components");
+
+  arg = menu.add (scattered_wave_origin, "origin");
+  arg->set_help ("do not include a wavefield component at the origin");
 
   arg = menu.add (arc_curvature, 'c', "s^3");
   arg->set_help ("Arc curvature in seconds per square Hz");
@@ -579,7 +585,8 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
     for (unsigned itime=0; itime < ntime; itime++)
       data[itime*nchan + ichan] = 0;
 
-  data[0] = 1.0;
+  if (scattered_wave_origin)
+    data[0] = 1.0;
 
   for (auto wave: scattered_waves)
   {
@@ -879,7 +886,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     double rms = sqrt(total_power / (nchan * 2 * (nbin/2 - 1)));
 
     // cerr << "standard deviation of frequency response = " << rms << endl;
-    cerr << "total power in cyclic spectrum = " << total_cs_power << endl;
+    // cerr << "total power in cyclic spectrum = " << total_cs_power << endl;
 
     if (instrumental_noise_power > 0.0)
     {
