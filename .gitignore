@@ -37,6 +37,6 @@ pip-log.txt
 /.pydevproject
 /*.tst
 .ipynb_checkpoints/
-
+simulated_*
 *.pdf
 *.pkl
