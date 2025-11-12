@@ -147,13 +147,15 @@ class CyclicSolver:
         self.filenames = []
         self.nspec = 0
         self.nsubint = 0
+        # intrinsic pulse profile in phase domain
+        self.pp_intrinsic = None
+        self.pp_scattered = None
+        # intrinsic profile harmonics (Fourier transform of intrinsic profile)
         self.intrinsic_ph = None
         self.intrinsic_ph_sum = None
         self.intrinsic_ph_sumsq = None
         self.ph_numer = None
         self.ph_denom = None
-        self.pp_scattered = None
-        self.pp_intrinsic = None
         self.shear_phasors = None
         self.optimal_gains = None
         self.cs_norm = None
@@ -299,7 +301,7 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs = make_model_cs(self, hf, self.s0)
+        cs = make_model_cs(self, hf, self.ph_ref)
 
         return cs[0]
 
@@ -356,10 +358,15 @@ class CyclicSolver:
         Load initial guess for intrinsic profile from file
         """
 
+        print(f"load_initial_profile filename={filename}")
         ar = psrchive.Archive_load(filename)
         assert(ar.get_nsubint() >= 1)
-        self.pp_intrinsic[:] = ar.get_Profile(0, 0, 0).get_amps()
-        self.intrinsic_ph[0,:] = phase2harm(self.pp_intrinsic)
+        tmp = ar.get_Profile(0, 0, 0).get_amps()
+        print(f"load_initial_profile loaded profile={tmp}")
+        self.pp_intrinsic = np.copy(tmp)
+        tmp = phase2harm(self.pp_intrinsic)
+        self.intrinsic_ph = np.zeros((1, np.size(tmp)), dtype=np.complex128)
+        self.intrinsic_ph[0,:] = tmp[None,:]
         ar = None
 
 
@@ -854,6 +861,7 @@ class CyclicSolver:
         if (self.intrinsic_ph is None) or (self.intrinsic_ph.shape != (self.npol, self.nharm)):
             self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
         else:
+            print("updateProfile resetting intrinsic_ph to zero")
             self.intrinsic_ph.fill(0.0)
 
         if self.cs_norm is None:
@@ -1012,11 +1020,11 @@ class CyclicSolver:
             cs, norm = self.get_cs(ps)
 
         if self.use_integrated_profile:
-            s0 = self.s0
+            ph = self.ph_ref
         else:
             ph_numer = self.ph_numer[ipol, isub]
             ph_denom = self.ph_denom[ipol, isub]
-            s0 = ph_numer / ph_denom
+            ph = ph_numer / ph_denom
 
         ht = self.h_time_delay[isub]
 
@@ -1024,7 +1032,7 @@ class CyclicSolver:
             print(f"update filter isub={isub}/{self.nspec}")
 
         self.rindex = isub
-        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, s0, cs, self.optimal_gains[isub])
+        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, ph, cs, self.optimal_gains[isub])
 
         self.h_time_delay_grad[isub, :] += grad
 
@@ -1153,7 +1161,6 @@ class CyclicSolver:
         self.h_time_delay_grad[:, :] = 0.0 + 0.0j
 
         for ipol in range(self.npol):
-            self.s0 = self.intrinsic_ph[ipol]
             self.ph_ref = self.intrinsic_ph[ipol]
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
@@ -1205,10 +1212,10 @@ class CyclicSolver:
         ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain**2
 
         # When the denominator is zero, set the intrinsic profile to zero
-        s0 = ph_numer / ph_denom
-        s0[np.real(ph_denom) <= 0.0] = 0
+        ph = ph_numer / ph_denom
+        ph[np.real(ph_denom) <= 0.0] = 0
 
-        return s0, gain, ph_numer, ph_denom
+        return ph, gain, ph_numer, ph_denom
 
     def unload_solution(self, filename):
 
@@ -1337,7 +1344,6 @@ class CyclicSolver:
             self.ph_ref[0] = 0
 
         ph = self.ph_ref[:]
-        self.s0 = ph
 
         if self.nopt == 0 or not use_last_soln:
             self.pp_intrinsic = np.zeros(self.nphase)
@@ -1751,7 +1757,7 @@ class CyclicSolver:
             transform=ax5.transAxes,
         )
         ax6 = fig.add_subplot(4, 3, 12)
-        pref = self.harm2phase(self.s0)
+        pref = self.harm2phase(self.ph_ref)
         ax6.plot(pref, label="Reference", linewidth=2)
         ax6.plot(self.harm2phase(sopt), "r", label="Intrinsic")
         ax6.plot(self.harm2phase(smeas), "g", label="Measured")
@@ -1848,7 +1854,7 @@ def plotSimulation(CS, mlag=100):
     pt = 1e3 * np.linspace(0, 1, CS.nphase) / CS.ref_freq
     ax3.plot(pt, fftshift(CS.pp_meas), "r", label="measured")
     ax3.plot(pt, fftshift(CS.pp_intrinsic), "cyan", alpha=0.7, label="deconvolved")
-    ax3.plot(pt, fftshift(self.harm2phase(CS.s0)), "k", label="original")
+    ax3.plot(pt, fftshift(self.harm2phase(CS.ph_ref)), "k", label="original")
     ax3.errorbar(
         [pt[len(pt) / 4]],
         [CS.pp_meas.max() / 2.0],
@@ -2501,7 +2507,7 @@ def cyclic_merit_lag(x, CS):
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
-    merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.s0, CS.cs, 1.0)
+    merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.ph_ref, CS.cs, 1.0)
     # the objval list keeps track of how the convergence is going
     CS.objval.append(merit)
 
