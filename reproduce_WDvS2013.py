@@ -12,6 +12,8 @@ import matplotlib as mpl
 from plotting import plot_intrinsic_vs_observed
 import copy
 import pickle
+import glob
+
 from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 
 # reload a module to incorporate code changes
@@ -19,11 +21,22 @@ import importlib
 import sys
 import pycyc
 
-CS = pycyc.CyclicSolver("P2067/chan07/53873.27864.07.15s.pb2", zap_edges = 0.05556, pscrunch=True)
-CS.data.shape, CS.nspec
+CS = pycyc.CyclicSolver(zap_edges = 0.05556)
 
-CS.load("P2067/chan07/53873.31676.07.15s.pb2")
-CS.data.shape, CS.nspec
+# compute and save cyclic spectra when loading periodic spectra
+CS.save_cyclic_spectra = True
+
+# solve sub-integrations in parallel using nthread threads
+CS.nthread = 8
+
+files = glob.glob("P2067/*.pb2")
+files = np.sort(files)
+
+print(f"loading {len(files)} files")
+for file in files:
+    CS.load(file)
+
+print(f"computing initial profile from {CS.nspec} sub-integrations")
 
 CS.initProfile()
 plt.plot(CS.pp_intrinsic)
@@ -33,9 +46,10 @@ plt.clf()
 filters = {}
 intrinsic_profiles = {}
 
-# For first pass, either loop:
+# For first pass, process at most the first 80 sub-integrations
+init_nspec = np.minimum(80, CS.nspec)
 
-for isub in range(0, 80):
+for isub in range(0, init_nspec):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 filters[0] = copy.deepcopy(CS.optimized_filters)
 intrinsic_profiles[0] = copy.deepcopy(CS.intrinsic_profiles)
@@ -46,10 +60,10 @@ with open("filters_0.pkl", "wb") as fh:
 with open("profiles_0.pkl", "wb") as fh:
     pickle.dump(intrinsic_profiles[0], fh)
 
-# three more passes through 20 minutes (80 15 sec subints):
+# three more passes through 20 minutes (init_nspec 15 sec subints):
 for ipass in range(1, 4):
     CS.pp_intrinsic = np.zeros((CS.nphase))
-    for isub in range(0, 80):
+    for isub in range(0, init_nspec):
         CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=np.copy(filters[ipass-1][isub]))
     
     filters[ipass] = copy.deepcopy(CS.optimized_filters)
@@ -64,7 +78,7 @@ with open(f"profiles_{ipass}.pkl", "wb") as fh:
 # Now pass through all the data with intrinsic profile so far (output cleared)
 
 CS.pp_intrinsic = np.zeros((CS.nphase))
-for isub in range(0, CS.data.shape[0]):
+for isub in range(0, CS.nspec):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
 filters_full = {}
@@ -81,7 +95,7 @@ with open(f"profiles_full_{ipass}.pkl", "wb") as fh:
     pickle.dump(intrinsic_profiles_full[ipass], fh)
 
 # Reproduce Figure 2 of WDvS13
-plot_intrinsic_vs_observed(CS, np.average(CS.data, axis=(0, 1, 2)), savefig='intrinsic_vs_observed.png')
+plot_intrinsic_vs_observed(CS, CS.pp_scattered, savefig='intrinsic_vs_observed.png')
 plt.clf()
 
 # Reproduce the bottom panel of Figure 7 of WDvS13
@@ -90,9 +104,8 @@ plt.plot(np.log(avg))
 plt.savefig('impulse.png')
 plt.clf()
 
-# Reproduce Figure 8 of WDvS13, using the wavefield derived from only the second file (subint 236 onward)
-subfilts=filters_full[0][236:]
-subimp = ifft(subfilts, axis=1)
+# Reproduce Figure 8 of WDvS13
+subimp = ifft(filters_full, axis=1)
 # Perform a forward FFT along the time (sub-integration) to doppler shift axis
 wavefield = fft(subimp, axis=0)
 plotthis = np.log10(np.abs(fftshift(wavefield)))
