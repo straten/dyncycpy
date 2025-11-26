@@ -95,6 +95,8 @@ CS.pad_cyclic_spectra = False
 # Remove the baseline from input data
 CS.remove_baseline = True
 
+CS.enforce_real_at_origin = True
+
 if init is not None:
     print(f"test_deflection: loading initial wavefield and intrinsic profile from {init}")
     CS.load_initial_guess(init)
