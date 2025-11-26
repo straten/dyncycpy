@@ -1470,7 +1470,8 @@ class CyclicSolver:
         imin, imax = chan_limits_cs(
             iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq
         )  # highest harmonic
-        var = (np.abs(cs[imin:imax, ih]) ** 2).sum()
+
+        var = (np.abs(cs[imin:imax, ih-1]) ** 2).sum()
         nvalid = imax - imin
         var = var / nvalid
 
