@@ -64,7 +64,7 @@ alpha_init = 1e-6
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
 
-CS.enforce_real_at_origin = True
+# CS.enforce_real_at_origin = True
 
 # compute and save cyclic spectra when loading periodic spectra
 CS.save_cyclic_spectra = True
@@ -112,6 +112,7 @@ CS.enforce_causality = 15
 # CS.minimize_spectral_entropy = True
 
 # Number of iterations between profile updates
+update_profile = True
 update_profile_period = 2
 update_profile_every_iteration_until = 5
 update_profile_after = 0
@@ -146,8 +147,9 @@ CS.initProfile()
 if init_profile is not None:
     print(f"cycfista: loading initial intrinsic profile from {init_profile}")
     CS.load_initial_profile(init_profile)
-    update_profile_after = 10
-    update_profile_every_iteration_until = 0
+    CS.conserve_wavefield_energy = False
+    CS.enforce_causality = 0
+    update_profile = False
 
 initial_profile_from_first_subintegration = False
 
@@ -199,7 +201,7 @@ min_step_factor = 0.5
 for i in range(max_iterations + 1):
     CS.nopt += 1
 
-    if i < update_profile_every_iteration_until or ( (update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0 ):
+    if update_profile and (i < update_profile_every_iteration_until or ( (update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0 )):
         print("cycfista: update profile")
         CS.updateProfile()
 
