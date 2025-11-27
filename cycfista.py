@@ -44,22 +44,26 @@ p.add_argument(
     help="maximum number of iterations",
 )
 
+p.add_argument(
+    "--alpha",
+    type=float,
+    default=1e-6,
+    help="initial step size, alpha = 1 / Lipschitz constant",
+)
+
 args, files = p.parse_known_args()
 init = args.init
 init_profile = args.init_profile
 
 max_iterations = args.iter
 
-CS = pycyc.CyclicSolver(zap_edges=args.zap)
+# should probably estimate this as described in Oslowski & Walker (2023)
+alpha_init = args.alpha
 
-# initial value of alpha
-alpha_init = 1e-9
+CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
 alpha_history = 10
-
-# should probably estimate this as described in Oslowski & Walker (2023)
-alpha_init = 1e-6
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
