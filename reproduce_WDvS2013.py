@@ -60,7 +60,7 @@ with open("filters_0.pkl", "wb") as fh:
 with open("profiles_0.pkl", "wb") as fh:
     pickle.dump(intrinsic_profiles[0], fh)
 
-# three more passes through 20 minutes (init_nspec 15 sec subints):
+# three more passes through first init_nspec subints:
 for ipass in range(1, 4):
     CS.pp_intrinsic = np.zeros((CS.nphase))
     for isub in range(0, init_nspec):
@@ -75,31 +75,32 @@ with open(f"filters_{ipass}.pkl", "wb") as fh:
 with open(f"profiles_{ipass}.pkl", "wb") as fh:
     pickle.dump(intrinsic_profiles[ipass], fh)
 
+filters_full = None
+intrinsic_profiles_full = None
+
 # Now pass through all the data with intrinsic profile so far (output cleared)
 
 CS.pp_intrinsic = np.zeros((CS.nphase))
 for isub in range(0, CS.nspec):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
-filters_full = {}
-intrinsic_profiles_full = {}
+CS.unload_solution("l_bfgs_b_best.fits")
 
-ipass = 0
-filters_full[ipass] = copy.deepcopy(CS.optimized_filters)
-intrinsic_profiles_full[ipass] = copy.deepcopy(CS.intrinsic_profiles)
+filters_full = copy.deepcopy(CS.optimized_filters)
+intrinsic_profiles_full = copy.deepcopy(CS.intrinsic_profiles)
 
-with open(f"filters_full_{ipass}.pkl", "wb") as fh:
-    pickle.dump(filters_full[ipass], fh)
+with open(f"filters_full.pkl", "wb") as fh:
+    pickle.dump(filters_full, fh)
 
-with open(f"profiles_full_{ipass}.pkl", "wb") as fh:
-    pickle.dump(intrinsic_profiles_full[ipass], fh)
+with open(f"profiles_full.pkl", "wb") as fh:
+    pickle.dump(intrinsic_profiles_full, fh)
 
 # Reproduce Figure 2 of WDvS13
 plot_intrinsic_vs_observed(CS, CS.pp_scattered, savefig='intrinsic_vs_observed.png')
 plt.clf()
 
 # Reproduce the bottom panel of Figure 7 of WDvS13
-avg=np.sum(abs(ifft(filters_full[0],axis=1)),axis=0)
+avg=np.sum(abs(ifft(filters_full,axis=1)),axis=0)
 plt.plot(np.log(avg))
 plt.savefig('impulse.png')
 plt.clf()

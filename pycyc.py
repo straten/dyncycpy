@@ -358,11 +358,9 @@ class CyclicSolver:
         Load initial guess for intrinsic profile from file
         """
 
-        print(f"load_initial_profile filename={filename}")
         ar = psrchive.Archive_load(filename)
         assert(ar.get_nsubint() >= 1)
         tmp = ar.get_Profile(0, 0, 0).get_amps()
-        print(f"load_initial_profile loaded profile={tmp}")
         self.pp_intrinsic = np.copy(tmp)
         tmp = phase2harm(self.pp_intrinsic)
         self.intrinsic_ph = np.zeros((1, np.size(tmp)), dtype=np.complex128)
@@ -861,7 +859,6 @@ class CyclicSolver:
         if (self.intrinsic_ph is None) or (self.intrinsic_ph.shape != (self.npol, self.nharm)):
             self.intrinsic_ph = np.zeros((self.npol, self.nharm), dtype=np.complex128)
         else:
-            print("updateProfile resetting intrinsic_ph to zero")
             self.intrinsic_ph.fill(0.0)
 
         if self.cs_norm is None:
@@ -1441,6 +1438,10 @@ class CyclicSolver:
 
         hf = match_two_filters(_hf_prev, hf)
         self.optimized_filters[isub, :] = hf
+
+        ht = freq2time(hf)
+        self.h_time_delay[isub, :] = ht
+
         self.hf_prev = hf.copy()
 
         update_gain = False
