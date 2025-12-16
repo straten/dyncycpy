@@ -98,6 +98,7 @@ import concurrent.futures
 import os
 import pickle
 import sys
+import fista
 
 import numpy as np
 import scipy
@@ -169,6 +170,9 @@ class CyclicSolver:
         self.nthread = 1
 
         # modelling options
+
+        # By default, use the L-BFGS-B optimizer from scipy.optimize to perform the inner loop optimization
+        self.loop_l_bfgs = False
 
         # By default, use the integrated pulse profile for all sub-integrations
         self.use_integrated_profile = True
@@ -971,9 +975,19 @@ class CyclicSolver:
         return self.merit
 
     def evaluate(self, wavefield):
-        self.updateWavefield(wavefield)
-        return self.merit, np.copy(self.h_doppler_delay_grad)
 
+        if (wavefield.shape == self.h_doppler_delay.shape):
+            # wavefield is a 2-D h(omega,tau) vector
+            self.updateWavefield(wavefield)
+            return self.merit, np.copy(self.h_doppler_delay_grad)
+        else:
+            # wavefield is a 1-D h(tau) vector
+            ht = wavefield
+            self.merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, self.ph_ref, self.cs, 1.0)
+            self.nfree_parameters = _nterm
+            self.nterm_merit = _nterm
+            return self.merit, grad
+        
     def get_cs(self, ps):
         # cast single-precision input data to double-precision before computing the Fourier transform
         tmp = np.zeros(ps.shape, dtype=np.float64)
@@ -1002,11 +1016,13 @@ class CyclicSolver:
         return cs, norm
 
     def normalize(self, h_doppler_delay):
-        if self.conserve_wavefield_energy:
-            total_power = np.sum(np.abs(h_doppler_delay) ** 2)
-            factor = np.sqrt(self.expected_power / total_power)
-            h_doppler_delay *= factor
-            # print(f'normalize factor={factor}')
+
+        if (h_doppler_delay.shape == self.h_doppler_delay.shape):
+            if self.conserve_wavefield_energy:
+                total_power = np.sum(np.abs(h_doppler_delay) ** 2)
+                factor = np.sqrt(self.expected_power / total_power)
+                h_doppler_delay *= factor
+                # print(f'normalize factor={factor}')
         return h_doppler_delay
 
     def updateWavefieldSubint(self, ipol, isub):
@@ -1396,38 +1412,50 @@ class CyclicSolver:
         ht = ht * phasor / np.abs(phasor)
 
         dim0 = 2 * self.nlag - 1
-
-        var, nvalid = self.cyclic_variance(cs)
-        self.noise = np.sqrt(var)
-        dof = nvalid - dim0 - self.nphase
-        print("variance : %.5e" % var)
-        print("nsamp    : %.5e" % nvalid)
-        print("dof      : %.5e" % dof)
-        print("min obj  : %.5e" % (dof * var))
-
-        tol = 1e-1 / (dof)
-        print("ftol     : %.5e" % (tol))
-        scipytol = (
-            tolfact * tol / 2.220e-16
-        )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
-        print("scipytol : %.5e" % scipytol)
-        x0 = get_params(ht, rindex)
-
-        self.niter = 0
-        self.objval = []
-
         self.cs = cs
-        x, f, d = scipy.optimize.fmin_l_bfgs_b(
-            cyclic_merit_lag,
-            x0,
-            m=20,
-            args=(self,),
-            iprint=iprint,
-            maxfun=maxfun,
-            factr=scipytol,
-            bounds=bounds,
-        )
-        ht = get_ht(x, rindex)
+
+        if self.loop_l_bfgs:
+            print("Using L-BFGS-B optimization")
+            var, nvalid = self.cyclic_variance(cs)
+            self.noise = np.sqrt(var)
+            dof = nvalid - dim0 - self.nphase
+            print("variance : %.5e" % var)
+            print("nsamp    : %.5e" % nvalid)
+            print("dof      : %.5e" % dof)
+            print("min obj  : %.5e" % (dof * var))
+
+            tol = 1e-1 / (dof)
+            print("ftol     : %.5e" % (tol))
+            scipytol = (
+                tolfact * tol / 2.220e-16
+            )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
+            print("scipytol : %.5e" % scipytol)
+            x0 = get_params(ht, rindex)
+
+            self.niter = 0
+            self.objval = []
+
+            x, f, d = scipy.optimize.fmin_l_bfgs_b(
+                cyclic_merit_lag,
+                x0,
+                m=20,
+                args=(self,),
+                iprint=iprint,
+                maxfun=maxfun,
+                factr=scipytol,
+                bounds=bounds,
+            )
+            ht = get_ht(x, rindex)
+
+        else:
+            print("Using FISTA optimization")
+            self.fista_loop(
+                ht,
+                max_iterations=10, # maxfun,
+                alpha_init=1e-8,
+                alpha_history=5,
+            )
+            
 
         if self.delay_taper is not None:
             ht *= self.delay_taper
@@ -1456,6 +1484,88 @@ class CyclicSolver:
         self.pp_intrinsic += pp
 
         self.nopt += 1
+
+    def fista_loop(self,
+        ht,
+        max_iterations,
+        alpha_init,
+        alpha_history,
+    ):
+        y_n = np.copy(ht)
+        x_n = np.copy(ht)
+        t_n = 1
+
+        alpha = alpha_init
+        L_max = 1/alpha
+        demerits = np.array([])
+        alphas = np.array([])
+        best_merit = np.inf
+        prev_merit = None
+        best_x = np.copy(x_n)
+
+        for i in range(max_iterations + 1):
+
+            x_n, y_n, L, t_n, demerits = fista.take_fista_step(
+                iter=i,
+                func=self,
+                backtrack=False,
+                alpha=alpha,
+                eta=5,
+                y_n=y_n,
+                _lambda=None,
+                delay_for_inf=0, #-int(self.nchan / 2),
+                zero_penalty_coords=np.array([]),
+                fix_phase_value=None,
+                fix_phase_coords=None,
+                fix_support=np.array([]),
+                t_n=t_n,
+                x_n=x_n,
+                demerits=demerits,
+                eps=None,
+            )
+
+            if i == 0 or L > L_max:
+                L_max = L
+
+            reduced_chisq = self.get_reduced_chisq()
+
+            if reduced_chisq < best_merit:
+                best_merit = reduced_chisq
+                best_x = np.copy(x_n)
+            else:
+                print(f"\n** greater than best={best_merit}")
+
+            if prev_merit is None:
+                prev_merit = reduced_chisq
+
+            if reduced_chisq > prev_merit:
+                print("**** bad step")
+
+            really_bad = not np.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
+
+            if really_bad:
+                print("**** really bad step - RESET")
+                t_n = 1
+                y_n[:] = x_n[:] = best_x[:]
+            else:
+                alphas = np.append(alphas, 1.0 / L)
+                prev_merit = reduced_chisq
+
+            if alphas.size == 0:
+                alpha = 1.0 / L  # this should happen only if the first step is bad
+                print(f"alpha init={alpha_init} led to very bad first step.  next alpha={alpha}")
+            elif alpha_history == 0 or alphas.size < alpha_history:
+                alpha = np.min(alphas)
+            else:
+                alpha = np.min(alphas[-alpha_history:])
+
+            if really_bad:
+                alpha *= 0.2
+                print(f"reducing alpha to {alpha}")
+                alphas = np.append(alphas, alpha)
+
+            print(f"{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}", flush=True)
+
 
     def saveResults(self, fbase=None):
         if fbase is None:
@@ -2196,6 +2306,9 @@ def phase2harm(pp, workers=1):
 def match_two_filters(hf1, hf2):
     z = (hf1 * np.conj(hf2)).sum()
     z2 = (hf2 * np.conj(hf2)).sum()  # = np.abs(hf2)**2.sum()
+    zabs = np.abs(z)
+    if zabs == 0:
+        return hf2
     z /= np.abs(z)
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
@@ -2274,9 +2387,10 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     var_noise = delay_noise_power_wavefield(x_power, baseline_threshold)
     shrinkage = np.sqrt(var_noise) * threshold
 
-    # add a small offset to absx to avoid division by zero in next step
-    absx = np.abs(x) + shrinkage * 1e-6
-    out = np.maximum(absx - shrinkage, 0) * x / absx
+    print(f"apply_delay_shrinkage_threshold: min shrinkage={shrinkage.min()} max={shrinkage.max()}")
+
+    absx = np.abs(x)
+    out = safely_divide(np.maximum(absx - shrinkage, 0) * x, absx)
     nonz = np.count_nonzero(out)
     sz = np.size(out)
     print(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
@@ -2287,6 +2401,9 @@ def normalize_profile(ph):
     """
     Normalize harmonic profile such that first harmonic has magnitude 1
     """
+    phabs = np.abs(ph[1])
+    if phabs == 0:
+        return ph
     return ph / np.abs(ph[1])
 
 
@@ -2309,10 +2426,23 @@ def noise_power_wavefield(h_power):
     norm = np.maximum(np.count_nonzero(noise_power), 1)
     return np.sum(noise_power) / norm
 
+def truncated_exponential_mean(threshold):
+    """
+    Expected mean of an exponential distribution when only samples below a threshold are used to estimate it
+    Parameters
+    ----------
+    threshold : float
+        threshold in units of the mean of the exponential distribution
+    Returns
+    -------
+    float
+        expected mean of the truncated exponential distribution, normalized by the true mean
+    """
+    return 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
 
 def delay_noise_power_wavefield(power, threshold):
-    bias = 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
-    # print(f"delay_noise_power_wavefield threshold={threshold} bias={bias}")
+
+    bias = truncated_exponential_mean(threshold)
 
     ndoppler = power.shape[0]
     power.shape[1]
@@ -2328,12 +2458,15 @@ def delay_noise_power_wavefield(power, threshold):
 
     sum_edge = np.sum(edge, axis=0)
     count_edge = np.maximum(np.count_nonzero(edge, axis=0), 1)
-
     masked_delay_power = sum_edge / count_edge
+    
     for i in range(10):
+        # select only values below threshold * current estimate of delay noise power
         masked = np.heaviside(threshold * masked_delay_power - power, 1) * power
+        # sum and count the selected values at each delay
         sum_masked = np.sum(masked, axis=0)
         count_masked = np.maximum(np.count_nonzero(masked, axis=0), 1)
+        # estimate the unbiased mean noise power at each delay
         masked_delay_power = sum_masked / (bias * count_masked)
 
     return masked_delay_power
@@ -2506,6 +2639,10 @@ def cyclic_merit_lag(x, CS):
     The objective function. Computes mean squared merit and gradient
 
     Format is compatible with scipy.optimize
+
+    Args:
+    x: 1D array of real-valued parameters representing the complex-valued time-domain impulse response
+    CS: CyclicSpectrum object containing data and configuration
     """
     print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)

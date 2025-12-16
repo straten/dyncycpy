@@ -8,11 +8,30 @@ from scipy.linalg import norm
 import logger
 
 # from lib import Residual, extract_part_of_array
-from pycyc import CyclicSolver as Residual  # TODO dirty hack
+# from pycyc import CyclicSolver as Residual  # TODO dirty hack
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
 
+def negative_delay_inf(lambda_array):
+    """
+    Sets the latter half of the last dimension of a 1-D or 2-D array to np.inf.
+    """
+    shape = lambda_array.shape
+    ndim = lambda_array.ndim
+
+    if ndim == 1:
+        midpoint = int(shape[0] / 2)
+        lambda_array[midpoint:] = np.inf
+    
+    elif ndim == 2:
+        midpoint = int(shape[1] / 2)
+        lambda_array[:, midpoint:] = np.inf
+
+    else:
+        raise ValueError(f"Unsupported array dimension: {ndim}. Only 1-D and 2-D supported.")
+    
+    return lambda_array
 
 def construct_lambda_matrix(
     shape: list,
@@ -46,8 +65,8 @@ def construct_lambda_matrix(
     if _lambda is None:
         _lambda = 0.0
     lambda_array = np.ones(shape) * _lambda
-    log.debugv(f"Setting λ to infinite at negative delays (axis sized {shape[1]})")  # type: ignore
-    lambda_array[:, int(shape[1] / 2) :] = np.inf
+    log.debugv(f"Setting λ to infinite at negative delays (axis sized {shape})")  # type: ignore
+    lambda_array = negative_delay_inf(lambda_array)
 
     if delay_for_inf < 0:
         if delay_offset:
@@ -203,12 +222,15 @@ def take_fista_step(
     # Estimate minimum L using equation (12) from ow23
     z = np.vdot(x_np1, y_n)
     print(f"take_fista_step: wavefield phase difference={np.angle(z)}")
-    z /= np.abs(z)
-    diff = z * x_np1 - y_n
-    var_diff = np.vdot(diff, diff)
+    zabs = np.abs(z)
+    if zabs != 0:
+        z /= zabs
+        diff = z * x_np1 - y_n
+        var_diff = np.vdot(diff, diff)
 
-    relative_difference = np.sqrt(np.real(var_diff / np.sqrt(np.vdot(x_np1, x_np1) * np.vdot(y_n, y_n))))
-    print(f"take_fista_step: wavefield relative difference={relative_difference}")
+        relative_difference = np.sqrt(np.real(var_diff / np.sqrt(np.vdot(x_np1, x_np1) * np.vdot(y_n, y_n))))
+
+        print(f"take_fista_step: wavefield relative difference={relative_difference}")
 
     # TO-DO compute L/curvature only when the difference is significant
     # if relative_difference > ???
@@ -220,24 +242,24 @@ def take_fista_step(
     if math.isfinite(func_val):
         demerits = np.append(demerits, func_val)
 
-    x_n = x_np1
-    y_n = y_np1
-    t_n = t_np1
-    if eps:
-        if np.abs(func_val - demerits[-2]) < eps:
-            log.info(f"Achieved required precision ({eps}) in iteration {iter}, interrupting.")
-    if np.count_nonzero(x_np1) == 0:
-        log.info("solution brought to zero, stopping")
-    if iter % 50 == 0:
-        log.info(
-            f"in iteration {iter}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
-        )
+        x_n = x_np1
+        y_n = y_np1
+        t_n = t_np1
+        if eps:
+            if np.abs(func_val - demerits[-2]) < eps:
+                log.info(f"Achieved required precision ({eps}) in iteration {iter}, interrupting.")
+        if np.count_nonzero(x_np1) == 0:
+            log.info("solution brought to zero, stopping")
+        if iter % 50 == 0:
+            log.info(
+                f"in iteration {iter}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
+            )
     return x_n, y_n, L_min, t_n, demerits
 
 
 def fista(
     x_0: np.ndarray,
-    func: Residual,
+    func,
     niter: int,
     _lambda: Optional[float] = None,
     alpha: float = -1.0,

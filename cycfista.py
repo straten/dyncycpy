@@ -80,10 +80,10 @@ CS.use_integrated_profile = True
 CS.conserve_wavefield_energy = True
 
 # set cyclic spectra to zero where shifted content is out of band
-CS.pad_cyclic_spectra = False
+CS.pad_cyclic_spectra = True
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 15
+# CS.enforce_causality = 15
 
 # subtract degenerate degrees of freedom from gradient
 # CS.subtract_degenerate_projections = True
@@ -101,8 +101,8 @@ CS.enforce_causality = 15
 # CS.align_frequency_responses = True
 
 # use a delay-dependent threshold to perform shrinkage
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+CS.delay_noise_shrinkage_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
 
 # CS.noise_shrinkage_threshold = 1.0
 

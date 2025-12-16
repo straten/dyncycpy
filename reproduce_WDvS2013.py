@@ -36,7 +36,7 @@ print(f"loading {len(files)} files")
 for file in files:
     CS.load(file)
 
-print(f"computing initial profile from {CS.nspec} sub-integrations")
+print(f"computing initial profile from {CS.nsubint} sub-integrations")
 
 CS.initProfile()
 plt.plot(CS.pp_intrinsic)
