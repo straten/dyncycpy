@@ -13,6 +13,7 @@ import logger
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
 
+
 def negative_delay_inf(lambda_array):
     """
     Sets the latter half of the last dimension of a 1-D or 2-D array to np.inf.
@@ -23,15 +24,16 @@ def negative_delay_inf(lambda_array):
     if ndim == 1:
         midpoint = int(shape[0] / 2)
         lambda_array[midpoint:] = np.inf
-    
+
     elif ndim == 2:
         midpoint = int(shape[1] / 2)
         lambda_array[:, midpoint:] = np.inf
 
     else:
         raise ValueError(f"Unsupported array dimension: {ndim}. Only 1-D and 2-D supported.")
-    
+
     return lambda_array
+
 
 def construct_lambda_matrix(
     shape: list,
@@ -64,23 +66,25 @@ def construct_lambda_matrix(
 
     if _lambda is None:
         _lambda = 0.0
+    else:
+        log.debugv(f"Setting λ to infinite at negative delays (axis sized {shape})")  # type: ignore
+        lambda_array = negative_delay_inf(lambda_array)
+
     lambda_array = np.ones(shape) * _lambda
-    log.debugv(f"Setting λ to infinite at negative delays (axis sized {shape})")  # type: ignore
-    lambda_array = negative_delay_inf(lambda_array)
 
     if delay_for_inf < 0:
         if delay_offset:
             delay_offset = 1
         else:
             delay_offset = 0
-        log.debugv(f"Setting λ to finite values for delays above {delay_for_inf}")  # type: ignore
+        print(f"Setting λ to finite values for delays above {delay_for_inf}")  # type: ignore
 
         _, delay = np.meshgrid(np.arange(shape[0]), -np.arange(-delay_for_inf) - delay_offset)
         penalty = np.ones_like(delay).T * _lambda  # (a * _lambda * delay * delay + _lambda).T
         lambda_array[:, delay_for_inf + int(shape[1]) : int(shape[1])] = penalty[:, ::-1]
 
     if len(zero_penalty_coords) > 0:
-        log.debugv(f"Setting λ to zero at {len(zero_penalty_coords)} chosen coordinates")  # type: ignore
+        print(f"Setting λ to zero at {len(zero_penalty_coords)} chosen coordinates")  # type: ignore
         for coord in zero_penalty_coords:
             lambda_array[coord[0], coord[1]] = 0.0
     return lambda_array
@@ -120,6 +124,8 @@ def complex_prox_l1(x: np.ndarray, _lambda: np.ndarray, L: float):
         msg = "complex_prox_l1: λ/L value too large, no elements left"
         log.error(msg)
         raise ValueError(msg)
+    
+    print(f"complex_prox_l1: applied soft thresholding with λ/L={_lambda/L}, resulting in {np.count_nonzero(out)} non-zero elements")  # type: ignore
     return out
 
 
@@ -157,74 +163,88 @@ def rms_wavefield(h):
     variance = np.mean(np.abs(noise) ** 2)
     return np.sqrt(variance)
 
+class FISTA:
+    def __init__(
+        self,
+    ):
+        self._lambda = None
+        self.alpha = 1e-6
+        self.delay_for_inf = 0
+        self.zero_penalty_coords = np.array([])
+        self.eps = None
+        self.backtrack = False
+        self.eta = 5.0
+        self.control_indices = []
+        self.fix_phase_value = None
+        self.fix_phase_coords = None
+        self.fix_support = np.array([])
+        self.demerits = np.array([])
+        self.prev_grad = None
+        self.verbose=False
+        self.very_verbose=False
 
-def take_fista_step(
-    iter,
-    func,
-    backtrack,
-    alpha,
-    eta,
-    y_n,
-    _lambda,
-    delay_for_inf,
-    zero_penalty_coords,
-    fix_phase_value,
-    fix_phase_coords,
-    fix_support,
-    t_n,
-    x_n,
-    demerits,
-    eps,
-):
-    # calculate the updated model, either with backtracking, or using fixed alpha
-    # Apply proximal operators (in the case of backtracking, the operators are applied within the backtracking)
-    if backtrack:
-        L, x_np1 = backtrack_B3(
-            func.get_func_val,
-            func.get_derivative,
-            alpha,
-            eta,
-            y_n,
-            _lambda,
-            delay_for_inf=delay_for_inf,
-            zero_penalty_coords=zero_penalty_coords,
-            fix_phase_value=fix_phase_value,
-            fix_phase_coords=fix_phase_coords,
-            fix_support=fix_support,
-        )
-        alpha = 1.0 / L
-    else:
-        # Need to define L when not backtracking since we're returning it:
-        L = 1.0 / alpha
+    def take_fista_step(
+        self,
+        iter,
+        func,
+        y_n,
+        t_n,
+        x_n,
+    ):
+        # calculate the updated model, either with backtracking, or using fixed alpha
+        # Apply proximal operators (in the case of backtracking, the operators are applied within the backtracking)
+        if self.backtrack:
+            L, x_np1 = backtrack_B3(
+                func.get_func_val,
+                func.get_derivative,
+                self.alpha,
+                self.eta,
+                y_n,
+                self._lambda,
+                delay_for_inf=self.delay_for_inf,
+                zero_penalty_coords=self.zero_penalty_coords,
+                fix_phase_value=self.fix_phase_value,
+                fix_phase_coords=self.fix_phase_coords,
+                fix_support=self.fix_support,
+            )
+            self.alpha = 1.0 / L
+        else:
+            # Need to define L when not backtracking since we're returning it:
+            L = 1.0 / self.alpha
 
-        y_val, y_grad = func.evaluate(y_n)
-        x_np1 = func.normalize(y_n - alpha * y_grad)
-        x_np1 = apply_prox_operators(
-            _lambda,
-            delay_for_inf,
-            fix_phase_value,
-            fix_phase_coords,
-            fix_support,
-            zero_penalty_coords,
-            x_np1,
-            alpha,
-        )
+            y_val, y_grad = func.evaluate(y_n)
+            x_np1 = func.normalize(y_n - self.alpha * y_grad)
+            x_np1 = apply_prox_operators(
+                self._lambda,
+                self.delay_for_inf,
+                self.fix_phase_value,
+                self.fix_phase_coords,
+                self.fix_support,
+                self.zero_penalty_coords,
+                x_np1,
+                self.alpha,
+            )
 
-    t_np1 = (1 + np.sqrt(1 + 4 * np.power(t_n, 2))) / 2.0
-    y_np1 = func.normalize(x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n))
+        t_np1 = (1 + np.sqrt(1 + 4 * np.power(t_n, 2))) / 2.0
+        y_np1 = func.normalize(x_np1 + (t_n - 1.0) / t_np1 * (x_np1 - x_n))
 
-    func_val, func_grad = func.evaluate(x_np1)
+        if self.prev_grad is None:
+            self.prev_grad = np.copy(y_grad)
+            self.prev_val = np.copy(y_val)
+            y_val, y_grad = func.evaluate(x_np1)
 
-    z = np.vdot(x_np1, x_n)
-    # print(f'take_fista_step: x_n x_np1 difference phase={np.angle(z)}')
-    # print(f'take_fista_step: M(y_n)={y_val} Merit(x_np1)={func_val}')
+        z = np.vdot(x_np1, x_n)
+        # print(f'take_fista_step: x_n x_np1 difference phase={np.angle(z)}')
+        # print(f'take_fista_step: M(y_n)={y_val} Merit(x_np1)={func_val}')
 
-    # Estimate minimum L using equation (12) from ow23
-    z = np.vdot(x_np1, y_n)
-    print(f"take_fista_step: wavefield phase difference={np.angle(z)}")
-    zabs = np.abs(z)
-    if zabs != 0:
-        z /= zabs
+        z = np.vdot(x_np1, y_n)
+        print(f"take_fista_step: wavefield phase difference={np.angle(z)}")
+        zabs = np.abs(z)
+        if zabs != 0:
+            z /= zabs
+        else:
+            z = 1.0
+
         diff = z * x_np1 - y_n
         var_diff = np.vdot(diff, diff)
 
@@ -232,137 +252,115 @@ def take_fista_step(
 
         print(f"take_fista_step: wavefield relative difference={relative_difference}")
 
-    # TO-DO compute L/curvature only when the difference is significant
-    # if relative_difference > ???
-    z = np.vdot(y_grad, func_grad)
-    print(f"take_fista_step: wavefield gradient phase difference={np.angle(z)}")
-    gdiff = y_grad - func_grad
-    L_min = np.sqrt(np.real(np.vdot(gdiff, gdiff) / var_diff))
+        if not self.backtrack:
+            # Estimate minimum L using equation (12) from ow23
+            # TO-DO compute L/curvature only when the difference is significant
+            # if relative_difference > ???
+            z = np.vdot(y_grad, self.prev_grad)
+            print(f"take_fista_step: wavefield gradient phase difference={np.angle(z)}")
+            gdiff = y_grad - self.prev_grad
+            L = np.sqrt(np.real(np.vdot(gdiff, gdiff) / var_diff))
+            self.alpha = 1.0 / L
 
-    if math.isfinite(func_val):
-        demerits = np.append(demerits, func_val)
+        if math.isfinite(y_val):
+            self.demerits = np.append(self.demerits, y_val)
 
-        x_n = x_np1
-        y_n = y_np1
-        t_n = t_np1
-        if eps:
-            if np.abs(func_val - demerits[-2]) < eps:
-                log.info(f"Achieved required precision ({eps}) in iteration {iter}, interrupting.")
-        if np.count_nonzero(x_np1) == 0:
-            log.info("solution brought to zero, stopping")
-        if iter % 50 == 0:
-            log.info(
-                f"in iteration {iter}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {demerits[-1]:.3g}"
+            x_n = x_np1
+            y_n = y_np1
+            t_n = t_np1
+
+            self.prev_grad = np.copy(y_grad)
+            self.prev_val = np.copy(y_val)
+
+            if self.eps:
+                if np.abs(y_val - self.prev_val) < self.eps:
+                    log.info(f"Achieved required precision ({self.eps}) in iteration {iter}, interrupting.")
+            if np.count_nonzero(x_np1) == 0:
+                log.info("solution brought to zero, stopping")
+            if iter % 50 == 0:
+                log.info(
+                    f"in iteration {iter}, x_np1 has {np.count_nonzero(x_np1)} non-zero elements with demerit {self.demerits[-1]:.3g}"
+                )
+        return x_n, y_n, L, t_n, relative_difference
+
+
+    def fista(self,
+        x_0: np.ndarray,
+        func,
+        niter: int,
+    ):
+        """
+        x_0: starting point
+        func: function object
+        alpha: step size (used only if get_Lipschitz_constant_grad doesn't return a positive value, niter). Will get overwritten if the residual object returns a positive Lipschitz constant
+
+        _lambda: Use LASSO with _lambda as L1 penalty weight.
+        a, delay_for_inf: Allow negative delays with penalty specified as a*delay^2+_lambda up to delay_for_inf
+        zero_penalty_coords: list of coordinates of pre-approved components for which the penalty should be set to 0
+        fix_support: set zero penalty at these coordinates and infinite elsewhere. This takes precedence over zero_penalty_coords
+
+        eps: stop iterations if the change of the demerit is less than eps
+
+        backtrack: use backtracking to determine the Lipschitz constant>
+        s: initial guess for backtracking
+        eta: multiply Lipschitz guess by this factor during backtracking steps
+
+        control_indices: A list of indices to slice the models to provide a control output for every iterration. Only useful for debugging
+        fix_phase_value: Fix the complex phase of origin component to this value
+        fix_phase_coords: Coordinates of the component at which to fix the phase
+        """
+
+        log.setLevel(logger.DEBUGV if self.very_verbose else logging.INFO)
+        log.setLevel(logging.DEBUG if self.verbose else logging.INFO)
+
+        log.info(f"Running FISTA from an initial guess with {len(np.transpose(np.nonzero(x_0)))} components (approved: {len(zero_penalty_coords)} and fixed support {len(fix_support)})")  # type: ignore
+        if len(self.fix_support) > 0:
+            log.info(f"Fixing support")
+        x_tmp = np.array([[]])
+        model = x_tmp
+
+        n_comp = np.array([])
+        n_comp_zero_penalty = np.array([])
+
+        # L_k = 1 / alpha
+        if func.get_Lipschitz_constant_grad() > 0:
+            self.alpha = 1.0 / func.get_Lipschitz_constant_grad()
+
+        t_n = 1.0
+
+        x_n = x_0
+        # x_np1 = x_0
+        y_n = x_0
+
+        for i in range(niter):
+            if (i + 1) % 50 == 0:
+                log.debug(f"Completed {i+1} iterations")
+            else:
+                log.debugv(f"Completed {i+1} iterations")
+            x_n, y_n, L, t_n, diff = self.take_fista_step(
+                i,
+                func,
+                y_n,
+                t_n,
+                x_n
             )
-    return x_n, y_n, L_min, t_n, demerits
 
+            alpha = 1 / L
+            n_comp = np.append(n_comp, np.count_nonzero(x_n))
+            n_comp_zero_penalty_tmp = len(self.zero_penalty_coords)
+            if n_comp_zero_penalty_tmp == 0 and len(self.fix_support) > 0:
+                n_comp_zero_penalty_tmp = len(self.fix_support)
+            n_comp_zero_penalty = np.append(n_comp_zero_penalty, n_comp_zero_penalty_tmp)
 
-def fista(
-    x_0: np.ndarray,
-    func,
-    niter: int,
-    _lambda: Optional[float] = None,
-    alpha: float = -1.0,
-    delay_for_inf: Optional[int] = 0,
-    zero_penalty_coords: np.ndarray = np.array([]),
-    eps: Optional[float] = None,
-    backtrack: Optional[bool] = False,
-    s: Optional[float] = 5.0,
-    eta: Optional[float] = 1.1,
-    control_indices: Optional[list] = [],
-    fix_phase_value: Optional[float] = None,
-    fix_phase_coords: Optional[list] = None,
-    fix_support: np.ndarray = np.array([]),
-    verbose=False,
-    very_verbose=False,
-):
-    """
-    x_0: starting point
-    func: function object
-    alpha: step size (used only if get_Lipschitz_constant_grad doesn't return a positive value, niter). Will get overwritten if the residual object returns a positive Lipschitz constant
-
-    _lambda: Use LASSO with _lambda as L1 penalty weight.
-    a, delay_for_inf: Allow negative delays with penalty specified as a*delay^2+_lambda up to delay_for_inf
-    zero_penalty_coords: list of coordinates of pre-approved components for which the penalty should be set to 0
-    fix_support: set zero penalty at these coordinates and infinite elsewhere. This takes precedence over zero_penalty_coords
-
-    eps: stop iterations if the change of the demerit is less than eps
-
-    backtrack: use backtracking to determine the Lipschitz constant>
-    s: initial guess for backtracking
-    eta: multiply Lipschitz guess by this factor during backtracking steps
-
-    control_indices: A list of indices to slice the models to provide a control output for every iterration. Only useful for debugging
-    fix_phase_value: Fix the complex phase of origin component to this value
-    fix_phase_coords: Coordinates of the component at which to fix the phase
-    """
-
-    log.setLevel(logger.DEBUGV if very_verbose else logging.INFO)
-    log.setLevel(logging.DEBUG if verbose else logging.INFO)
-
-    log.info(f"Running FISTA from an initial guess with {len(np.transpose(np.nonzero(x_0)))} components (approved: {len(zero_penalty_coords)} and fixed support {len(fix_support)})")  # type: ignore
-    if len(fix_support) > 0:
-        log.info(f"Fixing support")
-    x_tmp = np.array([[]])
-    model = x_tmp
-    demerits = np.array([])
-
-    n_comp = np.array([])
-    n_comp_zero_penalty = np.array([])
-
-    # L_k = 1 / alpha
-    if func.get_Lipschitz_constant_grad() > 0:
-        alpha = 1.0 / func.get_Lipschitz_constant_grad()
-
-    t_n = 1.0
-
-    x_n = x_0
-    # x_np1 = x_0
-    y_n = x_0
-
-    for i in range(niter):
-        if (i + 1) % 50 == 0:
-            log.debug(f"Completed {i+1} iterations")
+        if self.control_indices:
+            model = model.reshape(len(demerits) + 1, len(self.control_indices))
         else:
-            log.debugv(f"Completed {i+1} iterations")
-        x_n, y_n, L, t_n, model, demerits = take_fista_step(
-            i,
-            func,
-            backtrack,
-            alpha,
-            s,
-            eta,
-            y_n,
-            _lambda,
-            delay_for_inf,
-            zero_penalty_coords,
-            fix_phase_value,
-            fix_phase_coords,
-            fix_support,
-            t_n,
-            x_n,
-            demerits,
-            model,
-            control_indices,
-            eps,
-        )
+            model = x_n
+        demerits = np.real_if_close(demerits)
 
-        alpha = 1 / L
-        n_comp = np.append(n_comp, np.count_nonzero(x_n))
-        n_comp_zero_penalty_tmp = len(zero_penalty_coords)
-        if n_comp_zero_penalty_tmp == 0 and len(fix_support) > 0:
-            n_comp_zero_penalty_tmp = len(fix_support)
-        n_comp_zero_penalty = np.append(n_comp_zero_penalty, n_comp_zero_penalty_tmp)
+        log.info(f"Arrived at model with {np.count_nonzero(model)} components/ {demerits[-1]:.3g} after {i+1} iterations")  # type: ignore
 
-    if control_indices:
-        model = model.reshape(len(demerits) + 1, len(control_indices))
-    else:
-        model = x_n
-    demerits = np.real_if_close(demerits)
-
-    log.info(f"Arrived at model with {np.count_nonzero(model)} components/ {demerits[-1]:.3g} after {i+1} iterations")  # type: ignore
-
-    return model, demerits, n_comp, n_comp_zero_penalty, L
+        return model, demerits, n_comp, n_comp_zero_penalty, L
 
 
 def quad_approx(func, deriv, L, x, y):
