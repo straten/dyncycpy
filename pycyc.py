@@ -98,7 +98,6 @@ import concurrent.futures
 import os
 import pickle
 import sys
-import fista
 
 import numpy as np
 import scipy
@@ -111,6 +110,7 @@ from scipy.optimize import minimize
 from scipy.signal import fftconvolve
 from scipy.signal.windows import kaiser
 
+import fista
 from plotting import plot_Doppler_vs_delay
 
 
@@ -172,7 +172,7 @@ class CyclicSolver:
         # modelling options
 
         # By default, use the L-BFGS-B optimizer from scipy.optimize to perform the inner loop optimization
-        self.loop_l_bfgs = False
+        self.loop_l_bfgs = True
 
         # By default, use the integrated pulse profile for all sub-integrations
         self.use_integrated_profile = True
@@ -356,21 +356,19 @@ class CyclicSolver:
         self.load_initial_profile(filename)
         ar = None
 
-
     def load_initial_profile(self, filename):
         """
         Load initial guess for intrinsic profile from file
         """
 
         ar = psrchive.Archive_load(filename)
-        assert(ar.get_nsubint() >= 1)
+        assert ar.get_nsubint() >= 1
         tmp = ar.get_Profile(0, 0, 0).get_amps()
         self.pp_intrinsic = np.copy(tmp)
         tmp = phase2harm(self.pp_intrinsic)
         self.intrinsic_ph = np.zeros((1, np.size(tmp)), dtype=np.complex128)
-        self.intrinsic_ph[0,:] = tmp[None,:]
+        self.intrinsic_ph[0, :] = tmp[None, :]
         ar = None
-
 
     def load(self, filename):
         """
@@ -969,25 +967,26 @@ class CyclicSolver:
         self.updateWavefield(self.h_doppler_delay)
 
     def get_derivative(self, wavefield):
-        return self.h_doppler_delay_grad
+        merit, grad = self.evaluate(wavefield)
+        return grad
 
     def get_func_val(self, wavefield):
-        return self.merit
-
+        merit, grad = self.evaluate(wavefield)
+        return merit
+    
     def evaluate(self, wavefield):
-
-        if (wavefield.shape == self.h_doppler_delay.shape):
+        if wavefield.shape == self.h_doppler_delay.shape:
             # wavefield is a 2-D h(omega,tau) vector
             self.updateWavefield(wavefield)
             return self.merit, np.copy(self.h_doppler_delay_grad)
         else:
             # wavefield is a 1-D h(tau) vector
             ht = wavefield
-            self.merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, self.ph_ref, self.cs, 1.0)
+            self.merit, self.last_grad, _nterm = complex_cyclic_merit_lag(ht, self, self.ph_ref, self.cs, 1.0)
             self.nfree_parameters = _nterm
             self.nterm_merit = _nterm
-            return self.merit, grad
-        
+            return self.merit, self.last_grad
+
     def get_cs(self, ps):
         # cast single-precision input data to double-precision before computing the Fourier transform
         tmp = np.zeros(ps.shape, dtype=np.float64)
@@ -1016,8 +1015,7 @@ class CyclicSolver:
         return cs, norm
 
     def normalize(self, h_doppler_delay):
-
-        if (h_doppler_delay.shape == self.h_doppler_delay.shape):
+        if h_doppler_delay.shape == self.h_doppler_delay.shape:
             if self.conserve_wavefield_energy:
                 total_power = np.sum(np.abs(h_doppler_delay) ** 2)
                 factor = np.sqrt(self.expected_power / total_power)
@@ -1113,7 +1111,7 @@ class CyclicSolver:
 
         if self.enforce_causality:
             half_nchan = self.nchan // 2
-            self.h_time_delay_grad[:,half_nchan:] = 0
+            self.h_time_delay_grad[:, half_nchan:] = 0
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -1138,7 +1136,7 @@ class CyclicSolver:
                     print("stopping zap_gradient_harmonics search")
                     break
 
-                for jdx in range(idx+1,self.zap_gradient_harmonics):
+                for jdx in range(idx + 1, self.zap_gradient_harmonics):
                     jlargest = largest[jdx]
                     print(f"{jdx=} power at {jlargest} = {grad_power[jlargest]}")
                     if grad_power[jlargest] > 1e-6 * max_power:
@@ -1152,7 +1150,6 @@ class CyclicSolver:
                             self.h_doppler_delay_grad[x, y] = 0
                             x += x_offset
                             y += y_offset
-
 
         if dumps:
             with open("h_doppler_delay_grad.pkl", "wb") as fh:
@@ -1231,7 +1228,6 @@ class CyclicSolver:
         return ph, gain, ph_numer, ph_denom
 
     def unload_solution(self, filename):
-
         arch = psrchive.Archive_new_Archive("PSRFITS")
 
         # use the first file and all of its metadata to create a new archive
@@ -1272,7 +1268,7 @@ class CyclicSolver:
         for subint in arch:
             for ipol in range(self.npol):
                 for ichan in range(nchan):
-                    prof = subint.get_Profile(ipol,ichan)
+                    prof = subint.get_Profile(ipol, ichan)
                     prof.get_amps()[:] = self.pp_intrinsic
 
         print("unload_solution writing to", filename)
@@ -1286,7 +1282,7 @@ class CyclicSolver:
         make_plots=False,
         maxfun=1000,
         tolfact=1,
-        iprint=1,
+        iprint=0,
         plotdir=None,
         maxneg=None,
         maxlen=None,
@@ -1350,7 +1346,15 @@ class CyclicSolver:
 
         self.dynamic_spectrum[isub, :] = np.real(cs[:, 0])
 
-        self.ph_ref = phase2harm(self.pp_intrinsic)
+        if self.use_integrated_profile or self.nopt == 0:
+            print(f"initializing profile from average profile (nopt={self.nopt})")
+            self.ph_ref = phase2harm(self.pp_intrinsic)
+        else:
+            print(f"initializing profile from subint {isub} (nopt={self.nopt})")
+            self.ph_ref = phase2harm(self.intrinsic_profiles[isub,0,:])
+
+        print(f"initial profile dimensions: {self.ph_ref.shape}")
+
         self.ph_ref = normalize_profile(self.ph_ref)
 
         if self.exclude_DC:
@@ -1411,23 +1415,26 @@ class CyclicSolver:
         phasor = np.conj(ht[rindex])
         ht = ht * phasor / np.abs(phasor)
 
-        dim0 = 2 * self.nlag - 1
         self.cs = cs
 
+        var, nvalid = self.cyclic_variance(cs)
+
+        dim0 = 2 * self.nlag - 1
+        dof = nvalid - dim0 - self.nphase
+
+        tol = 1e-1 * tolfact / (dof)
+        print("ftol     : %.5e" % (tol))
+        
         if self.loop_l_bfgs:
             print("Using L-BFGS-B optimization")
-            var, nvalid = self.cyclic_variance(cs)
             self.noise = np.sqrt(var)
-            dof = nvalid - dim0 - self.nphase
             print("variance : %.5e" % var)
             print("nsamp    : %.5e" % nvalid)
             print("dof      : %.5e" % dof)
             print("min obj  : %.5e" % (dof * var))
 
-            tol = 1e-1 / (dof)
-            print("ftol     : %.5e" % (tol))
             scipytol = (
-                tolfact * tol / 2.220e-16
+                tol / 2.220e-16
             )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
             print("scipytol : %.5e" % scipytol)
             x0 = get_params(ht, rindex)
@@ -1440,7 +1447,7 @@ class CyclicSolver:
                 x0,
                 m=20,
                 args=(self,),
-                iprint=iprint,
+                iprint=0,
                 maxfun=maxfun,
                 factr=scipytol,
                 bounds=bounds,
@@ -1449,13 +1456,12 @@ class CyclicSolver:
 
         else:
             print("Using FISTA optimization")
-            self.fista_loop(
+            ht = self.fista_loop(
                 ht,
-                max_iterations=10, # maxfun,
-                alpha_init=1e-8,
-                alpha_history=5,
+                convergence_threshold=tol,
+                alpha_init=1e-6,
+                alpha_history=3,
             )
-            
 
         if self.delay_taper is not None:
             ht *= self.delay_taper
@@ -1480,14 +1486,15 @@ class CyclicSolver:
 
         pp = self.harm2phase(ph)
 
-        self.intrinsic_profiles[isub, :] = pp
+        self.intrinsic_profiles[isub, 0, :] = pp
         self.pp_intrinsic += pp
 
         self.nopt += 1
 
-    def fista_loop(self,
+    def fista_loop(
+        self,
         ht,
-        max_iterations,
+        convergence_threshold,
         alpha_init,
         alpha_history,
     ):
@@ -1495,33 +1502,28 @@ class CyclicSolver:
         x_n = np.copy(ht)
         t_n = 1
 
-        alpha = alpha_init
-        L_max = 1/alpha
-        demerits = np.array([])
+        FS = fista.FISTA()
+        FS.alpha = alpha_init
+        L_max = 1 / alpha_init
+
         alphas = np.array([])
         best_merit = np.inf
         prev_merit = None
         best_x = np.copy(x_n)
 
-        for i in range(max_iterations + 1):
+        improvement = 1
+        i = 0
+        bad_step_count = 0
 
-            x_n, y_n, L, t_n, demerits = fista.take_fista_step(
+        while improvement > convergence_threshold:
+
+            print(f"\nFISTA iteration {i}")
+            x_n, y_n, L, t_n, diff = FS.take_fista_step(
                 iter=i,
                 func=self,
-                backtrack=False,
-                alpha=alpha,
-                eta=5,
                 y_n=y_n,
-                _lambda=None,
-                delay_for_inf=0, #-int(self.nchan / 2),
-                zero_penalty_coords=np.array([]),
-                fix_phase_value=None,
-                fix_phase_coords=None,
-                fix_support=np.array([]),
                 t_n=t_n,
                 x_n=x_n,
-                demerits=demerits,
-                eps=None,
             )
 
             if i == 0 or L > L_max:
@@ -1530,6 +1532,9 @@ class CyclicSolver:
             reduced_chisq = self.get_reduced_chisq()
 
             if reduced_chisq < best_merit:
+                if best_merit < np.inf:
+                    improvement = abs(best_merit - reduced_chisq) / best_merit
+                    print(f"** improvement={improvement:.2e} threshold={convergence_threshold:.5e}")
                 best_merit = reduced_chisq
                 best_x = np.copy(x_n)
             else:
@@ -1540,14 +1545,17 @@ class CyclicSolver:
 
             if reduced_chisq > prev_merit:
                 print("**** bad step")
+                bad_step_count += 1
+            else:
+                bad_step_count = 0
 
-            really_bad = not np.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
+            really_bad = not np.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit or bad_step_count > 2
 
             if really_bad:
-                print("**** really bad step - RESET")
+                print("**** really bad step or too many bad steps - RESET")
                 t_n = 1
                 y_n[:] = x_n[:] = best_x[:]
-            else:
+            elif L > 0:
                 alphas = np.append(alphas, 1.0 / L)
                 prev_merit = reduced_chisq
 
@@ -1564,8 +1572,16 @@ class CyclicSolver:
                 print(f"reducing alpha to {alpha}")
                 alphas = np.append(alphas, alpha)
 
-            print(f"{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}", flush=True)
+            FS.alpha = alpha
 
+            print(
+                f"{i:03d} demerit={reduced_chisq:.5e} alpha={alpha:.5e} last={1.0/L:.5e} min={1.0/L_max:.5e} t_n={t_n}",
+                flush=True,
+            )
+
+            i = i + 1
+
+        return x_n
 
     def saveResults(self, fbase=None):
         if fbase is None:
@@ -1582,7 +1598,7 @@ class CyclicSolver:
             iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq
         )  # highest harmonic
 
-        var = (np.abs(cs[imin:imax, ih-1]) ** 2).sum()
+        var = (np.abs(cs[imin:imax, ih - 1]) ** 2).sum()
         nvalid = imax - imin
         var = var / nvalid
 
@@ -2426,6 +2442,7 @@ def noise_power_wavefield(h_power):
     norm = np.maximum(np.count_nonzero(noise_power), 1)
     return np.sum(noise_power) / norm
 
+
 def truncated_exponential_mean(threshold):
     """
     Expected mean of an exponential distribution when only samples below a threshold are used to estimate it
@@ -2440,8 +2457,8 @@ def truncated_exponential_mean(threshold):
     """
     return 1.0 - threshold * np.exp(-threshold) / (1.0 - np.exp(-threshold))
 
-def delay_noise_power_wavefield(power, threshold):
 
+def delay_noise_power_wavefield(power, threshold):
     bias = truncated_exponential_mean(threshold)
 
     ndoppler = power.shape[0]
@@ -2459,7 +2476,7 @@ def delay_noise_power_wavefield(power, threshold):
     sum_edge = np.sum(edge, axis=0)
     count_edge = np.maximum(np.count_nonzero(edge, axis=0), 1)
     masked_delay_power = sum_edge / count_edge
-    
+
     for i in range(10):
         # select only values below threshold * current estimate of delay noise power
         masked = np.heaviside(threshold * masked_delay_power - power, 1) * power
@@ -2597,7 +2614,7 @@ def make_model_cs(CS, hf, s0):
 
     # force the Nyquist harmonic to be real-valued
     if CS.include_Nyquist:
-        cs[:,nharm-1] = np.abs(cs[:,nharm-1])
+        cs[:, nharm - 1] = np.abs(cs[:, nharm - 1])
 
     if padding:
         cs = cyclic_padding(cs, bw, ref_freq)
@@ -2644,7 +2661,6 @@ def cyclic_merit_lag(x, CS):
     x: 1D array of real-valued parameters representing the complex-valued time-domain impulse response
     CS: CyclicSpectrum object containing data and configuration
     """
-    print("rindex", CS.rindex)
     ht = get_ht(x, CS.rindex)
     merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.ph_ref, CS.cs, 1.0)
     # the objval list keeps track of how the convergence is going
@@ -2655,12 +2671,31 @@ def cyclic_merit_lag(x, CS):
     return merit, grad
 
 
+def assert_power(x, prefix):
+    """
+    Compute the total power in array x and assert that it is finite, non-zero, and not NaN
+    
+    :param x: the array to check
+    :param prefix: the prefix for error messages
+    """
+    power = np.sum(np.abs(x) ** 2)
+    assert not np.isnan(power), f"{prefix} power is NaN"
+    assert np.isfinite(power), f"{prefix} power is infinite"
+    assert power != 0.0, f"{prefix} power is zero"
+
+
 def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
+
     hf = time2freq(ht)
+    assert_power(hf, "complex_cyclic_merit_lag: H(f)")
+    assert_power(s0, "complex_cyclic_merit_lag: intrinsic profile")
+
     cs_model, hfplus, hfminus = make_model_cs(CS, hf, s0)
     cs_model *= gain
 
     if CS.maxharm is not None:
+        if CS.iprint:
+            print(f"complex_cyclic_merit_lag zeroing harmonics > {CS.maxharm}")
         cs_model[:, CS.maxharm + 1 :] = 0.0
 
     extract = cs_model[:, CS.exclude_DC :]
@@ -2669,14 +2704,20 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
     # WDvS13 Equation 19 and eqn:merit_function of appendix
     merit = (np.abs(extract - cs_data[:, CS.exclude_DC :]) ** 2).sum()
 
+    assert not np.isnan(merit), "complex_cyclic_merit_lag: merit is NaN"
+    assert np.isfinite(merit), "complex_cyclic_merit_lag: merit is infinite"
+
     # residual, R = model - data
     residual = cs_model - cs_data
+    assert_power(residual, "complex_cyclic_merit_lag: residual")
 
     if CS.dump_residual:
         P_residual = total_cyclic_power(residual)
         P_model = total_cyclic_power(cs_model)
         P_data = total_cyclic_power(cs_data)
-        print(f"complex_cyclic_merit_lag nharm={residual.shape[1]} power in residual={P_residual} model={P_model} data={P_data}")
+        print(
+            f"complex_cyclic_merit_lag nharm={residual.shape[1]} power in residual={P_residual} model={P_model} data={P_data}"
+        )
         filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
         with open(filename, "wb") as fh:
             pickle.dump(residual, fh)
@@ -2708,9 +2749,10 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
         )
 
     grad = grad_sum1 + grad_sum2
+    assert_power(grad, "complex_cyclic_merit_lag: gradient")
 
     if CS.iprint:
-        print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
+        print("complex_cyclic_merit_lag merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
 
     return merit, grad, nonzero
 
@@ -2747,9 +2789,12 @@ def spectral_entropy_grad(phi, h_time_delay):
     weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
 
     gradient = 2.0 / total_power * np.sum(np.imag(np.conj(weighted_ifft) * h_time_delay_prime), axis=1)
-    np.sum(gradient**2)
-    np.sqrt(np.sum(phi**2) / (Ntime - 1))
-    # print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
+
+    verbose = True
+    if verbose:
+      grad_power = np.sum(gradient**2)
+      rms = np.sqrt(np.sum(phi**2) / (Ntime - 1))
+      print(f"rms={rms:.4g} rad; S={entropy} grad power={grad_power:.4}")
 
     return entropy, gradient[1:]
 
@@ -2775,7 +2820,7 @@ def minimize_temporal_phase_noise(x):
         xprev = x[isub]
 
 
-def subtract_degenerate_delay_and_phase(h_delay_grad,h_delay):
+def subtract_degenerate_delay_and_phase(h_delay_grad, h_delay):
     """
     Subtract phase and delay terms from the gradient
     """
@@ -2810,14 +2855,17 @@ def subtract_degenerate_delay_and_phase(h_delay_grad,h_delay):
     return freq2time(h_freq_grad)
 
 
-def subtract_degenerate_dof(h_time_delay_grad,h_time_delay):
+def subtract_degenerate_dof(h_time_delay_grad, h_time_delay):
     """
     Subtract phase and two linear phase gradients from the gradient
     """
     ntime = h_time_delay.shape[0]
     for itime in range(ntime):
-        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(h_time_delay_grad[itime, :],h_time_delay[itime, :])
+        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(
+            h_time_delay_grad[itime, :], h_time_delay[itime, :]
+        )
     return h_time_delay_grad
+
 
 def circular(x):
     x[:] = np.fmod(x, 2.0 * np.pi)
@@ -2835,6 +2883,7 @@ def minimize_spectral_entropy(h_time_delay):
         args=(h_time_delay,),
         method="BFGS",
         jac=True,
+        options = {"maxiter": 1000, "gtol": 1e-6},
         callback=circular,
     )
 
@@ -3030,6 +3079,7 @@ if __name__ == "__main__":
     CS.loop(make_plots=True, tolfact=20)
     CS.saveResults()
 
+
 def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
     """
     Given a 2D NumPy array and an integer N, this function returns a list of
@@ -3052,7 +3102,7 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
     if not isinstance(arr, np.ndarray) or arr.ndim != 2:
         print("Error: Input must be a 2D NumPy array.")
         return []
-    
+
     if n <= 0:
         print("Error: N must be a positive integer.")
         return []
@@ -3076,13 +3126,11 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
     # np.unravel_index is a handy function for this. It takes a
     # flattened index and the shape of the original array and
     # returns the multi-dimensional index.
-    row_indices, col_indices = np.unravel_index(
-        top_n_flattened_indices, arr.shape
-    )
+    row_indices, col_indices = np.unravel_index(top_n_flattened_indices, arr.shape)
 
     # Combine the row and column indices into a list of (row, column) tuples.
     result_indices = list(zip(row_indices, col_indices))
-    
+
     # Sort the results by value to match the previous behavior, if desired.
     # This step is optional but provides a consistent output. It can be
     # commented out if sorting is not needed for your use case.
