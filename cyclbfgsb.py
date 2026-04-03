@@ -3,6 +3,7 @@
 
 # This notebook runs an analysis similar to that of Walker, Demorest & van Straten (2013)
 
+import argparse
 import pickle
 import time
 import sys
@@ -19,14 +20,27 @@ from scipy.fft import rfft, fft, fftshift, ifft, fftn, ifftn
 # reload a module to incorporate code changes
 import pycyc
 
+p = argparse.ArgumentParser()
+p.add_argument(
+    "--init",
+    type=str,
+    help="file containing the initial wavefield and intrinsic profile",
+)
+
+args, files = p.parse_known_args()
+init = args.init
+
 CS = pycyc.CyclicSolver(zap_edges=0.05556)
 
 CS.nthread = 8
 CS.save_cyclic_spectra = True
 
-inputArgs = sys.argv
-print(f"cyclbfgsb: loading {len(inputArgs)-1} files")
-for file in inputArgs[1:]:
+if init is not None:
+    print(f"cyclbfgsb: loading initial wavefield and intrinsic profile from {init}")
+    CS.load_initial_guess(init)
+
+print(f"cyclbfgsb: loading {len(files)} files")
+for file in files:
     CS.load(file)
 
 print(f"cyclbfgsb: {CS.nsubint} spectra loaded")
@@ -52,7 +66,7 @@ intrinsic_profiles = {}
 
 # four passes through first 80 files (20 minutes assuming 15 sec subints):
 hf_prev=None
-nsub = 80
+nsub = min(80,CS.nsubint)
 for ipass in range(4):
     for isub in range(0, nsub):
         if ipass > 0:
@@ -62,6 +76,9 @@ for ipass in range(4):
         CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10, hf_prev=hf_prev)
     
     print(f'cyclbfgsb: pass {ipass} finished', flush=True)
+
+    # on the next pass, use the previous pass's filters as the initial guess for the current pass
+    CS.use_integrated_profile = False
 
     filters[ipass] = copy.deepcopy(CS.optimized_filters)
     intrinsic_profiles[ipass] = copy.deepcopy(CS.intrinsic_profiles)
