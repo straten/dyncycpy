@@ -97,6 +97,8 @@ for ipass in range(4):
 for isub in range(0, CS.nsubint):
     CS.loop(isub=isub, make_plots=False, ipol=0, tolfact=10)
 
+CS.unload_solution("cyclbfgsb_best.fits")
+
 filters_full = {}
 intrinsic_profiles_full = {}
 
