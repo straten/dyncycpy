@@ -205,7 +205,10 @@ min_step_factor = 0.5
 for i in range(max_iterations + 1):
     CS.nopt += 1
 
-    if update_profile and (i < update_profile_every_iteration_until or ( (update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0 )):
+    if update_profile and (
+        i < update_profile_every_iteration_until
+        or ((update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0)
+    ):
         print("cycfista: update profile")
         CS.updateProfile()
 
