@@ -202,6 +202,9 @@ prev_merit = best_merit
 prev_time = start_time = time.time()
 min_step_factor = 0.5
 
+FS = fista.FISTA()
+FS.alpha = alpha_init
+
 for i in range(max_iterations + 1):
     CS.nopt += 1
 
@@ -212,23 +215,12 @@ for i in range(max_iterations + 1):
         print("cycfista: update profile")
         CS.updateProfile()
 
-    x_n, y_n, L, t_n, demerits = fista.take_fista_step(
+    x_n, y_n, L, t_n, diff = FS.take_fista_step(
         iter=i,
         func=CS,
-        backtrack=False,
-        alpha=alpha,
-        eta=5,
         y_n=y_n,
-        _lambda=None,
-        delay_for_inf=-int(CS.nchan / 2),
-        zero_penalty_coords=np.array([]),
-        fix_phase_value=None,
-        fix_phase_coords=None,
-        fix_support=np.array([]),
         t_n=t_n,
         x_n=x_n,
-        demerits=demerits,
-        eps=None,
     )
 
     assert math.isfinite(CS.get_reduced_chisq())
@@ -275,6 +267,8 @@ for i in range(max_iterations + 1):
         alpha *= 0.2
         print(f"reducing alpha to {alpha}")
         alphas = np.append(alphas, alpha)
+
+    FS.alpha = alpha
 
     print(f"{i:03d} demerit={reduced_chisq} alpha={alpha} last={1.0/L} min={1.0/L_max} t_n={t_n}", flush=True)
     end_time = time.time()
