@@ -23,9 +23,13 @@ __all__ = [
     "subspace_principal_angle",
 ]
 
+import logging
+
 import numpy as np
 
 from .profile import fit_profile_shift
+
+logger = logging.getLogger(__name__)
 
 
 def compute_residuals(

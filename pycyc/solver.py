@@ -10,7 +10,7 @@ state and the methods that tie the above together.
 """
 
 try:
-    pass
+    import psrchive
 except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures

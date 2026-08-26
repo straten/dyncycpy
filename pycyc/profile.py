@@ -142,15 +142,31 @@ def fit_profile_shift(
     nharm = s_ref.shape[0]
     index = np.arange(nharm)
 
+    # spectral_distance's objective value and gradient scale with the
+    # square of s_t/s_ref's absolute flux units. On bright real data those
+    # can be ~1e4-1e6, which makes scipy's BFGS default (absolute) gtol
+    # meaningless relative to the objective's actual curvature scale and
+    # triggers spurious "precision loss" warnings even though the fit has
+    # already converged. epsilon and gain are both exactly invariant to a
+    # positive real rescaling of s_ref and s_t together (the scale cancels:
+    # spectral_distance's gradient direction is unchanged, and the gain
+    # closed-form below is a ratio of same-degree terms), so fit in
+    # normalized units and only rescale back for the returned gain.
+    norm = np.sqrt(np.mean(np.abs(s_t) ** 2))
+    if norm <= 0:
+        norm = 1.0
+    s_ref_n = s_ref / norm
+    s_t_n = s_t / norm
+
     def _epsilon_objective(x):
-        diff, grad = spectral_distance([0.0, x[0]], s_t, s_ref, index=index)
+        diff, grad = spectral_distance([0.0, x[0]], s_t_n, s_ref_n, index=index)
         return diff, np.array([grad[1]])
 
     grid = np.linspace(-search_range, search_range, search_points)
     grid_values = [_epsilon_objective(np.array([e]))[0] for e in grid]
     x0 = [grid[int(np.argmin(grid_values))]]
 
-    logger.info("fit_profile_shift: initial phase shift = %f", x0)
+    logger.info("fit_profile_shift: initial phase shift = %f", x0[0])
 
     result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True)
     if not result.success:
