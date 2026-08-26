@@ -118,4 +118,5 @@ from .io_utils import *
 from .model import *
 from .objective import *
 from .profile import *
+from .jitter import *
 from .solver import *
