@@ -14,6 +14,7 @@ try:
 except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures
+import logging
 import os
 import pickle
 
@@ -32,6 +33,8 @@ from .model import *
 from .objective import make_model_cs, pack_real_params, unpack_real_params, cyclic_merit_and_grad, cyclic_merit_lag_x
 from .profile import solve_profile_and_gain
 from .io import _IOMixin, loadCyclicSolver
+
+logger = logging.getLogger(__name__)
 
 class CyclicSolver(_IOMixin):
     def __init__(
@@ -83,6 +86,7 @@ class CyclicSolver(_IOMixin):
         self.iprint = False
         self.make_plots = False
         self.dump_residual = False
+        self.dump_gradient = False
         self.niter = 0
 
         self.mean_time_offset = 0
@@ -727,6 +731,35 @@ class CyclicSolver(_IOMixin):
 
         return _merit, _nterm
 
+    def _zap_gradient_harmonics(self):
+        """
+        Zero out self.zap_gradient_harmonics repeating harmonics of the
+        strongest artifact(s) in self.h_doppler_delay_grad, in place.
+        """
+        grad_power = np.abs(self.h_doppler_delay_grad) ** 2
+        largest = find_n_largest_indices(grad_power, self.zap_gradient_harmonics)
+        max_power = grad_power[largest[0]]
+        for idx in range(self.zap_gradient_harmonics):
+            ilargest = largest[idx]
+            logger.debug("%s power at %s = %s", f"idx={idx}", ilargest, grad_power[ilargest])
+            if grad_power[ilargest] < 1e-6 * max_power:
+                logger.debug("stopping zap_gradient_harmonics search")
+                break
+
+            for jdx in range(idx + 1, self.zap_gradient_harmonics):
+                jlargest = largest[jdx]
+                logger.debug("%s power at %s = %s", f"jdx={jdx}", jlargest, grad_power[jlargest])
+                if grad_power[jlargest] > 1e-6 * max_power:
+                    logger.debug("zeroing harmonics of %s and %s in gradient", ilargest, jlargest)
+                    x_offset = abs(jlargest[0] - ilargest[0])
+                    y_offset = abs(jlargest[1] - ilargest[1])
+                    x = max(jlargest[0], ilargest[0])
+                    y = max(jlargest[1], ilargest[1])
+                    while (x < grad_power.shape[0]) and (y < grad_power.shape[1]):
+                        self.h_doppler_delay_grad[x, y] = 0
+                        x += x_offset
+                        y += y_offset
+
     def updateWavefield(self, h_doppler_delay):
         rms_noise = rms_wavefield(h_doppler_delay)
 
@@ -794,45 +827,19 @@ class CyclicSolver(_IOMixin):
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
 
-        dumps = False
-
-        if dumps:
+        if self.dump_gradient:
+            logger.debug("dumping time delay gradient to h_time_delay_grad.pkl")
             with open("h_time_delay_grad.pkl", "wb") as fh:
-                print("DUMPING TIME DELAY GRADIENT")
                 pickle.dump(self.h_time_delay_grad, fh)
 
         self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
 
         if self.zap_gradient_harmonics > 0:
-            grad_power = np.abs(self.h_doppler_delay_grad) ** 2
-            largest = find_n_largest_indices(grad_power, self.zap_gradient_harmonics)
-            max_power = grad_power[largest[0]]
-            for idx in range(self.zap_gradient_harmonics):
-                ilargest = largest[idx]
-                print(f"{idx=} power at {ilargest} = {grad_power[ilargest]}")
-                if grad_power[ilargest] < 1e-6 * max_power:
-                    print("stopping zap_gradient_harmonics search")
-                    break
+            self._zap_gradient_harmonics()
 
-                for jdx in range(idx+1,self.zap_gradient_harmonics):
-                    jlargest = largest[jdx]
-                    print(f"{jdx=} power at {jlargest} = {grad_power[jlargest]}")
-                    if grad_power[jlargest] > 1e-6 * max_power:
-                        print(f"zeroing harmonics of {ilargest} and {jlargest} in gradient")
-                        x_offset = abs(jlargest[0] - ilargest[0])
-                        y_offset = abs(jlargest[1] - ilargest[1])
-                        x = max(jlargest[0], ilargest[0])
-                        y = max(jlargest[1], ilargest[1])
-                        while (x < grad_power.shape[0]) and (y < grad_power.shape[1]):
-                            # print(f"zeroing {x},{y} in gradient")
-                            self.h_doppler_delay_grad[x, y] = 0
-                            x += x_offset
-                            y += y_offset
-
-
-        if dumps:
+        if self.dump_gradient:
+            logger.debug("dumping doppler delay gradient to h_doppler_delay_grad.pkl")
             with open("h_doppler_delay_grad.pkl", "wb") as fh:
-                print("DUMPING DOPPLER DELAY GRADIENT")
                 pickle.dump(self.h_doppler_delay_grad, fh)
 
         if self.low_pass_filter_Doppler < 1:
@@ -865,8 +872,8 @@ class CyclicSolver(_IOMixin):
                         self.merit += _merit
                         self.nterm_merit += _nterm
 
-                    except Exception as exc:
-                        print(f"compute_gradient isub={isub} exception: {exc}")
+                    except Exception:
+                        logger.exception("compute_gradient isub=%d raised", isub)
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         # bw/ref_freq are taken from the explicit arguments (not self.bw/
@@ -884,6 +891,24 @@ class CyclicSolver(_IOMixin):
             nlag=self.nlag,
         )
         return solve_profile_and_gain(cs, hf, params, update_gain, self.intrinsic_ph_sum, self.intrinsic_ph_sumsq)
+
+    def _setup_plot_directory(self, make_plots, plotdir, max_plot_lag):
+        """Set self.make_plots/self.mlag/self.plotdir for loop(), creating
+        plotdir (defaulting to "<filename>_plots") if it doesn't exist yet."""
+        self.make_plots = make_plots
+        if not make_plots:
+            return
+        self.mlag = max_plot_lag
+        if plotdir is None:
+            blah, fbase = os.path.split(self.filename)
+            plotdir = os.path.join(os.path.abspath(os.path.curdir), ("%s_plots" % fbase))
+        if not os.path.exists(plotdir):
+            try:
+                os.mkdir(plotdir)
+            except Exception:
+                print("Warning: couldn't make", plotdir, "not plotting")
+                self.make_plots = False
+        self.plotdir = plotdir
 
     def loop(
         self,
@@ -925,19 +950,7 @@ class CyclicSolver(_IOMixin):
                         else use delta function
         """
         self.plot_every = plot_every
-        self.make_plots = make_plots
-        if make_plots:
-            self.mlag = max_plot_lag
-            if plotdir is None:
-                blah, fbase = os.path.split(self.filename)
-                plotdir = os.path.join(os.path.abspath(os.path.curdir), ("%s_plots" % fbase))
-            if not os.path.exists(plotdir):
-                try:
-                    os.mkdir(plotdir)
-                except Exception:
-                    print("Warning: couldn't make", plotdir, "not plotting")
-                    self.make_plots = False
-            self.plotdir = plotdir
+        self._setup_plot_directory(make_plots, plotdir, max_plot_lag)
 
         self.isub = isub
         self.iprint = iprint

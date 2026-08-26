@@ -21,12 +21,15 @@ __all__ = [
     "cyclic_merit_lag_x",
 ]
 
+import logging
 import pickle
 
 import numpy as np
 
 from .model import chan_limits_cs, cyclic_padding, total_cyclic_power
 from .transforms import cs2cc, shear_spectra, time2freq
+
+logger = logging.getLogger(__name__)
 
 
 def make_model_cs(params, hf, s0):
@@ -115,7 +118,7 @@ def _active_mask(nchan, nharm, params):
 
 
 def cyclic_merit_and_grad(
-    ht, params, s0, cs_data, gain=1.0, rindex=0, dump_residual=False, iprint=False
+    ht, params, s0, cs_data, gain=1.0, rindex=0, dump_residual=False, iprint=False, on_residual=None
 ):
     """
     The objective function: computes the merit (pycyc.tex eqn:merit_function)
@@ -125,6 +128,12 @@ def cyclic_merit_and_grad(
     Returns (merit, grad, nonzero), where `nonzero` is the number of nonzero
     entries in the (harmonic-truncated) model, used by CyclicSolver for a
     reduced-chi-squared diagnostic.
+
+    dump_residual=True logs a power summary and pickles (residual, cs_data)
+    to disk, as before; on_residual, if given, is additionally called as
+    on_residual(residual, cs_model, cs_data) so a caller can route the same
+    arrays anywhere (a callback, an in-memory buffer, ...) without going
+    through the filesystem.
     """
     hf = time2freq(ht)
     cs_model, hfplus, hfminus = make_model_cs(params, hf, s0)
@@ -147,8 +156,9 @@ def cyclic_merit_and_grad(
         P_residual = total_cyclic_power(residual)
         P_model = total_cyclic_power(cs_model)
         P_data = total_cyclic_power(cs_data)
-        print(
-            f"cyclic_merit_and_grad nharm={residual.shape[1]} power in residual={P_residual} model={P_model} data={P_data}"
+        logger.debug(
+            "cyclic_merit_and_grad nharm=%d power in residual=%s model=%s data=%s",
+            residual.shape[1], P_residual, P_model, P_data,
         )
         filename = f"complex_cyclic_merit_lag_residual_{rindex:03d}.pkl"
         with open(filename, "wb") as fh:
@@ -156,6 +166,9 @@ def cyclic_merit_and_grad(
         filename = f"complex_cyclic_merit_lag_data_{rindex:03d}.pkl"
         with open(filename, "wb") as fh:
             pickle.dump(cs_data, fh)
+
+    if on_residual is not None:
+        on_residual(residual, cs_model, cs_data)
 
     # zero the gradient's view of the residual wherever the model can't
     # depend on ht in the first place (see _active_mask) -- a no-op under
@@ -182,12 +195,12 @@ def cyclic_merit_and_grad(
     grad = gain * (grad_sum1 + grad_sum2)
 
     if iprint:
-        print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
+        logger.debug("merit= %.7e  grad= %.7e", merit, (np.abs(grad) ** 2).sum())
 
     return merit, grad, nonzero
 
 
-def cyclic_merit_lag_x(x, params, rindex, s0, cs_data, gain=1.0, dump_residual=False, iprint=False):
+def cyclic_merit_lag_x(x, params, rindex, s0, cs_data, gain=1.0, dump_residual=False, iprint=False, on_residual=None):
     """
     Real-parameter (pack_real_params-packed) wrapper around
     cyclic_merit_and_grad, matching the `func(x, *args) -> (f, g)` signature
@@ -200,7 +213,15 @@ def cyclic_merit_lag_x(x, params, rindex, s0, cs_data, gain=1.0, dump_residual=F
     """
     ht = unpack_real_params(x, rindex)
     merit, grad, _nonzero = cyclic_merit_and_grad(
-        ht, params, s0, cs_data, gain=gain, rindex=rindex, dump_residual=dump_residual, iprint=iprint
+        ht,
+        params,
+        s0,
+        cs_data,
+        gain=gain,
+        rindex=rindex,
+        dump_residual=dump_residual,
+        iprint=iprint,
+        on_residual=on_residual,
     )
     # multiply by 2 when going from Wirtinger to real/imag derivatives
     grad = pack_real_params(2.0 * grad, rindex)
