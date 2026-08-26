@@ -16,7 +16,12 @@ dependency -- following the same design as pycyc.objective/pycyc.profile.
 
 from __future__ import annotations
 
-__all__ = ["compute_residuals", "fit_jitter_basis", "reconstruct_jittered_profile", "subspace_principal_angle"]
+__all__ = [
+    "compute_residuals",
+    "fit_jitter_basis",
+    "reconstruct_jittered_profile",
+    "subspace_principal_angle",
+]
 
 import numpy as np
 
@@ -100,6 +105,8 @@ def fit_jitter_basis(
     rank = int(np.sum(eigenvalues > threshold))
     if max_rank is not None:
         rank = min(rank, max_rank)
+
+    logger.info("fit_jitter_basis: rank = %d", rank)
 
     weights = U[:, :rank] * s[np.newaxis, :rank]  # whitened-domain weights
     basis = Vh[:rank, :] * sigma[np.newaxis, :]  # un-whitened back to physical profile units

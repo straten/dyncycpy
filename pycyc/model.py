@@ -116,4 +116,3 @@ def normalize_pp(pp: np.ndarray) -> np.ndarray:
     ph = normalize_profile(ph)
     ph[0] = 0
     return irfft(ph, norm="ortho")
-

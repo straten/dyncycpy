@@ -10,7 +10,7 @@ state and the methods that tie the above together.
 """
 
 try:
-    import psrchive
+    pass
 except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures
@@ -24,18 +24,30 @@ import scipy.optimize
 from scipy.fft import fftshift, irfft
 from scipy.signal.windows import kaiser
 
-from plotting import plot_Doppler_vs_delay, plot_current_solution
+from plotting import plot_current_solution, plot_Doppler_vs_delay
 
-from .transforms import *
-from .regularization import *
+from .io import _IOMixin
 from .io_utils import *
+from .jitter import (
+    compute_residuals,
+    fit_jitter_basis,
+    reconstruct_jittered_profile,
+    subspace_principal_angle,
+)
 from .model import *
-from .objective import make_model_cs, pack_real_params, unpack_real_params, cyclic_merit_and_grad, cyclic_merit_lag_x
+from .objective import (
+    cyclic_merit_and_grad,
+    cyclic_merit_lag_x,
+    make_model_cs,
+    pack_real_params,
+    unpack_real_params,
+)
 from .profile import solve_profile_and_gain
-from .jitter import compute_residuals, fit_jitter_basis, reconstruct_jittered_profile, subspace_principal_angle
-from .io import _IOMixin, loadCyclicSolver
+from .regularization import *
+from .transforms import *
 
 logger = logging.getLogger(__name__)
+
 
 class CyclicSolver(_IOMixin):
     def __init__(
@@ -722,7 +734,9 @@ class CyclicSolver(_IOMixin):
             residuals, noise_variance_per_harmonic, max_rank=self.jitter_max_rank
         )
 
-        angle = subspace_principal_angle(self._jitter_basis, basis) if self._jitter_basis is not None else None
+        angle = (
+            subspace_principal_angle(self._jitter_basis, basis) if self._jitter_basis is not None else None
+        )
         logger.info(
             "outer_loop jitter refresh: rank=%d threshold=%.4g max_eigenvalue=%.4g principal_angle=%s",
             rank,
@@ -967,7 +981,7 @@ class CyclicSolver(_IOMixin):
 
         if self.enforce_causality:
             half_nchan = self.nchan // 2
-            self.h_time_delay_grad[:,half_nchan:] = 0
+            self.h_time_delay_grad[:, half_nchan:] = 0
 
         if self.reduce_temporal_phase_noise_grad:
             minimize_temporal_phase_noise(self.h_time_delay_grad)
@@ -1035,7 +1049,9 @@ class CyclicSolver(_IOMixin):
             exclude_DC=self.exclude_DC,
             nlag=self.nlag,
         )
-        return solve_profile_and_gain(cs, hf, params, update_gain, self.intrinsic_ph_sum, self.intrinsic_ph_sumsq)
+        return solve_profile_and_gain(
+            cs, hf, params, update_gain, self.intrinsic_ph_sum, self.intrinsic_ph_sumsq
+        )
 
     def _setup_plot_directory(self, make_plots, plotdir, max_plot_lag):
         """Set self.make_plots/self.mlag/self.plotdir for loop(), creating
@@ -1257,7 +1273,7 @@ class CyclicSolver(_IOMixin):
             iharm=ih, nchan=self.nchan, bw=self.bw, ref_freq=self.ref_freq
         )  # highest harmonic
 
-        var = (np.abs(cs[imin:imax, ih-1]) ** 2).sum()
+        var = (np.abs(cs[imin:imax, ih - 1]) ** 2).sum()
         nvalid = imax - imin
         var = var / nvalid
 
@@ -1304,7 +1320,9 @@ class CyclicSolver(_IOMixin):
     def plotCurrentSolution(self, plot_cs):
         # optimize_profile requires update_gain; plotCurrentSolution always
         # plots against the current best profile estimate, not a re-solve.
-        sopt, gain, ph_numer, ph_denom = self.optimize_profile(plot_cs, self.hf, self.bw, self.ref_freq, False)
+        sopt, gain, ph_numer, ph_denom = self.optimize_profile(
+            plot_cs, self.hf, self.bw, self.ref_freq, False
+        )
         sopt = normalize_profile(sopt)
         if self.exclude_DC:
             sopt[0] = 0.0
@@ -1335,4 +1353,3 @@ class CyclicSolver(_IOMixin):
             self.niter,
             self.plotdir,
         )
-

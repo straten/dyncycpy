@@ -8,7 +8,32 @@ phase/delay/shift projections from the wavefield gradient, and
 frequency-response alignment between neighbouring subints.
 """
 
-__all__ = ["apply_threshold", "apply_shrinkage_threshold", "apply_delay_shrinkage_threshold", "noise_power_wavefield", "delay_noise_power_wavefield", "rms_wavefield", "normalize_cs_by_noise_rms", "normalize_cs", "rms_cs", "find_n_largest_indices", "spectral_entropy_grad", "spectral_entropy", "minimize_spectral_entropy", "spectral_entropy_grad_with_delay", "spectral_entropy_with_delay", "minimize_spectral_entropy_with_delay", "circular", "minimize_temporal_phase_noise", "subtract_degenerate_delay_and_phase", "subtract_degenerate_dof", "spectral_shift", "spectral_distance", "minimize_difference", "align_to_neighbour"]
+__all__ = [
+    "apply_threshold",
+    "apply_shrinkage_threshold",
+    "apply_delay_shrinkage_threshold",
+    "noise_power_wavefield",
+    "delay_noise_power_wavefield",
+    "rms_wavefield",
+    "normalize_cs_by_noise_rms",
+    "normalize_cs",
+    "rms_cs",
+    "find_n_largest_indices",
+    "spectral_entropy_grad",
+    "spectral_entropy",
+    "minimize_spectral_entropy",
+    "spectral_entropy_grad_with_delay",
+    "spectral_entropy_with_delay",
+    "minimize_spectral_entropy_with_delay",
+    "circular",
+    "minimize_temporal_phase_noise",
+    "subtract_degenerate_delay_and_phase",
+    "subtract_degenerate_dof",
+    "spectral_shift",
+    "spectral_distance",
+    "minimize_difference",
+    "align_to_neighbour",
+]
 
 import logging
 
@@ -17,10 +42,11 @@ from scipy.fft import fft, ifft
 from scipy.optimize import minimize
 from scipy.signal import fftconvolve
 
-from .transforms import time2freq, freq2time
 from .model import chan_limits_cs
+from .transforms import freq2time, time2freq
 
 logger = logging.getLogger(__name__)
+
 
 def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
@@ -37,7 +63,6 @@ def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     sz = np.size(out)
     print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
-
 
 
 def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, decay=None):
@@ -66,7 +91,6 @@ def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, deca
     return out
 
 
-
 def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_threshold: float, kernel=None):
     """
     abs(x) is decreased by threshold * delay_noise_power
@@ -89,7 +113,6 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     return out
 
 
-
 def noise_power_wavefield(h_power):
     # compute the mean wavefield power over all doppler shifts and a range of negative delays
     nchan = h_power.shape[1]
@@ -98,7 +121,6 @@ def noise_power_wavefield(h_power):
     noise_power = h_power[:, start_chan:end_chan]
     norm = np.maximum(np.count_nonzero(noise_power), 1)
     return np.sum(noise_power) / norm
-
 
 
 def delay_noise_power_wavefield(power, threshold):
@@ -130,11 +152,9 @@ def delay_noise_power_wavefield(power, threshold):
     return masked_delay_power
 
 
-
 def rms_wavefield(h):
     # compute rms wavefield rms over all doppler shifts and a range of negative delays
     return np.sqrt(noise_power_wavefield(np.abs(h) ** 2))
-
 
 
 def normalize_cs_by_noise_rms(cs, bw, ref_freq):
@@ -148,7 +168,6 @@ def normalize_cs_by_noise_rms(cs, bw, ref_freq):
     return cs / rms, rms
 
 
-
 def normalize_cs(cs, bw, ref_freq):
     rms1 = rms_cs(cs, ih=1, bw=bw, ref_freq=ref_freq)
     rmsn = rms_cs(cs, ih=cs.shape[1] - 1, bw=bw, ref_freq=ref_freq)
@@ -157,13 +176,11 @@ def normalize_cs(cs, bw, ref_freq):
     return cs / normfac, normfac
 
 
-
 def rms_cs(cs, ih, bw, ref_freq):
     nchan = cs.shape[0]
     imin, imax = chan_limits_cs(ih, nchan, bw, ref_freq)
     rms = np.sqrt((np.abs(cs[imin:imax, ih]) ** 2).mean())
     return rms
-
 
 
 def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
@@ -188,7 +205,7 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
     if not isinstance(arr, np.ndarray) or arr.ndim != 2:
         print("Error: Input must be a 2D NumPy array.")
         return []
-    
+
     if n <= 0:
         print("Error: N must be a positive integer.")
         return []
@@ -212,20 +229,17 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
     # np.unravel_index is a handy function for this. It takes a
     # flattened index and the shape of the original array and
     # returns the multi-dimensional index.
-    row_indices, col_indices = np.unravel_index(
-        top_n_flattened_indices, arr.shape
-    )
+    row_indices, col_indices = np.unravel_index(top_n_flattened_indices, arr.shape)
 
     # Combine the row and column indices into a list of (row, column) tuples.
     result_indices = list(zip(row_indices, col_indices))
-    
+
     # Sort the results by value to match the previous behavior, if desired.
     # This step is optional but provides a consistent output. It can be
     # commented out if sorting is not needed for your use case.
     result_indices.sort(key=lambda coord: arr[coord], reverse=True)
 
     return result_indices
-
 
 
 def spectral_entropy_grad(phi, h_time_delay):
@@ -267,13 +281,11 @@ def spectral_entropy_grad(phi, h_time_delay):
     return entropy, gradient[1:]
 
 
-
 def spectral_entropy(h_time_delay):
     ntime = h_time_delay.shape[0]
     phi = np.zeros(ntime - 1)
     entropy, grad = spectral_entropy_grad(phi, h_time_delay)
     return entropy
-
 
 
 def minimize_spectral_entropy(h_time_delay):
@@ -299,7 +311,6 @@ def minimize_spectral_entropy(h_time_delay):
     S_final = spectral_entropy(h_time_delay)
 
     print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
-
 
 
 def spectral_entropy_grad_with_delay(params, h_time_freq):
@@ -372,13 +383,11 @@ def spectral_entropy_grad_with_delay(params, h_time_freq):
     return entropy, np.concatenate((gradient_phs[1:], gradient_eps[1:]))
 
 
-
 def spectral_entropy_with_delay(h_time_freq):
     ntime = h_time_freq.shape[0]
     params = np.zeros(2 * (ntime - 1))
     entropy, _grad = spectral_entropy_grad_with_delay(params, h_time_freq)
     return entropy
-
 
 
 def minimize_spectral_entropy_with_delay(h_time_freq, guess_phi=None, guess_eps=None, maxiter=1000):
@@ -447,10 +456,8 @@ def minimize_spectral_entropy_with_delay(h_time_freq, guess_phi=None, guess_eps=
     return phs[1:], eps[1:]
 
 
-
 def circular(x):
     x[:] = np.fmod(x, 2.0 * np.pi)
-
 
 
 def minimize_temporal_phase_noise(x):
@@ -467,8 +474,7 @@ def minimize_temporal_phase_noise(x):
         xprev = x[isub]
 
 
-
-def subtract_degenerate_delay_and_phase(h_delay_grad,h_delay):
+def subtract_degenerate_delay_and_phase(h_delay_grad, h_delay):
     """
     Subtract phase and delay terms from the gradient
     """
@@ -503,16 +509,16 @@ def subtract_degenerate_delay_and_phase(h_delay_grad,h_delay):
     return freq2time(h_freq_grad)
 
 
-
-def subtract_degenerate_dof(h_time_delay_grad,h_time_delay):
+def subtract_degenerate_dof(h_time_delay_grad, h_time_delay):
     """
     Subtract phase and two linear phase gradients from the gradient
     """
     ntime = h_time_delay.shape[0]
     for itime in range(ntime):
-        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(h_time_delay_grad[itime, :],h_time_delay[itime, :])
+        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(
+            h_time_delay_grad[itime, :], h_time_delay[itime, :]
+        )
     return h_time_delay_grad
-
 
 
 def spectral_shift(theta, hf, index=None):
@@ -537,7 +543,6 @@ def spectral_shift(theta, hf, index=None):
     if index is None:
         index = np.fft.fftfreq(hf.size)
     return hf * np.exp(1j * (phase + slope * index)), index
-
 
 
 def spectral_distance(theta, hf_ref, hf, index=None):
@@ -567,7 +572,6 @@ def spectral_distance(theta, hf_ref, hf, index=None):
     ddiff_dslo = -2 * np.sum(np.real(np.conj(delta) * del_slope))
 
     return diff, [ddiff_dphs, ddiff_dslo]
-
 
 
 def minimize_difference(hf_ref, hf):
@@ -648,7 +652,6 @@ def minimize_difference(hf_ref, hf):
     return R
 
 
-
 def align_to_neighbour(h_time_freq):
     nt, nf = h_time_freq.shape
     hf0 = h_time_freq[0]
@@ -662,4 +665,3 @@ def align_to_neighbour(h_time_freq):
             print(f"align_to_neighbour i={it} {R=}")
 
         h_time_freq[it, :] = hf
-

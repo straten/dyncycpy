@@ -81,12 +81,12 @@ class _IOMixin:
         """
 
         ar = psrchive.Archive_load(filename)
-        assert(ar.get_nsubint() >= 1)
+        assert ar.get_nsubint() >= 1
         tmp = ar.get_Profile(0, 0, 0).get_amps()
         self.pp_intrinsic = np.copy(tmp)
         tmp = phase2harm(self.pp_intrinsic)
         self.intrinsic_ph = np.zeros((1, np.size(tmp)), dtype=np.complex128)
-        self.intrinsic_ph[0,:] = tmp[None,:]
+        self.intrinsic_ph[0, :] = tmp[None, :]
         ar = None
 
     def load(self, filename):
@@ -283,7 +283,6 @@ class _IOMixin:
             self.nsubint = new_nsubint
 
     def unload_solution(self, filename):
-
         arch = psrchive.Archive_new_Archive("PSRFITS")
 
         # use the first file and all of its metadata to create a new archive
@@ -324,7 +323,7 @@ class _IOMixin:
         for subint in arch:
             for ipol in range(self.npol):
                 for ichan in range(nchan):
-                    prof = subint.get_Profile(ipol,ichan)
+                    prof = subint.get_Profile(ipol, ichan)
                     prof.get_amps()[:] = self.pp_intrinsic
 
         print("unload_solution writing to", filename)

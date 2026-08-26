@@ -8,12 +8,12 @@ __all__ = ["safely_divide", "loadArray", "writeArray", "writeProfile", "loadProf
 
 import numpy as np
 
+
 def safely_divide(numer, denom):
     safe_denom = np.where(denom == 0, 1, denom)
     result = numer / safe_denom
     result[denom == 0] = 0
     return result
-
 
 
 def loadArray(fname):
@@ -48,7 +48,6 @@ def loadArray(fname):
     return data
 
 
-
 def writeArray(fname, arr):
     """
     Write array to ascii file in same format as filter_profile does
@@ -65,7 +64,6 @@ def writeArray(fname, arr):
     fh.close()
 
 
-
 def writeProfile(fname, prof):
     """
     Write profile to ascii file in same format as filter_profile does
@@ -75,7 +73,6 @@ def writeProfile(fname, prof):
     for x in range(prof.shape[0]):
         fh.write("%.7e %.7e\n" % (t[x], prof[x]))
     fh.close()
-
 
 
 def loadProfile(fname):
@@ -89,4 +86,3 @@ def loadProfile(fname):
 #
 # norm="ortho" is used in the following definitions in order to preserve power
 #
-

@@ -13,10 +13,27 @@ here is a pure array-in, array-out function, safe to reuse independently of
 CyclicSolver.
 """
 
-__all__ = ["ps2cs", "cc2cs", "cs2cc", "cc2pc", "pc2cc", "time2freq", "freq2time", "phase2harm", "fold", "minphase", "pad_wavefield", "shifted", "match_two_filters", "create_shear_phasors", "shear_spectra"]
+__all__ = [
+    "ps2cs",
+    "cc2cs",
+    "cs2cc",
+    "cc2pc",
+    "pc2cc",
+    "time2freq",
+    "freq2time",
+    "phase2harm",
+    "fold",
+    "minphase",
+    "pad_wavefield",
+    "shifted",
+    "match_two_filters",
+    "create_shear_phasors",
+    "shear_spectra",
+]
 
 import numpy as np
-from scipy.fft import fft, ifft, irfft, rfft
+from scipy.fft import fft, ifft, rfft
+
 
 def ps2cs(ps, workers=2):
     """
@@ -28,14 +45,12 @@ def ps2cs(ps, workers=2):
     return rfft(ps, axis=1, workers=workers, norm="ortho")
 
 
-
 def cc2cs(cs, workers=2, axis=0):
     """
     complex-valued periodic correlation to cyclic correlation
     complex-to-complex forward FFT transforms lag to radio frequency
     """
     return fft(cs, axis=axis, workers=workers, norm="ortho")
-
 
 
 def cs2cc(cc, workers=2, axis=0):
@@ -46,14 +61,12 @@ def cs2cc(cc, workers=2, axis=0):
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
 
 
-
 def cc2pc(cc, workers=2, axis=1):
     """
     complex-valued periodic correlation to cyclic correlation
     complex-to-complex backward/inverse FFT transforms cycle frequency to pulse phase
     """
     return ifft(cc, axis=axis, workers=workers, norm="ortho")
-
 
 
 def pc2cc(pc, workers=2, axis=1):
@@ -64,20 +77,16 @@ def pc2cc(pc, workers=2, axis=1):
     return fft(pc, axis=axis, workers=workers, norm="ortho")
 
 
-
 def time2freq(ht, workers=1, axis=0):
     return fft(ht, axis=axis, workers=workers, norm="ortho")
-
 
 
 def freq2time(hf, workers=1, axis=0):
     return ifft(hf, axis=axis, workers=workers, norm="ortho")
 
 
-
 def phase2harm(pp, workers=1):
     return rfft(pp, workers=workers, norm="ortho")
-
 
 
 def fold(v):
@@ -95,13 +104,11 @@ def fold(v):
     return rw
 
 
-
 def minphase(v, workers=1):
     clipped = v.copy()
     thresh = 1e-5
     clipped[np.abs(v) < thresh] = thresh
     return np.exp(fft(fold(ifft(np.log(clipped), workers=workers)), workers=workers))
-
 
 
 def pad_wavefield(h_time_freq, new_shape):
@@ -119,7 +126,6 @@ def pad_wavefield(h_time_freq, new_shape):
 
     h_time_delay = freq2time(padded_spectrum, axis=0)
     return time2freq(h_time_delay, axis=1)
-
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
@@ -143,14 +149,12 @@ def shifted(input_array, fraction_of_bin, axis=0):
         raise ValueError("Invalid axis value. Must be 0 or 1.")
 
 
-
 def match_two_filters(hf1, hf2):
     z = (hf1 * np.conj(hf2)).sum()
     z2 = (hf2 * np.conj(hf2)).sum()  # = np.abs(hf2)**2.sum()
     z /= np.abs(z)
     z *= np.sqrt(1.0 * hf1.shape[0] / np.real(z2))
     return hf2 * z
-
 
 
 def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
@@ -183,7 +187,6 @@ def create_shear_phasors(nchan, nharm, bw_MHz, freq_Hz):
     return np.exp(1j * np.pi * np.outer(tau, alpha))
 
 
-
 def shear_spectra(spectrum, phasors):
     """Shifts the spectrum for each column of phasors
 
@@ -200,4 +203,3 @@ def shear_spectra(spectrum, phasors):
     # copy the spectrum for each shift for each harmonic
     spectra = np.repeat(tmp[:, np.newaxis], nharm, axis=1)
     return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
-

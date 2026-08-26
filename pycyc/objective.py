@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 ResidualCallback = Callable[[np.ndarray, np.ndarray, np.ndarray], None]
 
 
-def make_model_cs(params: CyclicModelParams, hf: np.ndarray, s0: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def make_model_cs(
+    params: CyclicModelParams, hf: np.ndarray, s0: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute the model cyclic spectrum S'_mu(alpha, nu) = H(nu+alpha/2)
     H*(nu-alpha/2) S_mu(alpha) (pycyc.tex eqn 1, before the g(t) gain
@@ -172,7 +174,10 @@ def cyclic_merit_and_grad(
         P_data = total_cyclic_power(cs_data)
         logger.debug(
             "cyclic_merit_and_grad nharm=%d power in residual=%s model=%s data=%s",
-            residual.shape[1], P_residual, P_model, P_data,
+            residual.shape[1],
+            P_residual,
+            P_model,
+            P_data,
         )
         filename = f"complex_cyclic_merit_lag_residual_{rindex:03d}.pkl"
         with open(filename, "wb") as fh:

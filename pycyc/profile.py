@@ -56,7 +56,10 @@ def solve_profile_and_gain(
         gain_numer = tmp[1:].sum()  # sum over all harmonics
         # Equation A5 denominator
         tmp = fscrunch_cs(
-            maghmhp * intrinsic_ph_sumsq, bw=params.bw, ref_freq=params.ref_freq, padding=params.pad_cyclic_spectra
+            maghmhp * intrinsic_ph_sumsq,
+            bw=params.bw,
+            ref_freq=params.ref_freq,
+            padding=params.pad_cyclic_spectra,
         )
         gain_denom = tmp[1:].sum()  # sum over all harmonics
         gain = np.real(gain_numer) / np.real(gain_denom)
@@ -65,10 +68,13 @@ def solve_profile_and_gain(
         gain = 1
 
     # Equation A7 numerator
-    ph_numer = fscrunch_cs(cshmhp, bw=params.bw, ref_freq=params.ref_freq, padding=params.pad_cyclic_spectra) * gain
+    ph_numer = (
+        fscrunch_cs(cshmhp, bw=params.bw, ref_freq=params.ref_freq, padding=params.pad_cyclic_spectra) * gain
+    )
     # Equation A7 denominator
     ph_denom = (
-        fscrunch_cs(maghmhp, bw=params.bw, ref_freq=params.ref_freq, padding=params.pad_cyclic_spectra) * gain**2
+        fscrunch_cs(maghmhp, bw=params.bw, ref_freq=params.ref_freq, padding=params.pad_cyclic_spectra)
+        * gain**2
     )
 
     # When the denominator is zero, set the intrinsic profile to zero
@@ -79,7 +85,11 @@ def solve_profile_and_gain(
 
 
 def fit_profile_shift(
-    s_ref: np.ndarray, s_t: np.ndarray, fit_gain: bool = False, search_range: float = np.pi, search_points: int = 361
+    s_ref: np.ndarray,
+    s_t: np.ndarray,
+    fit_gain: bool = False,
+    search_range: float = np.pi,
+    search_points: int = 361,
 ) -> tuple[float, float, np.ndarray, np.ndarray]:
     """
     Fit and remove the "degenerate phase" rigid pulse-shift freedom
@@ -139,6 +149,8 @@ def fit_profile_shift(
     grid = np.linspace(-search_range, search_range, search_points)
     grid_values = [_epsilon_objective(np.array([e]))[0] for e in grid]
     x0 = [grid[int(np.argmin(grid_values))]]
+
+    logger.info("fit_profile_shift: initial phase shift = %f", x0)
 
     result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True)
     if not result.success:

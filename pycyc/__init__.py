@@ -112,11 +112,11 @@ CS.loop(make_plots=True, tolfact=10, maxneg=10, maxlen = 110)
 
 """
 
-from .transforms import *
-from .regularization import *
 from .io_utils import *
+from .jitter import *
 from .model import *
 from .objective import *
 from .profile import *
-from .jitter import *
+from .regularization import *
 from .solver import *
+from .transforms import *
