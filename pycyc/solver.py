@@ -32,6 +32,7 @@ from .io_utils import *
 from .model import *
 from .objective import make_model_cs, pack_real_params, unpack_real_params, cyclic_merit_and_grad, cyclic_merit_lag_x
 from .profile import solve_profile_and_gain
+from .jitter import compute_residuals, fit_jitter_basis, reconstruct_jittered_profile, subspace_principal_angle
 from .io import _IOMixin, loadCyclicSolver
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,28 @@ class CyclicSolver(_IOMixin):
 
         # include separate temporal gain variations in the model
         self.model_gain_variations = False
+
+        # model genuine per-subint pulse jitter with a reduced-rank (PCA)
+        # basis (pycyc.jitter) instead of forcing a single profile shared
+        # across every subint -- see outer_loop. Off by default: this is
+        # new methodology (the jitter/degeneracy plan), not a drop-in
+        # replacement for the existing fixed-profile behavior.
+        self.model_jitter = False
+        # outer_loop passes before the jitter model switches on -- lets the
+        # wavefield fit reach a rough convergence first, so the jitter model
+        # isn't fit against transient wavefield-model error rather than
+        # genuine jitter (see the jitter/degeneracy plan's Stage 4 design).
+        self.jitter_warmup_passes = 2
+        # optional cap on the PCA rank chosen by pycyc.jitter.fit_jitter_basis
+        self.jitter_max_rank = None
+        # current per-subint jitter-aware profile (nsubint, nharm), or None
+        # to use the ordinary pooled/per-subint profile selection below.
+        # Set by outer_loop's jitter refresh step; consulted by loop() and
+        # updateWavefieldSubint() ahead of self.use_integrated_profile.
+        self.jitter_profiles = None
+        # diagnostics from the most recent jitter refresh (see outer_loop)
+        self.jitter_rank = 0
+        self._jitter_basis = None
 
         # normalize each cyclic spectrum
         self.normalize_cyclic_spectra = False
@@ -654,6 +677,112 @@ class CyclicSolver(_IOMixin):
         self.pp_intrinsic = self.harm2phase(safely_divide(ph_numer, ph_denom)) * mean_gain
         print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
+    def _refresh_jitter_model(self):
+        """
+        Recompute the reduced-rank jitter model (pycyc.jitter) against the
+        freshly-pooled reference profile: fits epsilon_t/gain_t per subint
+        against it (pycyc.profile.fit_profile_shift, via
+        pycyc.jitter.compute_residuals), refreshes the PCA basis from the
+        residuals (pycyc.jitter.fit_jitter_basis), and rebuilds
+        self.jitter_profiles for the next pass's wavefield fit to use.
+
+        Called by outer_loop once self.model_jitter is on and warmup has
+        elapsed; assumes self.updateProfile() has just run, so
+        self.pp_intrinsic/self.ph_numer/self.ph_denom are current.
+
+        The per-harmonic profile noise floor needed by fit_jitter_basis is
+        Var(S_t(alpha)) = sigma_D^2 / ph_denom(alpha) -- see
+        pycyc.jitter.fit_jitter_basis's docstring for the derivation --
+        using a single representative sigma_D^2 from self.cyclic_variance
+        on one subint's cyclic spectrum (not a per-subint noise estimate;
+        a simplifying approximation, consistent with fit_profile_shift's
+        gain-fit approximation elsewhere in this plan).
+        """
+        ph_ref = phase2harm(self.pp_intrinsic)
+        ph_ref = normalize_profile(ph_ref)
+        if self.exclude_DC:
+            ph_ref[0] = 0
+
+        ph_numer_per_subint = np.average(self.ph_numer, axis=0)
+        ph_denom_per_subint = np.average(self.ph_denom, axis=0)
+        s_t_all = safely_divide(ph_numer_per_subint, ph_denom_per_subint)
+
+        epsilon_t, gain_t, residuals = compute_residuals(ph_ref, s_t_all, fit_gain=self.model_gain_variations)
+
+        if self.save_cyclic_spectra:
+            cs0 = self.cyclic_spectra[0, 0]
+        else:
+            cs0, _norm = self.get_cs(self.data[0, 0])
+        sigma_D2, _nvalid = self.cyclic_variance(cs0)
+
+        ph_denom_avg = np.real(np.mean(ph_denom_per_subint, axis=0))
+        noise_variance_per_harmonic = sigma_D2 / np.maximum(ph_denom_avg, 1e-300)
+
+        rank, weights, basis, eigenvalues, threshold = fit_jitter_basis(
+            residuals, noise_variance_per_harmonic, max_rank=self.jitter_max_rank
+        )
+
+        angle = subspace_principal_angle(self._jitter_basis, basis) if self._jitter_basis is not None else None
+        logger.info(
+            "outer_loop jitter refresh: rank=%d threshold=%.4g max_eigenvalue=%.4g principal_angle=%s",
+            rank,
+            threshold,
+            eigenvalues.max() if eigenvalues.size else float("nan"),
+            angle,
+        )
+
+        self._jitter_basis = basis
+        self.jitter_rank = rank
+        self.jitter_profiles = reconstruct_jittered_profile(ph_ref, epsilon_t, gain_t, weights, basis)
+
+    def outer_loop(self, n_passes, warmup_passes=None, loop_kwargs=None):
+        """
+        Alternates a per-subint wavefield fit (self.loop, called once per
+        subint) with profile re-estimation (self.updateProfile) across
+        n_passes outer iterations -- the "outer loop" this module's own
+        original docstring flagged as missing ("the next step will be to
+        build the outer loop which uses the new guess at the intrinsic
+        profile to reoptimize the IRF... this isn't yet implemented but
+        the machinery is all there").
+
+        For the first warmup_passes passes (default
+        self.jitter_warmup_passes), this is exactly today's existing
+        behavior: S(alpha) pooled/shared across every subint via the
+        ordinary self.use_integrated_profile selection. After warmup, if
+        self.model_jitter is True, each pass additionally refreshes a
+        reduced-rank jitter model of the profile residuals
+        (self._refresh_jitter_model) and feeds a per-subint jitter-aware
+        profile into the next pass's wavefield fit (loop() and
+        updateWavefieldSubint() both consult self.jitter_profiles ahead of
+        the ordinary profile selection).
+
+        loop_kwargs: extra keyword arguments passed to every self.loop()
+        call (e.g. maxfun, tolfact) -- see loop()'s own docstring.
+        """
+        if warmup_passes is None:
+            warmup_passes = self.jitter_warmup_passes
+        loop_kwargs = dict(loop_kwargs or {})
+
+        for pass_idx in range(n_passes):
+            total_merit = 0.0
+            for isub in range(self.nspec):
+                self.loop(isub=isub, **loop_kwargs)
+                if self.objval:
+                    total_merit += self.objval[-1]
+
+            self.updateProfile()
+
+            if self.model_jitter and pass_idx >= warmup_passes:
+                self._refresh_jitter_model()
+
+            logger.info(
+                "outer_loop pass %d/%d: total merit=%.6e jitter_rank=%d",
+                pass_idx + 1,
+                n_passes,
+                total_merit,
+                self.jitter_rank,
+            )
+
     def initWavefield(self):
         """
         First draft of using FISTA to solve the 2D transfer function
@@ -717,7 +846,9 @@ class CyclicSolver(_IOMixin):
             ps = self.data[isub, ipol]  # dimensions will now be (nchan,nbin)
             cs, norm = self.get_cs(ps)
 
-        if self.use_integrated_profile:
+        if self.jitter_profiles is not None:
+            ph = self.jitter_profiles[isub]
+        elif self.use_integrated_profile:
             ph = self.ph_ref
         else:
             ph_numer = self.ph_numer[ipol, isub]
@@ -990,7 +1121,10 @@ class CyclicSolver(_IOMixin):
         if self.exclude_DC:
             self.ph_ref[0] = 0
 
-        ph = self.ph_ref[:]
+        if self.jitter_profiles is not None:
+            ph = self.jitter_profiles[isub]
+        else:
+            ph = self.ph_ref[:]
 
         if self.nopt == 0 or not use_last_soln:
             self.pp_intrinsic = np.zeros(self.nphase)

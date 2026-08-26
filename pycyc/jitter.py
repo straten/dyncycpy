@@ -16,7 +16,7 @@ dependency -- following the same design as pycyc.objective/pycyc.profile.
 
 from __future__ import annotations
 
-__all__ = ["compute_residuals", "fit_jitter_basis", "reconstruct_jittered_profile"]
+__all__ = ["compute_residuals", "fit_jitter_basis", "reconstruct_jittered_profile", "subspace_principal_angle"]
 
 import numpy as np
 
@@ -130,3 +130,28 @@ def reconstruct_jittered_profile(
     aligned = gain_t[:, np.newaxis] * s0[np.newaxis, :] * np.exp(1j * np.outer(epsilon_t, alpha))
     jitter = weights @ basis
     return aligned + jitter
+
+
+def subspace_principal_angle(basis_a: np.ndarray, basis_b: np.ndarray) -> float | None:
+    """
+    Largest principal angle (radians) between the subspaces spanned by the
+    rows of basis_a and basis_b (each (rank, nharm), not necessarily
+    orthonormal or of equal rank -- pycyc.jitter.fit_jitter_basis's `basis`
+    is neither, since it's un-whitened back to physical profile units).
+    Orthonormalizes each via QR first, then takes arccos of the smallest
+    singular value of their inner product.
+
+    Intended as the outer loop's (Stage 4) convergence diagnostic: track
+    this between successive passes' jitter bases -- it should shrink
+    towards 0 as the outer loop converges to a stationary jitter subspace.
+
+    Returns None if either basis has rank 0 (no significant jitter found),
+    since there is no subspace to compare.
+    """
+    if basis_a.shape[0] == 0 or basis_b.shape[0] == 0:
+        return None
+    qa, _ = np.linalg.qr(basis_a.T)
+    qb, _ = np.linalg.qr(basis_b.T)
+    singular_values = np.linalg.svd(qa.conj().T @ qb, compute_uv=False)
+    singular_values = np.clip(singular_values, -1.0, 1.0)
+    return float(np.arccos(np.min(singular_values)))
