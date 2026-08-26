@@ -7,6 +7,8 @@ band-edge geometry implied by (bw, ref_freq), rather than being generic FFT
 conventions.
 """
 
+from __future__ import annotations
+
 __all__ = [
     "CyclicModelParams",
     "cyclic_padding",
@@ -45,12 +47,17 @@ class CyclicModelParams:
     shear_phasors: np.ndarray
     pad_cyclic_spectra: bool
     include_Nyquist: bool
-    maxharm: "int | None"
+    maxharm: int | None
     exclude_DC: int
     nlag: int
 
 
-def cyclic_padding(cs, bw, ref_freq):
+def cyclic_padding(cs: np.ndarray, bw: float, ref_freq: float) -> np.ndarray:
+    """
+    Zero cs (an (nchan, nharm) cyclic spectrum) outside the band of radio
+    frequency channels each harmonic's shifted response H(nu +/- alpha/2)
+    can validly occupy, per chan_limits_cs. Mutates and returns cs.
+    """
     nharm = cs.shape[1]
     nchan = cs.shape[0]
     for ih in range(nharm):
@@ -60,8 +67,13 @@ def cyclic_padding(cs, bw, ref_freq):
     return cs
 
 
-
-def chan_limits_cs(iharm, nchan, bw, ref_freq):
+def chan_limits_cs(iharm: int, nchan: int, bw: float, ref_freq: float) -> tuple[int, int]:
+    """
+    (min, max) radio-frequency channel indices within which harmonic
+    `iharm`'s shifted response H(nu +/- iharm*ref_freq/2) fits inside a band
+    of `nchan` channels and width `bw` (MHz); channels outside this range
+    would require frequencies beyond the edge of the observed band.
+    """
     chanbw_Hz = bw * 1e6 / nchan  # width of FFT bins in radio frequency Hz
     shift_Hz = iharm * ref_freq / 2
     ichan = round(shift_Hz / chanbw_Hz)
@@ -70,8 +82,9 @@ def chan_limits_cs(iharm, nchan, bw, ref_freq):
     return (ichan, nchan - ichan)  # min,max
 
 
-
-def fscrunch_cs(cs, bw, ref_freq, padding):
+def fscrunch_cs(cs: np.ndarray, bw: float, ref_freq: float, padding: bool) -> np.ndarray:
+    """Sum an (nchan, nharm) cyclic spectrum over radio frequency, optionally
+    band-edge-truncating it (cyclic_padding) first."""
     cstmp = cs[:]
     if padding:
         cstmp = cyclic_padding(cstmp, bw, ref_freq)
@@ -80,8 +93,7 @@ def fscrunch_cs(cs, bw, ref_freq, padding):
     return cstmp.sum(0)
 
 
-
-def total_cyclic_power(cs):
+def total_cyclic_power(cs: np.ndarray) -> float:
     """
     returns the sum of the power in all radio frequencies and cycle frequencies,
     excluding the DC cycle frequency (mean of periodic spectrum)
@@ -89,16 +101,14 @@ def total_cyclic_power(cs):
     return np.sum(np.abs(cs[:, 1:]) ** 2)
 
 
-
-def normalize_profile(ph):
+def normalize_profile(ph: np.ndarray) -> np.ndarray:
     """
     Normalize harmonic profile such that first harmonic has magnitude 1
     """
     return ph / np.abs(ph[1])
 
 
-
-def normalize_pp(pp):
+def normalize_pp(pp: np.ndarray) -> np.ndarray:
     """
     Normalize a profile but keep it in phase rather than harmonics
     """

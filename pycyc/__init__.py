@@ -5,9 +5,30 @@ Glenn Jones
 This is designed to be a library of python functions to be used interactively with ipython
 or in other python scripts. However, for demonstration purposes you can run this as a stand-alone script:
 
-python2.7 pycyc.py input_cs_file.ar   # This will generate an initial profile from the data itself
+python -m pycyc input_cs_file.ar   # This will generate an initial profile from the data itself
 
-python2.7 pycyc.py input_cs_file.ar some_profile.txt  # This will use the profile in some_profile.txt
+python -m pycyc input_cs_file.ar some_profile.txt  # This will use the profile in some_profile.txt
+
+Package layout
+--------------
+pycyc used to be a single ~3000-line pycyc.py; it's now this package, split
+by concern so the underlying math is usable on its own:
+
+    pycyc/transforms.py     FFT-convention helpers (time2freq, cs2cc, ...)
+    pycyc/model.py           cyclic-spectrum shape helpers + CyclicModelParams
+    pycyc/objective.py       the merit function and its gradient (pure functions)
+    pycyc/profile.py         maximum-likelihood profile/gain fitting (pure)
+    pycyc/regularization.py  wavefield thresholding, spectral entropy, ...
+    pycyc/io_utils.py        plain-text array/profile file helpers
+    pycyc/io.py              PSRFITS/pickle I/O (CyclicSolver._IOMixin)
+    pycyc/solver.py          CyclicSolver: orchestrates all of the above
+
+Everything above is re-exported here, so `import pycyc; pycyc.CyclicSolver`,
+`pycyc.cyclic_merit_and_grad`, `pycyc.time2freq`, etc. all resolve exactly
+as if this were still one file. pycyc.objective/pycyc.profile/pycyc.model
+in particular take an explicit CyclicModelParams instead of a CyclicSolver
+instance, so they can be reused (or unit tested, or plugged into a
+different optimizer) independently of CyclicSolver, PSRFITS, or matplotlib.
 
 The majority of these routines have been checked against the original Cyclic-Modelling code
 and produce identical results to floating point accuracy. The results of the optimization may

@@ -9,15 +9,28 @@ its existing signature and now just builds a CyclicModelParams and delegates
 here.
 """
 
+from __future__ import annotations
+
 __all__ = ["solve_profile_and_gain"]
+
+import logging
 
 import numpy as np
 
-from .model import fscrunch_cs
+from .model import CyclicModelParams, fscrunch_cs
 from .transforms import shear_spectra
 
+logger = logging.getLogger(__name__)
 
-def solve_profile_and_gain(cs, hf, params, update_gain, intrinsic_ph_sum=None, intrinsic_ph_sumsq=None):
+
+def solve_profile_and_gain(
+    cs: np.ndarray,
+    hf: np.ndarray,
+    params: CyclicModelParams,
+    update_gain: bool,
+    intrinsic_ph_sum: np.ndarray | None = None,
+    intrinsic_ph_sumsq: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
     """
     Least-squares solve for the intrinsic harmonic profile S_mu(alpha)
     (pycyc.tex Equation A7) and, optionally, the per-subint receiver gain
@@ -45,7 +58,7 @@ def solve_profile_and_gain(cs, hf, params, update_gain, intrinsic_ph_sum=None, i
         )
         gain_denom = tmp[1:].sum()  # sum over all harmonics
         gain = np.real(gain_numer) / np.real(gain_denom)
-        print(f"solve_profile_and_gain gain={gain}")
+        logger.debug("solve_profile_and_gain gain=%s", gain)
     else:
         gain = 1
 

@@ -1,3 +1,15 @@
+"""
+Diagnostic plotting for pycyc, deliberately kept outside the pycyc package
+so pycyc.transforms/pycyc.model/pycyc.objective/pycyc.profile have no
+matplotlib dependency. plot_Doppler_vs_delay/plot_power_vs_delay/
+plot_current_solution/plot_simulation take only plain arrays/scalars, so
+they can be called on saved results without reconstructing a CyclicSolver.
+plot_intrinsic_vs_observed is the one exception, kept accepting a
+CyclicSolver-like first argument (only its .pp_intrinsic is read) for
+backward compatibility with several external scripts that already call it
+that way.
+"""
+
 import os
 
 import numpy as np

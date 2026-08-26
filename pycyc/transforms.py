@@ -123,6 +123,9 @@ def pad_wavefield(h_time_freq, new_shape):
 
 
 def shifted(input_array, fraction_of_bin, axis=0):
+    # NOTE: appears unused anywhere in this repository (including notebooks,
+    # as of the pycyc.py package refactor) -- flagging rather than removing,
+    # in case it's used from somewhere outside this checkout.
     # Get the shape of the input array
     shape = input_array.shape
 

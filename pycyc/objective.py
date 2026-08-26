@@ -13,6 +13,8 @@ directly; the merit and gradient math is unchanged (verified by the
 pytest suite migrated alongside this module, plus new tests below).
 """
 
+from __future__ import annotations
+
 __all__ = [
     "make_model_cs",
     "pack_real_params",
@@ -23,16 +25,20 @@ __all__ = [
 
 import logging
 import pickle
+from typing import Callable
 
 import numpy as np
 
-from .model import chan_limits_cs, cyclic_padding, total_cyclic_power
+from .model import CyclicModelParams, chan_limits_cs, cyclic_padding, total_cyclic_power
 from .transforms import cs2cc, shear_spectra, time2freq
 
 logger = logging.getLogger(__name__)
 
+# Signature of the on_residual callback: (residual, cs_model, cs_data) -> None
+ResidualCallback = Callable[[np.ndarray, np.ndarray, np.ndarray], None]
 
-def make_model_cs(params, hf, s0):
+
+def make_model_cs(params: CyclicModelParams, hf: np.ndarray, s0: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute the model cyclic spectrum S'_mu(alpha, nu) = H(nu+alpha/2)
     H*(nu-alpha/2) S_mu(alpha) (pycyc.tex eqn 1, before the g(t) gain
@@ -65,7 +71,7 @@ def make_model_cs(params, hf, s0):
     return cs, hfplus, hfminus
 
 
-def pack_real_params(ht, rindex):
+def pack_real_params(ht: np.ndarray, rindex: int) -> np.ndarray:
     """Pack a complex impulse response `ht` into the real-valued parameter
     vector used by scipy.optimize.fmin_l_bfgs_b: interleaved (Re, Im) pairs
     for every lag except `rindex`, whose imaginary part is dropped (fixing
@@ -81,7 +87,7 @@ def pack_real_params(ht, rindex):
     return params
 
 
-def unpack_real_params(params, rindex):
+def unpack_real_params(params: np.ndarray, rindex: int) -> np.ndarray:
     """Inverse of pack_real_params."""
     nlag = int((params.shape[0] + 1) / 2)
     ht = np.zeros((nlag,), dtype=np.complex128)
@@ -91,7 +97,7 @@ def unpack_real_params(params, rindex):
     return ht
 
 
-def _active_mask(nchan, nharm, params):
+def _active_mask(nchan: int, nharm: int, params: CyclicModelParams) -> np.ndarray:
     """
     True wherever the model cyclic spectrum built by make_model_cs actually
     depends on `ht`; False wherever it is forced to a data-independent
@@ -118,8 +124,16 @@ def _active_mask(nchan, nharm, params):
 
 
 def cyclic_merit_and_grad(
-    ht, params, s0, cs_data, gain=1.0, rindex=0, dump_residual=False, iprint=False, on_residual=None
-):
+    ht: np.ndarray,
+    params: CyclicModelParams,
+    s0: np.ndarray,
+    cs_data: np.ndarray,
+    gain: float = 1.0,
+    rindex: int = 0,
+    dump_residual: bool = False,
+    iprint: bool = False,
+    on_residual: ResidualCallback | None = None,
+) -> tuple[float, np.ndarray, int]:
     """
     The objective function: computes the merit (pycyc.tex eqn:merit_function)
     and its Wirtinger gradient dM/dh*(tau) (pycyc.tex Appendix, Equations
@@ -200,7 +214,17 @@ def cyclic_merit_and_grad(
     return merit, grad, nonzero
 
 
-def cyclic_merit_lag_x(x, params, rindex, s0, cs_data, gain=1.0, dump_residual=False, iprint=False, on_residual=None):
+def cyclic_merit_lag_x(
+    x: np.ndarray,
+    params: CyclicModelParams,
+    rindex: int,
+    s0: np.ndarray,
+    cs_data: np.ndarray,
+    gain: float = 1.0,
+    dump_residual: bool = False,
+    iprint: bool = False,
+    on_residual: ResidualCallback | None = None,
+) -> tuple[float, np.ndarray]:
     """
     Real-parameter (pack_real_params-packed) wrapper around
     cyclic_merit_and_grad, matching the `func(x, *args) -> (f, g)` signature

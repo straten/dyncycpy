@@ -96,6 +96,10 @@ class _IOMixin:
 
         print(f"loading {filename}")
         self.filenames.append(filename)
+        # self.filename (singular) is read all over CyclicSolver -- plot
+        # titles/directory names, saveResults' default fbase, saveState's
+        # default filename -- but was never actually assigned anywhere.
+        self.filename = filename
         ar = psrchive.Archive_load(filename)
         if self.pscrunch:
             ar.pscrunch()
