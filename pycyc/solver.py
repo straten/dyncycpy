@@ -759,6 +759,7 @@ class CyclicSolver(_IOMixin):
         merit_tol=1e-4,
         jitter_angle_tol=1e-3,
         patience=2,
+        use_last_soln=False,
     ):
         """
         Alternates a per-subint wavefield fit (self.loop, called once per
@@ -781,7 +782,41 @@ class CyclicSolver(_IOMixin):
         the ordinary profile selection).
 
         loop_kwargs: extra keyword arguments passed to every self.loop()
-        call (e.g. maxfun, tolfact) -- see loop()'s own docstring.
+        call (e.g. maxfun, tolfact) -- see loop()'s own docstring. Do not
+        include isub, hf_prev, ht0, use_last_soln or freeze_profile here --
+        outer_loop manages those itself (see below).
+
+        Per-subint fits within a pass run in parallel via
+        concurrent.futures.ThreadPoolExecutor when self.nthread > 1 (mirroring
+        updateProfile/compute_gradient), else serially -- same as those two
+        methods. This requires each subint's fit to be independent of every
+        other subint's fit *within the same pass*, which rules out loop()'s
+        own default of warm-starting isub from whatever self.hf_prev/
+        self.rindex happened to be left by the immediately-preceding
+        self.loop() call (well-defined only under strictly serial
+        execution -- see loop()'s use_last_soln guard). So by default
+        (use_last_soln=False) outer_loop instead warm-starts each subint
+        from *its own* previous pass's solution (self.h_time_delay[isub] /
+        self.optimized_filters[isub], already stored) rather than from
+        whichever subint happened to run immediately before it in scan
+        order -- independent per isub, safe for any self.nthread, and
+        arguably more principled for this multi-pass setting anyway (each
+        subint's fit smoothly refines pass over pass instead of chasing a
+        neighbor's possibly-unrelated solution within one pass). The
+        reference profile (self.ph_ref) is likewise frozen for the whole
+        pass -- computed once here from self.pp_intrinsic before dispatching
+        any subint fits, rather than the online per-subint refinement
+        loop() does when called directly (freeze_profile=True suppresses
+        that; see loop()'s docstring).
+
+        Passing use_last_soln=True restores today's original behavior
+        exactly (loop()'s own self.hf_prev/self.rindex chain, each subint
+        warm-started from the immediately-preceding one in scan order, and
+        self.pp_intrinsic refined online across the pass) -- but loop()
+        itself will raise if self.nthread != 1 in that case, since that
+        chain is meaningless under concurrent execution; outer_loop always
+        runs its per-subint loop serially when use_last_soln=True; set
+        self.nthread = 1 to use it.
 
         Stopping condition: a pass counts as "stable" when the total
         merit's relative change from the previous pass is below merit_tol,
@@ -805,11 +840,46 @@ class CyclicSolver(_IOMixin):
         stable_count = 0
 
         for pass_idx in range(n_passes):
+            ph_ref = phase2harm(self.pp_intrinsic)
+            ph_ref = normalize_profile(ph_ref)
+            if self.exclude_DC:
+                ph_ref[0] = 0
+            self.ph_ref = ph_ref
+
+            def _fit_subint(isub, pass_idx=pass_idx):
+                if use_last_soln:
+                    ht0 = None
+                    hf_prev = None
+                elif pass_idx == 0:
+                    ht0 = None
+                    hf_prev = np.ones((self.nchan,), dtype=np.complex128)
+                else:
+                    ht0 = self.h_time_delay[isub].copy()
+                    hf_prev = self.optimized_filters[isub].copy()
+                return self.loop(
+                    isub=isub,
+                    hf_prev=hf_prev,
+                    ht0=ht0,
+                    use_last_soln=use_last_soln,
+                    freeze_profile=True,
+                    **loop_kwargs,
+                )
+
             total_merit = 0.0
-            for isub in range(self.nspec):
-                self.loop(isub=isub, **loop_kwargs)
-                if self.objval:
-                    total_merit += self.objval[-1]
+            if self.nthread == 1:
+                for isub in range(self.nspec):
+                    total_merit += _fit_subint(isub)
+            else:
+                # unlike compute_gradient/updateProfile, exceptions here are
+                # not caught-and-printed: a failed subint fit (in particular
+                # the use_last_soln/nthread guard above) must stop outer_loop
+                # outright rather than silently proceeding a pass short of a
+                # subint's contribution.
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
+                    future_subint = {executor.submit(_fit_subint, isub): isub for isub in range(self.nspec)}
+
+                    for future in concurrent.futures.as_completed(future_subint):
+                        total_merit += future.result()
 
             self.updateProfile()
 
@@ -1138,6 +1208,7 @@ class CyclicSolver(_IOMixin):
         onp=None,
         adjust_delay=True,
         plot_every=1,
+        freeze_profile=False,
     ):
         """
         Run the non-linear solver to compute the IRF
@@ -1153,10 +1224,45 @@ class CyclicSolver(_IOMixin):
             use 0 for silent, 1 for verbose, 2 for more log info
 
         max_plot_lag: highest lag to plot in diagnostic plots.
-        use_last_soln: If true, use last filter as initial guess for this subint
+        use_last_soln: If true, warm-start this subint's fit from
+            self.hf_prev (or the explicit hf_prev argument) -- i.e. from
+            whichever self.loop() call happened to run immediately before
+            this one -- and, once fit, fold this subint's own profile
+            contribution into self.pp_intrinsic (self.ph_ref for the *next*
+            call is then this pooled, still-accumulating profile). This
+            chain is only well-defined under strictly serial execution:
+            raises RuntimeError if True while self.nthread != 1, since
+            self.nthread is the only signal loop() has that calls might be
+            dispatched concurrently (e.g. multiple isub all starting before
+            any of them has incremented self.nopt, so checking self.nopt
+            can't reliably tell them apart from a genuine one-off call).
+            outer_loop defaults to False and instead warm-starts each
+            subint from its own previous-pass solution, safe for any
+            self.nthread -- see outer_loop's docstring.
         use_minphase: if true, use minimum phase IRF as initial guess
                         else use delta function
+        freeze_profile: if True, use self.ph_ref exactly as the caller left
+            it (skip recomputing it from self.pp_intrinsic) and don't fold
+            this subint's profile into self.pp_intrinsic afterwards --
+            for callers (outer_loop) that freeze the reference profile for
+            an entire pass and later recompute self.pp_intrinsic themselves
+            (self.updateProfile) rather than relying on loop()'s own
+            within-pass online accumulation.
+
+        Returns the fitted filter's final objective value (scipy's
+        fmin_l_bfgs_b return `f`).
         """
+        if use_last_soln and self.nthread != 1:
+            raise RuntimeError(
+                "loop(use_last_soln=True) warm-starts from self.hf_prev, "
+                "i.e. from whichever self.loop() call happened to run "
+                "immediately before this one -- well-defined only under "
+                "strictly serial execution. Set self.nthread = 1 to use "
+                "use_last_soln=True, or leave it False (the default) to "
+                f"fit subints independently, safe for any self.nthread "
+                f"(currently {self.nthread})."
+            )
+
         self.plot_every = plot_every
         self._setup_plot_directory(make_plots, plotdir, max_plot_lag)
 
@@ -1178,11 +1284,12 @@ class CyclicSolver(_IOMixin):
 
         self.dynamic_spectrum[isub, :] = np.real(cs[:, 0])
 
-        self.ph_ref = phase2harm(self.pp_intrinsic)
-        self.ph_ref = normalize_profile(self.ph_ref)
+        if not freeze_profile:
+            self.ph_ref = phase2harm(self.pp_intrinsic)
+            self.ph_ref = normalize_profile(self.ph_ref)
 
-        if self.exclude_DC:
-            self.ph_ref[0] = 0
+            if self.exclude_DC:
+                self.ph_ref[0] = 0
 
         if self.jitter_profiles is not None:
             ph = self.jitter_profiles[isub]
@@ -1190,7 +1297,8 @@ class CyclicSolver(_IOMixin):
             ph = self.ph_ref[:]
 
         if self.nopt == 0 or not use_last_soln:
-            self.pp_intrinsic = np.zeros(self.nphase)
+            if not freeze_profile:
+                self.pp_intrinsic = np.zeros(self.nphase)
             if ht0 is None:
                 if rindex is None:
                     delay = self.phase_gradient(cs)
@@ -1309,9 +1417,12 @@ class CyclicSolver(_IOMixin):
         pp = self.harm2phase(ph)
 
         self.intrinsic_profiles[isub, :] = pp
-        self.pp_intrinsic += pp
+        if not freeze_profile:
+            self.pp_intrinsic += pp
 
         self.nopt += 1
+
+        return f
 
     def cyclic_variance(self, cs):
         ih = self.nharm

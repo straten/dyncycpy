@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import numpy as np
+import pytest
 
 import pycyc
 
@@ -254,3 +255,52 @@ def test_outer_loop_patience_disables_early_stopping():
     )
 
     assert call_count["loop"] == n_passes * CS.nspec
+
+
+def test_outer_loop_parallel_matches_serial():
+    """outer_loop's default (use_last_soln=False) warm-starts each subint
+    from its own previous-pass solution rather than from self.hf_prev's
+    scan-order chain, so per-subint fits within a pass are independent of
+    each other -- self.nthread should only affect wall-clock time, not the
+    result. Confirms self.nthread=1 (serial) and self.nthread=4 (threaded
+    via concurrent.futures.ThreadPoolExecutor) reach the same wavefield and
+    profile from identical starting conditions."""
+    loop_kwargs = dict(make_plots=False, maxfun=20, iprint=-1, use_minphase=False)
+
+    rng = np.random.default_rng(7)
+    CS_serial = _build_synthetic_cyclic_solver(rng, inject_jitter=True)
+    CS_serial.nthread = 1
+    CS_serial.outer_loop(n_passes=6, patience=0, loop_kwargs=loop_kwargs)
+
+    rng = np.random.default_rng(7)
+    CS_parallel = _build_synthetic_cyclic_solver(rng, inject_jitter=True)
+    CS_parallel.nthread = 4
+    CS_parallel.outer_loop(n_passes=6, patience=0, loop_kwargs=loop_kwargs)
+
+    assert np.allclose(CS_serial.h_time_delay, CS_parallel.h_time_delay, atol=1e-6)
+    assert np.allclose(CS_serial.pp_intrinsic, CS_parallel.pp_intrinsic, atol=1e-6)
+    assert CS_serial.jitter_rank == CS_parallel.jitter_rank
+
+
+def test_use_last_soln_requires_nthread_one():
+    """use_last_soln=True chains each subint's warm start from whichever
+    self.loop() call happened to run immediately before it (self.hf_prev),
+    which is only well-defined under strictly serial execution. Both a
+    direct self.loop() call and outer_loop(use_last_soln=True) must raise
+    RuntimeError when self.nthread != 1, and both must work when
+    self.nthread == 1."""
+    loop_kwargs = dict(make_plots=False, maxfun=10, iprint=-1, use_minphase=False)
+
+    rng = np.random.default_rng(3)
+    CS = _build_synthetic_cyclic_solver(rng, inject_jitter=False)
+    CS.nthread = 8
+    with pytest.raises(RuntimeError):
+        CS.loop(isub=0, use_last_soln=True, **loop_kwargs)
+    with pytest.raises(RuntimeError):
+        CS.outer_loop(n_passes=2, use_last_soln=True, loop_kwargs=loop_kwargs)
+
+    rng = np.random.default_rng(3)
+    CS_ok = _build_synthetic_cyclic_solver(rng, inject_jitter=False)
+    CS_ok.nthread = 1
+    CS_ok.loop(isub=0, use_last_soln=True, **loop_kwargs)  # must not raise
+    CS_ok.outer_loop(n_passes=2, use_last_soln=True, loop_kwargs=loop_kwargs)  # must not raise
