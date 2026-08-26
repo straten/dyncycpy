@@ -1,8 +1,10 @@
 """
-pycyc.solver - CyclicSolver orchestration, plus the CS-threading merit/
-gradient/model functions not yet split into pycyc.objective (Stage 2 of the
-refactor plan) and the I/O/plotting methods not yet split into pycyc.io /
-plotting.py (Stage 3).
+pycyc.solver - CyclicSolver orchestration.
+
+The merit/gradient/model math has moved to pycyc.objective/pycyc.profile
+(Stage 2 of the refactor plan) as pure functions of an explicit
+CyclicModelParams rather than a CyclicSolver instance; the I/O/plotting
+methods are still here, pending Stage 3.
 """
 
 try:
@@ -28,6 +30,8 @@ from .transforms import *
 from .regularization import *
 from .io_utils import *
 from .model import *
+from .objective import make_model_cs, pack_real_params, unpack_real_params, cyclic_merit_and_grad, cyclic_merit_lag_x
+from .profile import solve_profile_and_gain
 
 class CyclicSolver:
     def __init__(
@@ -209,6 +213,21 @@ class CyclicSolver:
 
         self.statefile = statefile
 
+    def _model_params(self):
+        """Build the CyclicModelParams (pycyc.model) describing the current
+        forward model, for make_model_cs/cyclic_merit_and_grad/
+        solve_profile_and_gain (pycyc.objective/pycyc.profile)."""
+        return CyclicModelParams(
+            bw=self.bw,
+            ref_freq=self.ref_freq,
+            shear_phasors=self.shear_phasors,
+            pad_cyclic_spectra=self.pad_cyclic_spectra,
+            include_Nyquist=self.include_Nyquist,
+            maxharm=self.maxharm,
+            exclude_DC=self.exclude_DC,
+            nlag=self.nlag,
+        )
+
     def modelCS(self, ht=None, hf=None):
         """
         Convenience function for computing modelCS using ref profile
@@ -217,9 +236,9 @@ class CyclicSolver:
         """
         if ht is not None:
             hf = time2freq(ht)
-        cs = make_model_cs(self, hf, self.ph_ref)
+        cs, _hfplus, _hfminus = make_model_cs(self._model_params(), hf, self.ph_ref)
 
-        return cs[0]
+        return cs
 
     def load_initial_guess(self, filename):
         """
@@ -945,7 +964,16 @@ class CyclicSolver:
             print(f"update filter isub={isub}/{self.nspec}")
 
         self.rindex = isub
-        _merit, grad, _nterm = complex_cyclic_merit_lag(ht, self, ph, cs, self.optimal_gains[isub])
+        _merit, grad, _nterm = cyclic_merit_and_grad(
+            ht,
+            self._model_params(),
+            ph,
+            cs,
+            gain=self.optimal_gains[isub],
+            rindex=self.rindex,
+            dump_residual=self.dump_residual,
+            iprint=self.iprint,
+        )
 
         self.h_time_delay_grad[isub, :] += grad
 
@@ -1093,42 +1121,21 @@ class CyclicSolver:
                         print(f"compute_gradient isub={isub} exception: {exc}")
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
-        hfplus, hfminus = shear_spectra(hf, self.shear_phasors)
-
-        # cs H(-)H(+)*
-        cshmhp = cs * hfminus * np.conj(hfplus)
-        # |H(-)|^2 |H(+)|^2
-        maghmhp = (np.abs(hfminus) * np.abs(hfplus)) ** 2
-
-        if update_gain and self.intrinsic_ph_sum is not None:
-            # Equation A5 numerator
-            tmp = fscrunch_cs(
-                np.conj(cshmhp) * self.intrinsic_ph_sum,
-                bw=bw,
-                ref_freq=ref_freq,
-                padding=self.pad_cyclic_spectra,
-            )
-            gain_numer = tmp[1:].sum()  # sum over all harmonics
-            # Equation A5 denominator
-            tmp = fscrunch_cs(
-                maghmhp * self.intrinsic_ph_sumsq, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra
-            )
-            gain_denom = tmp[1:].sum()  # sum over all harmonics
-            gain = np.real(gain_numer) / np.real(gain_denom)
-            print(f"optimize_profile gain={gain}")
-        else:
-            gain = 1
-
-        # Equation A7 numerator
-        ph_numer = fscrunch_cs(cshmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain
-        # Equation A7 denominator
-        ph_denom = fscrunch_cs(maghmhp, bw=bw, ref_freq=ref_freq, padding=self.pad_cyclic_spectra) * gain**2
-
-        # When the denominator is zero, set the intrinsic profile to zero
-        ph = ph_numer / ph_denom
-        ph[np.real(ph_denom) <= 0.0] = 0
-
-        return ph, gain, ph_numer, ph_denom
+        # bw/ref_freq are taken from the explicit arguments (not self.bw/
+        # self.ref_freq) to preserve this method's existing signature/
+        # behavior exactly, including for a caller that passes values
+        # different from self's current ones.
+        params = CyclicModelParams(
+            bw=bw,
+            ref_freq=ref_freq,
+            shear_phasors=self.shear_phasors,
+            pad_cyclic_spectra=self.pad_cyclic_spectra,
+            include_Nyquist=self.include_Nyquist,
+            maxharm=self.maxharm,
+            exclude_DC=self.exclude_DC,
+            nlag=self.nlag,
+        )
+        return solve_profile_and_gain(cs, hf, params, update_gain, self.intrinsic_ph_sum, self.intrinsic_ph_sumsq)
 
     def unload_solution(self, filename):
 
@@ -1302,7 +1309,7 @@ class CyclicSolver:
             minbound = np.zeros_like(ht)
             minbound[:valsamp] = 1 + 1j
             minbound = np.roll(minbound, rindex - maxneg)
-            b = get_params(minbound, rindex)
+            b = pack_real_params(minbound, rindex)
             bchoice = [0, None]
             bounds = [(bchoice[int(x)], bchoice[int(x)]) for x in b]
         else:
@@ -1327,23 +1334,32 @@ class CyclicSolver:
             tolfact * tol / 2.220e-16
         )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
         print("scipytol : %.5e" % scipytol)
-        x0 = get_params(ht, rindex)
+        x0 = pack_real_params(ht, rindex)
 
         self.niter = 0
         self.objval = []
 
         self.cs = cs
+        params = self._model_params()
+
+        def _objective(x):
+            merit, grad = cyclic_merit_lag_x(
+                x, params, rindex, ph, cs, dump_residual=self.dump_residual, iprint=self.iprint
+            )
+            # the objval list keeps track of how the convergence is going
+            self.objval.append(merit)
+            return merit, grad
+
         x, f, d = scipy.optimize.fmin_l_bfgs_b(
-            cyclic_merit_lag,
+            _objective,
             x0,
             m=20,
-            args=(self,),
             iprint=iprint,
             maxfun=maxfun,
             factr=scipytol,
             bounds=bounds,
         )
-        ht = get_ht(x, rindex)
+        ht = unpack_real_params(x, rindex)
 
         if self.delay_taper is not None:
             ht *= self.delay_taper
@@ -1953,138 +1969,6 @@ def plotSimulation(CS, mlag=100):
         ("sim_SNR_%.1f_%s_%04d_%04d.pdf" % (CS.noise, CS.source, CS.nopt, CS.niter)),
     )
     canvas.print_figure(fname)
-
-
-
-def make_model_cs(CS, hf, s0):
-    bw = CS.bw
-    ref_freq = CS.ref_freq
-    phasors = CS.shear_phasors
-    padding = CS.pad_cyclic_spectra
-
-    nchan = hf.shape[0]
-    nharm = s0.shape[0]
-    # profile2cs
-    cs = np.repeat(
-        s0[np.newaxis, :], nchan, axis=0
-    )  # fill the cs model with the harmonic profile for each freq chan
-
-    hfplus, hfminus = shear_spectra(hf, phasors)
-
-    cs = cs * hfplus * np.conj(hfminus)
-
-    # force the Nyquist harmonic to be real-valued
-    if CS.include_Nyquist:
-        cs[:,nharm-1] = np.abs(cs[:,nharm-1])
-
-    if padding:
-        cs = cyclic_padding(cs, bw, ref_freq)
-
-    return cs, hfplus, hfminus
-
-
-
-def get_params(ht, rindex):
-    nlag = ht.shape[0]
-    params = np.zeros((2 * nlag - 1,), dtype="float")
-    if rindex > 0:
-        params[: 2 * (rindex)] = ht[:rindex].view("float")
-    params[2 * rindex] = ht[rindex].real
-    if rindex < nlag - 1:
-        params[2 * rindex + 1 :] = ht[rindex + 1 :].view("float")
-    return params
-
-
-
-def get_ht(params, rindex):
-    nlag = int((params.shape[0] + 1) / 2)
-    ht = np.zeros((nlag,), dtype=np.complex128)
-    ht[:rindex] = params[: 2 * rindex].view(np.complex128)
-    ht[rindex] = params[2 * rindex]
-    ht[rindex + 1 :] = params[2 * rindex + 1 :].view(np.complex128)
-    return ht
-
-
-
-def cyclic_merit_lag(x, CS):
-    """
-    The objective function. Computes mean squared merit and gradient
-
-    Format is compatible with scipy.optimize
-    """
-    print("rindex", CS.rindex)
-    ht = get_ht(x, CS.rindex)
-    merit, grad, nonzero = complex_cyclic_merit_lag(ht, CS, CS.ph_ref, CS.cs, 1.0)
-    # the objval list keeps track of how the convergence is going
-    CS.objval.append(merit)
-
-    # multiply by 2 when going from Wertinger to real/imag derivatives
-    grad = get_params(2.0 * grad, CS.rindex)
-    return merit, grad
-
-
-
-def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
-    hf = time2freq(ht)
-    cs_model, hfplus, hfminus = make_model_cs(CS, hf, s0)
-    cs_model *= gain
-
-    if CS.maxharm is not None:
-        cs_model[:, CS.maxharm + 1 :] = 0.0
-
-    extract = cs_model[:, CS.exclude_DC :]
-    nonzero = np.count_nonzero(extract)
-
-    # WDvS13 Equation 19 and eqn:merit_function of appendix
-    merit = (np.abs(extract - cs_data[:, CS.exclude_DC :]) ** 2).sum()
-
-    # residual, R = model - data
-    residual = cs_model - cs_data
-
-    if CS.dump_residual:
-        P_residual = total_cyclic_power(residual)
-        P_model = total_cyclic_power(cs_model)
-        P_data = total_cyclic_power(cs_data)
-        print(f"complex_cyclic_merit_lag nharm={residual.shape[1]} power in residual={P_residual} model={P_model} data={P_data}")
-        filename = f"complex_cyclic_merit_lag_residual_{CS.rindex:03d}.pkl"
-        with open(filename, "wb") as fh:
-            pickle.dump(residual, fh)
-        filename = f"complex_cyclic_merit_lag_data_{CS.rindex:03d}.pkl"
-        with open(filename, "wb") as fh:
-            pickle.dump(cs_data, fh)
-
-    phasors = CS.shear_phasors
-
-    # make nchan / nlag copies of the intrinsic profile
-    cs0 = np.repeat(s0[np.newaxis, :], CS.nlag, axis=0)
-
-    cc1 = cs2cc(residual * hfminus)
-    grad2 = cc1 * phasors * np.conj(cs0)  # WDvS Equation 37
-    grad_sum1 = grad2[:, CS.exclude_DC :].sum(1)  # sum over all harmonics
-
-    cc1 = cs2cc(np.conj(residual) * hfplus)
-    grad2 = cc1 * np.conj(phasors) * cs0
-    grad_sum2 = grad2[:, CS.exclude_DC :].sum(1)  # sum over all harmonics
-
-    test_conjugacy = False
-    if test_conjugacy:
-        test = grad_sum1 - np.conj(grad_sum2)
-        test_power = (np.abs(test) ** 2).sum()
-        sum1_power = (np.abs(grad_sum1) ** 2).sum()
-        sum2_power = (np.abs(grad_sum2) ** 2).sum()
-        print(
-            f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}"
-        )
-
-    # WDvS13 Appendix, Equations dSconj_dh/dS_dh: each term carries an
-    # explicit factor of g(t_l) from differentiating through the gain-scaled
-    # model, independent of the gain already folded into `residual` above.
-    grad = gain * (grad_sum1 + grad_sum2)
-
-    if CS.iprint:
-        print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
-
-    return merit, grad, nonzero
 
 
 

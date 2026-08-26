@@ -47,10 +47,10 @@ def test_golden_merit_trajectory():
     step = 0.001
     merits = []
     for _ in range(5):
-        merit, grad, _ = pycyc.complex_cyclic_merit_lag(ht, cs, s0, cs_data, 1.0)
+        merit, grad, _ = pycyc.cyclic_merit_and_grad(ht, cs, s0, cs_data, gain=1.0)
         merits.append(merit)
         ht = ht - step * grad
-    merit_final, _, _ = pycyc.complex_cyclic_merit_lag(ht, cs, s0, cs_data, 1.0)
+    merit_final, _, _ = pycyc.cyclic_merit_and_grad(ht, cs, s0, cs_data, gain=1.0)
     merits.append(merit_final)
 
     np.testing.assert_allclose(merits, GOLDEN_MERITS, rtol=1e-8)

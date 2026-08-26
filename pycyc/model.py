@@ -7,12 +7,48 @@ band-edge geometry implied by (bw, ref_freq), rather than being generic FFT
 conventions.
 """
 
-__all__ = ["cyclic_padding", "chan_limits_cs", "fscrunch_cs", "total_cyclic_power", "normalize_profile", "normalize_pp"]
+__all__ = [
+    "CyclicModelParams",
+    "cyclic_padding",
+    "chan_limits_cs",
+    "fscrunch_cs",
+    "total_cyclic_power",
+    "normalize_profile",
+    "normalize_pp",
+]
+
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.fft import irfft
 
 from .transforms import phase2harm
+
+
+@dataclass(frozen=True)
+class CyclicModelParams:
+    """
+    The subset of CyclicSolver's configuration that defines the forward
+    cyclic-spectrum model, needed by make_model_cs/cyclic_merit_and_grad
+    (pycyc.objective) and solve_profile_and_gain (pycyc.profile) -- pulled
+    out so those functions take explicit parameters instead of reaching into
+    a CyclicSolver instance.
+
+    Per-call diagnostic/debug knobs (which subint, verbosity, whether to
+    dump intermediate arrays) are deliberately *not* part of this: they vary
+    per call, not per model, and are passed as ordinary keyword arguments
+    instead.
+    """
+
+    bw: float
+    ref_freq: float
+    shear_phasors: np.ndarray
+    pad_cyclic_spectra: bool
+    include_Nyquist: bool
+    maxharm: "int | None"
+    exclude_DC: int
+    nlag: int
+
 
 def cyclic_padding(cs, bw, ref_freq):
     nharm = cs.shape[1]
