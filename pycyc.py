@@ -2570,7 +2570,10 @@ def complex_cyclic_merit_lag(ht, CS, s0, cs_data, gain):
             f"complex_cyclic_merit_lag relative power in test={test_power / np.sqrt(sum1_power * sum2_power)}"
         )
 
-    grad = grad_sum1 + grad_sum2
+    # WDvS13 Appendix, Equations dSconj_dh/dS_dh: each term carries an
+    # explicit factor of g(t_l) from differentiating through the gain-scaled
+    # model, independent of the gain already folded into `residual` above.
+    grad = gain * (grad_sum1 + grad_sum2)
 
     if CS.iprint:
         print("merit= %.7e  grad= %.7e" % (merit, (np.abs(grad) ** 2).sum()))
