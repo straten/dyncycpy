@@ -70,6 +70,7 @@ def _build_synthetic_cyclic_solver(rng, nsubint=8, inject_jitter=True):
     CS.jitter_profiles = None
     CS.jitter_rank = 0
     CS._jitter_basis = None
+    CS.jitter_principal_angle = None
     CS.intrinsic_ph_sum = None
     CS.intrinsic_ph_sumsq = None
     CS.compute_scattered_profile = False
@@ -198,3 +199,58 @@ def test_outer_loop_without_jitter_model_leaves_jitter_rank_zero():
 
     assert CS.jitter_rank == 0
     assert CS.jitter_profiles is None
+
+
+def test_outer_loop_stops_early_once_converged():
+    """Given a generous n_passes cap, outer_loop should stop itself once
+    merit (and, once active, the jitter basis) has stabilized for
+    `patience` consecutive passes, rather than always running to
+    n_passes -- the stopping condition outer_loop previously lacked."""
+    rng = np.random.default_rng(7)
+    CS = _build_synthetic_cyclic_solver(rng, inject_jitter=True)
+    CS.jitter_warmup_passes = 1
+
+    call_count = {"loop": 0}
+    real_loop = CS.loop
+
+    def counting_loop(*args, **kwargs):
+        call_count["loop"] += 1
+        return real_loop(*args, **kwargs)
+
+    CS.loop = counting_loop
+
+    CS.outer_loop(
+        n_passes=20,
+        loop_kwargs=dict(make_plots=False, maxfun=20, iprint=-1, use_minphase=False),
+    )
+
+    passes_run = call_count["loop"] / CS.nspec
+    assert passes_run < 20  # stopped before exhausting the hard cap
+    assert CS.jitter_rank > 0
+
+
+def test_outer_loop_patience_disables_early_stopping():
+    """patience<=0 must recover the old always-run-n_passes behavior
+    exactly, for callers (e.g. scripts driving outer_loop with their own
+    fixed iteration budget) that don't want early stopping."""
+    rng = np.random.default_rng(13)
+    CS = _build_synthetic_cyclic_solver(rng, inject_jitter=False)
+    CS.model_jitter = False
+
+    call_count = {"loop": 0}
+    real_loop = CS.loop
+
+    def counting_loop(*args, **kwargs):
+        call_count["loop"] += 1
+        return real_loop(*args, **kwargs)
+
+    CS.loop = counting_loop
+
+    n_passes = 5
+    CS.outer_loop(
+        n_passes=n_passes,
+        patience=0,
+        loop_kwargs=dict(make_plots=False, maxfun=10, iprint=-1, use_minphase=False),
+    )
+
+    assert call_count["loop"] == n_passes * CS.nspec

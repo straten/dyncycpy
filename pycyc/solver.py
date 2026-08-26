@@ -206,6 +206,7 @@ class CyclicSolver(_IOMixin):
         # diagnostics from the most recent jitter refresh (see outer_loop)
         self.jitter_rank = 0
         self._jitter_basis = None
+        self.jitter_principal_angle = None
 
         # normalize each cyclic spectrum
         self.normalize_cyclic_spectra = False
@@ -747,13 +748,22 @@ class CyclicSolver(_IOMixin):
 
         self._jitter_basis = basis
         self.jitter_rank = rank
+        self.jitter_principal_angle = angle
         self.jitter_profiles = reconstruct_jittered_profile(ph_ref, epsilon_t, gain_t, weights, basis)
 
-    def outer_loop(self, n_passes, warmup_passes=None, loop_kwargs=None):
+    def outer_loop(
+        self,
+        n_passes,
+        warmup_passes=None,
+        loop_kwargs=None,
+        merit_tol=1e-4,
+        jitter_angle_tol=1e-3,
+        patience=2,
+    ):
         """
         Alternates a per-subint wavefield fit (self.loop, called once per
-        subint) with profile re-estimation (self.updateProfile) across
-        n_passes outer iterations -- the "outer loop" this module's own
+        subint) with profile re-estimation (self.updateProfile) across up
+        to n_passes outer iterations -- the "outer loop" this module's own
         original docstring flagged as missing ("the next step will be to
         build the outer loop which uses the new guess at the intrinsic
         profile to reoptimize the IRF... this isn't yet implemented but
@@ -772,10 +782,27 @@ class CyclicSolver(_IOMixin):
 
         loop_kwargs: extra keyword arguments passed to every self.loop()
         call (e.g. maxfun, tolfact) -- see loop()'s own docstring.
+
+        Stopping condition: a pass counts as "stable" when the total
+        merit's relative change from the previous pass is below merit_tol,
+        AND -- only once the jitter model is active (self.model_jitter and
+        past warmup) -- the jitter basis has also stopped moving, i.e.
+        self.jitter_principal_angle (set by _refresh_jitter_model, the
+        principal angle in radians between this pass's and the previous
+        pass's jitter subspace) is below jitter_angle_tol. Requiring both
+        avoids declaring convergence just because the wavefield merit has
+        locally plateaued while the jitter subspace is still shifting
+        underneath it. The loop stops once `patience` consecutive passes
+        are stable; n_passes is always a hard cap regardless. Set
+        patience<=0 to disable early stopping entirely and always run
+        exactly n_passes passes.
         """
         if warmup_passes is None:
             warmup_passes = self.jitter_warmup_passes
         loop_kwargs = dict(loop_kwargs or {})
+
+        prev_merit = None
+        stable_count = 0
 
         for pass_idx in range(n_passes):
             total_merit = 0.0
@@ -786,16 +813,36 @@ class CyclicSolver(_IOMixin):
 
             self.updateProfile()
 
-            if self.model_jitter and pass_idx >= warmup_passes:
+            jitter_active = self.model_jitter and pass_idx >= warmup_passes
+            if jitter_active:
                 self._refresh_jitter_model()
 
+            merit_converged = (
+                prev_merit is not None
+                and prev_merit != 0
+                and abs(total_merit - prev_merit) / abs(prev_merit) < merit_tol
+            )
+            jitter_converged = (
+                not jitter_active
+                or self.jitter_principal_angle is None
+                or self.jitter_principal_angle < jitter_angle_tol
+            )
+            stable_count = stable_count + 1 if (merit_converged and jitter_converged) else 0
+            prev_merit = total_merit
+
             logger.info(
-                "outer_loop pass %d/%d: total merit=%.6e jitter_rank=%d",
+                "outer_loop pass %d/%d: total merit=%.6e jitter_rank=%d stable=%d/%d",
                 pass_idx + 1,
                 n_passes,
                 total_merit,
                 self.jitter_rank,
+                stable_count,
+                patience,
             )
+
+            if patience > 0 and stable_count >= patience:
+                logger.info("outer_loop: converged after %d pass(es)", pass_idx + 1)
+                break
 
     def initWavefield(self):
         """
