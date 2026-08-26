@@ -116,4 +116,6 @@ from .transforms import *
 from .regularization import *
 from .io_utils import *
 from .model import *
+from .objective import *
+from .profile import *
 from .solver import *

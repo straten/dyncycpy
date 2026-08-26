@@ -365,55 +365,57 @@ def subtract_degenerate_dof(h_time_delay_grad,h_time_delay):
 
 
 
-def spectral_shift(alpha, hf):
+def spectral_shift(theta, hf, index=None):
     """
-    Return the input mupltiplied by a phase and phase gradient
+    Return the input multiplied by a phase and phase gradient
 
     Args:
-    alpha: A 1D array of two values: phase, and slope
+    theta: A 1D array of two values: phase, and slope
     hf: the complex-valued spectra that is transformed
+    index: the array the slope multiplies. Defaults to the FFT bin
+        frequencies np.fft.fftfreq(hf.size), appropriate when hf is a
+        frequency-domain spectrum and the slope represents a delay. Pass
+        e.g. np.arange(hf.size) instead for a harmonic-indexed profile,
+        where the slope represents a rigid pulse-phase-shift rate.
 
     Returns:
-    The transformed input
+    The transformed input, and the index array used
     """
 
-    phase = alpha[0]
-    slope = alpha[1]
-    nus = np.fft.fftfreq(hf.size)
-    return hf * np.exp(1j * (phase + slope * nus)), nus
+    phase = theta[0]
+    slope = theta[1]
+    if index is None:
+        index = np.fft.fftfreq(hf.size)
+    return hf * np.exp(1j * (phase + slope * index)), index
 
 
 
-def spectral_distance(alpha, hf_ref, hf):
+def spectral_distance(theta, hf_ref, hf, index=None):
     """
     Calculates the magnitude of the difference between the two spectra in hf_ref and hf
     after mupltiplying the second one by a phase and phase gradient
 
     Args:
-    alpha: A 1D array of two values: phase, and slope
+    theta: A 1D array of two values: phase, and slope
     hf_ref: the complex-valued spectra used as a reference
     hf: the complex-valued spectra that is aligned to hf_ref by minimizing distance
+    index: see spectral_shift
 
     Returns:
-    The distance and its gradient with respect to the 3 parameters in alpha
+    The distance and its gradient with respect to the 2 parameters in theta
     """
 
-    alpha[0]
-    alpha[1]
-    # print(f"{phase=} {slope=}")
-
-    hfprime, nus = spectral_shift(alpha, hf)
+    hfprime, index = spectral_shift(theta, hf, index=index)
     delta = hf_ref - hfprime
 
     diff = np.sum(np.abs(delta) ** 2)
 
     del_phase = 1j * hfprime
-    del_slope = 1j * nus * hfprime
+    del_slope = 1j * index * hfprime
 
     ddiff_dphs = -2 * np.sum(np.real(np.conj(delta) * del_phase))
     ddiff_dslo = -2 * np.sum(np.real(np.conj(delta) * del_slope))
 
-    # print(f"{diff=} del_phi={ddiff_dphs} del_eps={ddiff_dslo}")
     return diff, [ddiff_dphs, ddiff_dslo]
 
 
