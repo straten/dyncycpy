@@ -8,7 +8,9 @@ phase/delay/shift projections from the wavefield gradient, and
 frequency-response alignment between neighbouring subints.
 """
 
-__all__ = ["apply_threshold", "apply_shrinkage_threshold", "apply_delay_shrinkage_threshold", "noise_power_wavefield", "delay_noise_power_wavefield", "rms_wavefield", "normalize_cs_by_noise_rms", "normalize_cs", "rms_cs", "find_n_largest_indices", "spectral_entropy_grad", "spectral_entropy", "minimize_spectral_entropy", "circular", "minimize_temporal_phase_noise", "subtract_degenerate_delay_and_phase", "subtract_degenerate_dof", "spectral_shift", "spectral_distance", "minimize_difference", "align_to_neighbour"]
+__all__ = ["apply_threshold", "apply_shrinkage_threshold", "apply_delay_shrinkage_threshold", "noise_power_wavefield", "delay_noise_power_wavefield", "rms_wavefield", "normalize_cs_by_noise_rms", "normalize_cs", "rms_cs", "find_n_largest_indices", "spectral_entropy_grad", "spectral_entropy", "minimize_spectral_entropy", "spectral_entropy_grad_with_delay", "spectral_entropy_with_delay", "minimize_spectral_entropy_with_delay", "circular", "minimize_temporal_phase_noise", "subtract_degenerate_delay_and_phase", "subtract_degenerate_dof", "spectral_shift", "spectral_distance", "minimize_difference", "align_to_neighbour"]
+
+import logging
 
 import numpy as np
 from scipy.fft import fft, ifft
@@ -17,6 +19,8 @@ from scipy.signal import fftconvolve
 
 from .transforms import time2freq, freq2time
 from .model import chan_limits_cs
+
+logger = logging.getLogger(__name__)
 
 def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
@@ -295,6 +299,152 @@ def minimize_spectral_entropy(h_time_delay):
     S_final = spectral_entropy(h_time_delay)
 
     print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
+
+
+
+def spectral_entropy_grad_with_delay(params, h_time_freq):
+    """
+    Jointly optimizes the per-subint absolute phase phi_l AND delay
+    epsilon_l (pycyc.tex "Minimal Spectral Entropy", extended to the
+    epsilon_l gradient the tex derives symbolically but never carries to a
+    simplified closed form -- see pycyc.tex for the completed derivation).
+    Adapted from notebooks/Minimum_Spectral_Entropy_Test.ipynb, the
+    author's own validated prototype; verified algebraically identical, for
+    the phi part, to spectral_entropy_grad above via the orthonormal-FFT
+    identity conj(ifft(X)) = fft(conj(X)).
+
+    Unlike spectral_entropy_grad (phi-only, operating on h_time_delay and
+    applying phi as a per-row scalar multiply), this takes h_time_freq --
+    H(nu;t), the *frequency*-domain dynamic response -- because epsilon is a
+    delay ramp applied in frequency (exp(i*epsilon*nu)), equivalent by the
+    Fourier shift theorem to shifting h(tau;t) along tau; the delay-domain
+    transform is done internally.
+
+    Args:
+    params: A 1D array of 2*(Ntime-1) values: (Ntime-1) real-valued phase
+        shifts phi_l (radians), followed by (Ntime-1) real-valued delay
+        ramps epsilon_l (radians per normalized frequency bin), applied to
+        every row except the first (which is held fixed, breaking the
+        overall phi/epsilon degeneracy the same way rindex does for the
+        wavefield fit itself).
+    h_time_freq: the dynamic frequency response H(nu;t), a 2D array of
+        Ntime * Nchan complex values.
+
+    Returns:
+    The spectral entropy of h(tau,omega) and its gradient with respect to
+    (phi_l, epsilon_l), same concatenated layout as params.
+    """
+    Ntime, Nchan = h_time_freq.shape
+
+    phs = np.zeros(Ntime)
+    eps = np.zeros(Ntime)
+    phs[1:] = params[: Ntime - 1]
+    eps[1:] = params[Ntime - 1 :]
+
+    nus = np.fft.fftfreq(Nchan)
+    h_time_freq_prime = h_time_freq * np.exp(1j * np.outer(eps, nus))
+    # d/deps of h_time_freq_prime, with the explicit "i" factor dropped --
+    # matches how the phi gradient below never applies its own explicit "i"
+    # either, both instead relying on Re[-i*z] = Im[z] at the end.
+    dh_time_freq_prime_deps_oni = h_time_freq_prime * nus[np.newaxis, :]
+
+    h_time_delay_prime = ifft(h_time_freq_prime, axis=1, norm="ortho")
+    dh_time_delay_prime_deps_oni = ifft(dh_time_freq_prime_deps_oni, axis=1, norm="ortho")
+
+    phasors = np.exp(1.0j * phs)
+    h_time_delay_prime = h_time_delay_prime * phasors[:, np.newaxis]
+    dh_time_delay_prime_deps_oni = dh_time_delay_prime_deps_oni * phasors[:, np.newaxis]
+
+    h_doppler_delay_prime = fft(h_time_delay_prime, axis=0, norm="ortho")
+    power_spectrum = np.abs(h_doppler_delay_prime) ** 2
+
+    total_power = np.sum(power_spectrum)
+    power_spectrum = power_spectrum / total_power
+    log_power_spectrum = np.log2(power_spectrum + 1e-16)
+    entropy = -np.sum(power_spectrum * log_power_spectrum)
+
+    weighted_ifft = ifft((1.0 + log_power_spectrum) * h_doppler_delay_prime, axis=0, norm="ortho")
+    conj_weighted = np.conj(weighted_ifft)
+
+    gradient_phs = 2.0 / total_power * np.sum(np.imag(conj_weighted * h_time_delay_prime), axis=1)
+    gradient_eps = 2.0 / total_power * np.sum(np.imag(conj_weighted * dh_time_delay_prime_deps_oni), axis=1)
+
+    return entropy, np.concatenate((gradient_phs[1:], gradient_eps[1:]))
+
+
+
+def spectral_entropy_with_delay(h_time_freq):
+    ntime = h_time_freq.shape[0]
+    params = np.zeros(2 * (ntime - 1))
+    entropy, _grad = spectral_entropy_grad_with_delay(params, h_time_freq)
+    return entropy
+
+
+
+def minimize_spectral_entropy_with_delay(h_time_freq, guess_phi=None, guess_eps=None, maxiter=1000):
+    """
+    In-place joint (phi_l, epsilon_l) spectral-entropy minimization of
+    h_time_freq -- see spectral_entropy_grad_with_delay. Off by default in
+    CyclicSolver (self.minimize_spectral_entropy_delay); the epsilon fit
+    roughly doubles the parameter count of the shipped phi-only
+    minimize_spectral_entropy and BFGS convergence at realistic subint
+    counts is not guaranteed (observed directly, adapting this from the
+    prototype: ~468 subints / 934 parameters left BFGS at maxiter=1000
+    still visibly decreasing, not converged) -- hence the explicit maxiter
+    and the warning (not silence) on non-convergence, both absent from the
+    prototype.
+
+    guess_phi/guess_eps: optional (Ntime-1)-length initial guesses (e.g.
+    warm-started from a previous outer-loop pass, or from
+    pycyc.profile.fit_profile_shift's per-subint epsilon estimates as a
+    cross-check/comparison).
+
+    Returns (phi, epsilon), the fitted (Ntime-1)-length arrays (the fixed
+    first-row phi[0]=epsilon[0]=0 convention is not included) -- unlike
+    minimize_spectral_entropy, which returns nothing, since here the fitted
+    epsilon is itself useful as a diagnostic to compare against the
+    profile-domain estimate.
+    """
+    ntime, nchan = h_time_freq.shape
+    initial_guess = np.zeros(2 * (ntime - 1))
+    if guess_phi is not None:
+        initial_guess[: ntime - 1] = guess_phi
+    if guess_eps is not None:
+        initial_guess[ntime - 1 :] = guess_eps
+
+    S_init = spectral_entropy_with_delay(h_time_freq)
+
+    result = minimize(
+        spectral_entropy_grad_with_delay,
+        initial_guess,
+        args=(h_time_freq,),
+        method="BFGS",
+        jac=True,
+        callback=circular,
+        options={"maxiter": maxiter},
+    )
+    if not result.success:
+        logger.warning(
+            "minimize_spectral_entropy_with_delay: BFGS did not converge within maxiter=%d (%s)",
+            maxiter,
+            result.message,
+        )
+
+    params = result.x
+    phs = np.zeros(ntime)
+    eps = np.zeros(ntime)
+    phs[1:] = params[: ntime - 1]
+    eps[1:] = params[ntime - 1 :]
+
+    nus = np.fft.fftfreq(nchan)
+    h_time_freq_prime = h_time_freq * np.exp(1j * np.outer(eps, nus))
+    phasors = np.exp(1.0j * phs)
+    h_time_freq[:, :] = h_time_freq_prime * phasors[:, np.newaxis]
+
+    S_final = spectral_entropy_with_delay(h_time_freq)
+    logger.info("minimize_spectral_entropy_with_delay initial=%s final=%s", S_init, S_final)
+
+    return phs[1:], eps[1:]
 
 
 

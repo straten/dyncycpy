@@ -123,6 +123,14 @@ class CyclicSolver(_IOMixin):
         # reduce temporal phase noise by minimizing the spectral entropy
         self.minimize_spectral_entropy = False
 
+        # also jointly fit a per-subint delay (epsilon_t) during spectral
+        # entropy minimization, not just the per-subint phase -- off by
+        # default: roughly doubles the parameter count of the phi-only fit
+        # above, and BFGS convergence at realistic subint counts is not
+        # guaranteed (see pycyc.regularization.minimize_spectral_entropy_with_delay).
+        # Only takes effect when self.minimize_spectral_entropy is also True.
+        self.minimize_spectral_entropy_delay = False
+
         # multiply the wavefiled by a phase that makes real and imaginary parts orthognonal
         self.enforce_orthogonal_real_imag = False
 
@@ -574,8 +582,14 @@ class CyclicSolver(_IOMixin):
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.minimize_spectral_entropy:
-            print(f"minimize spectral entropy")
-            minimize_spectral_entropy(self.h_time_delay)
+            if self.minimize_spectral_entropy_delay:
+                print(f"minimize spectral entropy (phi + epsilon)")
+                h_time_freq = time2freq(self.h_time_delay, axis=1)
+                minimize_spectral_entropy_with_delay(h_time_freq)
+                self.h_time_delay = freq2time(h_time_freq, axis=1)
+            else:
+                print(f"minimize spectral entropy")
+                minimize_spectral_entropy(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.enforce_orthogonal_real_imag:
