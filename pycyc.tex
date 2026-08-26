@@ -1,0 +1,886 @@
+
+\documentclass[manuscript]{aastex631}
+\usepackage{amsmath}
+
+\newcommand{\Nsub}{\ensuremath{N_\mathrm{sub}}}
+\newcommand{\Nchan}{\ensuremath{N_\mathrm{chan}}}
+\newcommand{\Nharm}{\ensuremath{N_\mathrm{harm}}}
+\newcommand{\Eqn}[1]{Equation~\ref{eqn:#1}}
+
+%% The default is a single spaced, 10 point font, single spaced article.
+%% There are 5 other style options available via an optional argument. They
+%% can be invoked like this:
+%%
+%% \documentclass[arguments]{aastex631}
+%% 
+%% where the layout options are:
+%%
+%%  twocolumn   : two text columns, 10 point font, single spaced article.
+%%                This is the most compact and represent the final published
+%%                derived PDF copy of the accepted manuscript from the publisher
+%%  manuscript  : one text column, 12 point font, double spaced article.
+%%  preprint    : one text column, 12 point font, single spaced article.  
+%%  preprint2   : two text columns, 12 point font, single spaced article.
+%%  modern      : a stylish, single text column, 12 point font, article with
+%% 		  wider left and right margins. This uses the Daniel
+%% 		  Foreman-Mackey and David Hogg design.
+%%  RNAAS       : Supresses an abstract. Originally for RNAAS manuscripts 
+%%                but now that abstracts are required this is obsolete for
+%%                AAS Journals. Authors might need it for other reasons. DO NOT
+%%                use \begin{abstract} and \end{abstract} with this style.
+%%
+%% Note that you can submit to the AAS Journals in any of these 6 styles.
+%%
+%% There are other optional arguments one can invoke to allow other stylistic
+%% actions. The available options are:
+%%
+%%   astrosymb    : Loads Astrosymb font and define \astrocommands. 
+%%   tighten      : Makes baselineskip slightly smaller, only works with 
+%%                  the twocolumn substyle.
+%%   times        : uses times font instead of the default
+%%   linenumbers  : turn on lineno package.
+%%   trackchanges : required to see the revision mark up and print its output
+%%   longauthor   : Do not use the more compressed footnote style (default) for 
+%%                  the author/collaboration/affiliations. Instead print all
+%%                  affiliation information after each name. Creates a much 
+%%                  longer author list but may be desirable for short 
+%%                  author papers.
+%% twocolappendix : make 2 column appendix.
+%%   anonymous    : Do not show the authors, affiliations and acknowledgments 
+%%                  for dual anonymous review.
+%%
+%% these can be used in any combination, e.g.
+%%
+%% \documentclass[twocolumn,linenumbers,trackchanges]{aastex631}
+%%
+%% AASTeX v6.* now includes \hyperref support. While we have built in specific
+%% defaults into the classfile you can manually override them with the
+%% \hypersetup command. For example,
+%%
+%% \hypersetup{linkcolor=red,citecolor=green,filecolor=cyan,urlcolor=magenta}
+%%
+%% will change the color of the internal links to red, the links to the
+%% bibliography to green, the file links to cyan, and the external links to
+%% magenta. Additional information on \hyperref options can be found here:
+%% https://www.tug.org/applications/hyperref/manual.html#x1-40003
+%%
+%% Note that in v6.3 "bookmarks" has been changed to "true" in hyperref
+%% to improve the accessibility of the compiled pdf file.
+%%
+%% If you want to create your own macros, you can do so
+%% using \newcommand. Your macros should appear before
+%% the \begin{document} command.
+%%
+\newcommand{\vdag}{(v)^\dagger}
+\newcommand\aastex{AAS\TeX}
+\newcommand\latex{La\TeX}
+
+%% Reintroduced the \received and \accepted commands from AASTeX v5.2
+%\received{March 1, 2021}
+%\revised{April 1, 2021}
+%\accepted{\today}
+
+%% Command to document which AAS Journal the manuscript was submitted to.
+%% Adds "Submitted to " the argument.
+%\submitjournal{PSJ}
+
+%% For manuscript that include authors in collaborations, AASTeX v6.31
+%% builds on the \collaboration command to allow greater freedom to 
+%% keep the traditional author+affiliation information but only show
+%% subsets. The \collaboration command now must appear AFTER the group
+%% of authors in the collaboration and it takes TWO arguments. The last
+%% is still the collaboration identifier. The text given in this
+%% argument is what will be shown in the manuscript. The first argument
+%% is the number of author above the \collaboration command to show with
+%% the collaboration text. If there are authors that are not part of any
+%% collaboration the \nocollaboration command is used. This command takes
+%% one argument which is also the number of authors above to show. A
+%% dashed line is shown to indicate no collaboration. This example manuscript
+%% shows how these commands work to display specific set of authors 
+%% on the front page.
+%%
+%% For manuscript without any need to use \collaboration the 
+%% \AuthorCollaborationLimit command from v6.2 can still be used to 
+%% show a subset of authors.
+%
+%\AuthorCollaborationLimit=2
+%
+%% will only show Schwarz & Muench on the front page of the manuscript
+%% (assuming the \collaboration and \nocollaboration commands are
+%% commented out).
+%%
+%% Note that all of the author will be shown in the published article.
+%% This feature is meant to be used prior to acceptance to make the
+%% front end of a long author article more manageable. Please do not use
+%% this functionality for manuscripts with less than 20 authors. Conversely,
+%% please do use this when the number of authors exceeds 40.
+%%
+%% Use \allauthors at the manuscript end to show the full author list.
+%% This command should only be used with \AuthorCollaborationLimit is used.
+
+%% The following command can be used to set the latex table counters.  It
+%% is needed in this document because it uses a mix of latex tabular and
+%% AASTeX deluxetables.  In general it should not be needed.
+%\setcounter{table}{1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
+%% The following section outlines numerous optional output that
+%% can be displayed in the front matter or as running meta-data.
+%%
+%% If you wish, you may supply running head information, although
+%% this information may be modified by the editorial offices.
+%\shorttitle{AASTeX v6.3.1 Sample article}
+%\shortauthors{Schwarz et al.}
+%%
+%% You can add a light gray and diagonal water-mark to the first page 
+%% with this command:
+%% \watermark{text}
+%% where "text", e.g. DRAFT, is the text to appear.  If the text is 
+%% long you can control the water-mark size with:
+%% \setwatermarkfontsize{dimension}
+%% where dimension is any recognized LaTeX dimension, e.g. pt, in, etc.
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%\graphicspath{{./}{figures/}}
+%% This is the end of the preamble.  Indicate the beginning of the
+%% manuscript itself with \begin{document}.
+
+\begin{document}
+
+%\title{Modelling the Cyclic Spectrum}
+
+%\author[0000-0003-2519-7375]{W. van Straten}
+%\author{S. Os{\l}owski}
+%\author{M. Walker}
+%\affil{Manly Astrophysics, 15/41-42 East Esplanade, Manly, NSW 2095, Australia}
+%\email{vanstraten.willem@gmail.com}
+
+%% Note that the \and command from previous versions of AASTeX is now
+%% depreciated in this version as it is no longer necessary. AASTeX 
+%% automatically takes care of all commas and "and"s between authors names.
+
+%% AASTeX 6.31 has the new \collaboration and \nocollaboration commands to
+%% provide the collaboration status of a group of authors. These commands 
+%% can be used either before or after the list of corresponding authors. The
+%% argument for \collaboration is the collaboration identifier. Authors are
+%% encouraged to surround collaboration identifiers with ()s. The 
+%% \nocollaboration command takes no argument and exists to indicate that
+%% the nearby authors are not part of surrounding collaborations.
+
+%% Mark off the abstract in the ``abstract'' environment. 
+
+%\begin{abstract}
+
+%The appendix re-derives the gradient of the merit function, including the partial derivatives of the maximum likelihood estimate of the intrinsic pulse profile.
+
+% The AAS Journals have a 250 word limit for the  abstract.
+
+% \end{abstract}
+
+%% Keywords should appear after the \end{abstract} command. 
+%% The AAS Journals now uses Unified Astronomy Thesaurus concepts:
+%% https://astrothesaurus.org
+%% You will be asked to selected these concepts during the submission process
+%% but this old "keyword" functionality is maintained in case authors want
+%% to include these concepts in their preprints.
+%\keywords{pulsars}
+
+%% From the front matter, we move on to the body of the paper.
+%% Sections are demarcated by \section and \subsection, respectively.
+%% Observe the use of the LaTeX \label
+%% command after the \subsection to give a symbolic KEY to the
+%% subsection for cross-referencing in a \ref command.
+%% You can use LaTeX's \ref and \label commands to keep track of
+%% cross-references to sections, equations, tables, and figures.
+%% That way, if you change the order of any elements, LaTeX will
+%% automatically renumber them.
+%%
+%% We recommend that authors also use the natbib \citep
+%% and \citet commands to identify citations.  The citations are
+%% tied to the reference list via symbolic KEYs. The KEY corresponds
+%% to the KEY in the \bibitem in the reference list below. 
+
+%\section{Introduction} \label{sec:intro}
+
+%Stuff
+
+\appendix
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Gradient of the Merit Function
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Gradient of the Merit Function} \label{app:gradient}
+
+The model cyclic spectrum measured as a function of pulse harmonic $\alpha$ and radio frequency $\nu$ at time $t$,
+%
+\begin{equation}
+    S^\prime_\mu(\alpha,\nu;t) = H(\nu+\alpha/2;t) H^*(\nu-\alpha/2;t) S_\mu(\alpha) g(t),
+\end{equation}
+%
+where $H(\nu;t)$ is the frequency response of the turbulent interstellar medium along the Earth-pulsar line of sight at time $t$ and $S_\mu(\alpha)$ is the temporal average of the least-squares (maximum likelihood) estimates of the intrinsic pulse profile.
+%
+Given the observed cyclic spectra, $D_\mu(\alpha,\nu;t)$, the residual difference between the model and observed cyclic spectrum measured at time $t$
+%
+\begin{equation}
+    R_\mu(\alpha,\nu;t) \equiv S^\prime_\mu(\alpha,\nu;t) - D_\mu(\alpha,\nu;t)
+\end{equation}
+%
+is used to define the merit function
+%
+\begin{equation}
+    M = \sum_{t,\alpha,\nu,\mu} R^*_\mu(\alpha,\nu;t) R_\mu(\alpha,\nu;t)
+    \label{eqn:merit_function}
+\end{equation}
+%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Gain variations
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Gain variations}
+\label{sec:gain_variations}
+
+\noindent
+Where $M$ is minimized, the partial derivative of $M$ with respect to $g(t)$ is zero; i.e.
+\begin{equation}
+    \frac{dM}{dg(t)}
+    = \sum_{\alpha,\nu,\mu} 2\mathrm{Re} \left[
+    R_\mu(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) S^*_\mu(\alpha) \right] = 0;
+\label{eqn:dM_dP}
+\end{equation}
+which is solved by
+\begin{equation}
+g(t) = \frac
+{\sum_{\alpha,\nu,\mu} \mathrm{Re} \left[D_\mu(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) S^*_\mu(\alpha) \right]}
+{\sum_{\alpha,\nu,\mu} |H(\nu+\alpha/2;t)|^2 |H(\nu-\alpha/2;t)|^2 |S^*_\mu(\alpha)|^2 }
+\end{equation}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Degenerate phase
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Degenerate phase}
+\label{sec:degenerate_phase}
+
+\noindent
+
+Consider $H'(\nu;t) = H'(\nu;t) z(t)$, where $z(t)=\exp(i\phi_t)$ represents the degenerate phase, and
+
+\begin{equation}
+    S''_\mu(\alpha,\nu;t) = H'(\nu+\alpha/2;t) H^{\prime *}(\nu-\alpha/2;t) S_\mu(\alpha) g(t) = S'_\mu(\alpha,\nu;t) zz^*,
+\end{equation}
+
+Noting that $zz^*=1$, the partial derivatives of $M'$ with respect to $\phi_t$ must be zero; i.e.
+\begin{equation}
+    \frac{dM'}{d\phi_t} = \frac{dM'}{dz^*}\frac{dz^*}{d\phi_t}
+    = \sum_{\alpha,\nu,\mu} 2\mathrm{Re} \left[
+    R'_\mu(\alpha,\nu;t) S^{\prime *}_\mu(\alpha,\nu;t) \right] = 0;
+\label{eqn:dM_dP}
+\end{equation}
+that is
+\begin{equation}
+\sum_{\alpha,\nu,\mu} \mathrm{Re} \left[D_\mu(\alpha,\nu;t) S^{\prime *}_\mu(\alpha,\nu;t) \right] =
+\sum_{\alpha,\nu,\mu} |S'_\mu(\alpha)|^2
+\end{equation}
+
+\fiZ
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Intrinsic cyclic spectrum
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Intrinsic cyclic spectrum}
+\label{sec:intrinsic_cyclic_spectrum}
+
+\noindent
+Where $M$ is minimized, the partial derivative of $M$ with respect to $S_\mu^*(\alpha)$ is zero; i.e.
+\begin{equation}
+    \frac{dM}{dS_\mu^*(\alpha)}
+    = \sum_{t,\nu}
+    R_\mu(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) g(t) = 0;
+\label{eqn:dM_dSx}
+\end{equation}
+which is solved by
+\begin{equation}
+S_\mu(\alpha) = \frac
+{\sum_{t,\nu} D(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) g(t)}
+{\sum_{t,\nu} |H(\nu+\alpha/2;t)|^2 |H(\nu-\alpha/2;t)|^2 g^2(t)}
+\label{eqn:ml_intrinsic}
+\end{equation}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Dynamic impulse response function
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Dynamic impulse response function}
+
+Now consider the impulse response function at time, $t$, defined by the inverse DFT of $H(\nu;t)$; i.e.
+\begin{equation}
+    h(\tau;t) = \Nchan^{-1/2} \sum_k H(\nu_k; t) \exp(2\pi i \tau \nu_k)
+    \label{eqn:inverse_dft}
+\end{equation}
+and the inverse relation defined by 
+\begin{equation}
+    H(\nu;t) = \Nchan^{-1/2} \sum_j h(\tau_j; t) \exp(- 2\pi i \tau_j \nu)
+    \label{eqn:forward_dft}
+\end{equation}
+%
+Note that these definitions differ from those presented in equations (31) and (32) of \cite{wdv13},
+which normalize only the forward DFT by \Nchan.  Equations~\ref{eqn:inverse_dft} and~\ref{eqn:forward_dft}
+conserve energy, such that Parseval's theorem applies; i.e.
+\begin{equation}
+\sum_{\tau,t} |h(\tau;t)|^2 = \sum_{\nu,t} |H(\nu;t)|^2
+\end{equation}
+
+As described in more detail in Appendix A of \cite{ow23}, use these definitions to compute the partial derivative of $M$ with respect to $h^*(\tau_j;t_l)$
+\begin{equation}
+    \frac{dM}{dh^*(\tau_j;t_l)}
+    = \sum_{\alpha,\nu}
+    \frac{dS_\mu^{\prime*}(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)} R(\alpha,\nu;t_l) +
+    R^*(\alpha,\nu;t_l) \frac{dS^\prime_\mu(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)} 
+\label{eqn:dM_dh}
+\end{equation}
+%
+where
+\begin{equation}
+\frac{dS_\mu^{\prime*}(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+    = H(\nu-\alpha/2;t_l) \left( \frac{dH^*(\nu+\alpha/2;t_l)}{dh^*(\tau_j;t_l)} S_\mu^*(\alpha)
+                                + H^*(\nu+\alpha/2;t_l) \frac{dS_\mu^*(\alpha)}{dh^*(\tau_j;t_l)} \right) g(t_l)
+\label{eqn:dSconj_dh_degenerate}
+\end{equation}
+%
+and
+\begin{equation}
+\frac{dS^\prime_\mu(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+    = H(\nu+\alpha/2;t_l) \left( \frac{dH^*(\nu-\alpha/2;t_l)}{dh^*(\tau_j;t_l)} S_\mu(\alpha)
+                                + H^*(\nu-\alpha/2;t_l) \frac{dS_\mu(\alpha)}{dh^*(\tau_j;t_l)} \right) g(t_l).
+\label{eqn:dS_dh_degenerate}
+\end{equation}
+%
+
+As discussed in Section 2.1 of \cite{wdv13}, it is not possible to minimize $M$ for both $h(\tau,t)$
+and $S_\mu^*(\alpha)$ owing to degeneracies that arise in the definition of amplitude, phase, and shift.
+Therefore, the second terms in the above equations are dropped, leaving
+
+\begin{equation}
+\frac{dS_\mu^{\prime*}(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+    = H(\nu-\alpha/2;t_l) \frac{dH^*(\nu+\alpha/2;t_l)}{dh^*(\tau_j;t_l)} S_\mu^*(\alpha) g(t_l)
+\label{eqn:dSconj_dh}
+\end{equation}
+%
+and
+\begin{equation}
+\frac{dS^\prime_\mu(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+    = H(\nu+\alpha/2;t_l) \frac{dH^*(\nu-\alpha/2;t_l)}{dh^*(\tau_j;t_l)} S_\mu(\alpha) g(t_l).
+\label{eqn:dS_dh}
+\end{equation}
+
+
+Noting that
+\begin{equation}
+    \frac{dH^*(\nu+\alpha/2;t_l)}{dh^*(\tau_j;t_l)} = \Nchan^{-1/2} \exp(2\pi i \tau_j \nu) \exp(\pi i \tau_j \alpha),
+\end{equation}
+%
+substitution of \Eqn{dSconj_dh} into the first term of \Eqn{dM_dh} yields
+\begin{equation}
+\sum_\alpha \left[ \Nchan^{-1/2} \sum_\nu R(\alpha,\nu;t_l) H(\nu-\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] S_\mu^*(\alpha) \exp(\pi i \tau_j \alpha) g(t_l),
+\end{equation}
+%
+which is equivalent to Equation (37) of Walker, Demorest \& van Straten (2013), apart from a factor of 4.
+The part of the equation inside the brackets is the inverse DFT of
+%
+$R(\alpha,\nu;t_l)H(\nu-\alpha/2;t_l)$ 
+%
+evaluated at $\tau_j$.
+%
+Likewise, substitution of \Eqn{dS_dh} into the second term of \Eqn{dM_dh} yields
+\begin{equation}
+\sum_\alpha \left[ \Nchan^{-1/2} \sum_\nu R^*(\alpha,\nu;t_l) H(\nu+\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] S_\mu(\alpha) \exp(-\pi i \tau_j \alpha) g(t_l),
+\end{equation}
+%
+which is equivalent to the additional term that was added to the Cyclic-Modeling and pycyc packages.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Doppler-delay wavefield
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Doppler-delay wavefield}
+
+Now consider the wavefield as a function of delay $\tau$
+and Doppler shift $\omega$  defined by 
+\begin{equation}
+    h(\tau;\omega) = \Nsub^{-1/2} \sum_l h(\tau; t_l) \exp(- 2\pi i t_l \omega)
+    \label{eqn:forward_dft_tau_omega}
+\end{equation}
+and its inverse
+\begin{equation}
+    h(\tau;t) = \Nsub^{-1/2} \sum_m h(\tau; \omega_m) \exp(2\pi i t \omega_m)
+    \label{eqn:inverse_dft_omega_tau}
+\end{equation}
+
+Use these definitions to compute the partial derivative of $M$ with respect to $h^*(\tau_j;\omega_m)$
+\begin{equation}
+\frac{dM}{dh^*(\tau_j;\omega_m)}
+ = \sum_t \frac{dM}{dh^*(\tau_j;t_l)} \frac{dh^*(\tau_j;t_l)}{dh^*(\tau_j;\omega_m)}
+  = \Nsub^{-1/2} \sum_t \frac{dM}{dh^*(\tau_j;t_l)} \exp(-2\pi i t_l \omega_m)
+\label{eqn:dM_dh_tau_omega}
+\end{equation}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Minimal Spectral Entropy
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Minimal Spectral Entropy}
+
+Given that the absolute phase and delay of each response function is degenerate, such that
+%
+$$H^\prime(\nu;t) = e^{i(\phi_t + \epsilon_t\nu)} H(\nu;t)$$ 
+%
+is an equally valid
+solution, choose the set of phases $\{ \phi_k; 1 \le k < \Nsub\}$ and delays $\{ \epsilon_k; 1 \le k < \Nsub\}$ that concentrate power in the minimum
+number of wavefield components, which is equivalent to minimizing the spectral entropy,
+%
+\begin{equation}
+U = - \sum_j \sum_k p_{jk} \log_2 p_{jk},
+\end{equation}
+where $p_{jk}$ is the fractional power spectral density,
+\begin{equation}
+p_{jk} = P_{jk} \Sigma_P^{-1},
+\end{equation}
+$P_{jk} = | h^\prime(\tau_j;\omega_k) |^2$ is the power at a
+given delay and Doppler shift, 
+$h^\prime(\tau_j;\omega_k)$ is the forward DFT of $h^\prime(\tau;t)$,
+and $h^\prime(\tau;t)$ is the inverse DFT of $H^\prime(\nu;t)$
+and
+%
+\begin{equation}
+\Sigma_P =  \sum_m \sum_n P_{mn}
+\end{equation}
+%
+is the total power summed over all delays and Doppler shifts, which remains constant as the values of $\phi_k$ and $\epsilon_k$ are varied.
+%
+Minimizing the spectral entropy is aided by computing its
+gradient with respect to the set of unknown phases and delays,
+$\{\alpha_l\} = \{\phi_k\} \cup \{\epsilon_k\}$,
+%
+\begin{equation}
+\frac{dU}{d\alpha_l} = - \sum_j \sum_k \frac{dp_{jk}}{d\alpha_l} \left(1+\log_2 p_{jk} \right),
+\end{equation}
+%
+\begin{equation}
+\frac{dp_{jk}}{d\alpha_l} 
+= 2 \Sigma_P^{-1} \Re\left[ h^\prime(\tau_j;\omega_k) \frac{dh^{\prime*}(\tau_j;\omega_k)}{d\alpha_l} \right]
+     \label{eqn:dp_dphi}
+\end{equation}
+%
+where
+%
+\begin{equation} \label{eqn:dh_tau_omega_dphi}
+\frac{dh^\prime(\tau_j;\omega_k)}{d\phi_l} 
+  = \Nsub^{-1/2} i \exp(i\phi_l) h^\prime(\tau_j; t_l) \exp(- 2\pi i t_l \omega_k),
+\end{equation}
+%
+\begin{equation} \label{eqn:dh_tau_omega_depsilon}
+\frac{dh^\prime(\tau_j;\omega_k)}{d\epsilon_l}
+  = \Nsub^{-1/2} \exp(i\phi_l) \frac{dh^\prime(\tau_j; t_l)}{d\epsilon_l}\exp(- 2\pi i t_l \omega_k),
+\end{equation}
+%
+and
+\begin{equation} \label{eqn:dh_tau_t_depsilon} 
+\frac{dh^\prime(\tau_j;t_l)}{d\epsilon_l}
+  = \Nchan^{-1/2} i \nu_k \exp(i\epsilon_l\nu_k) H(\nu_k; t_l) \exp(2\pi i \tau_j \nu_k),
+\end{equation}
+%
+Substituting \Eqn{dh_tau_omega_dphi} into \Eqn{dp_dphi} and
+applying $\Re[-i z] = \Im[z]$ yields
+%
+\begin{equation}
+\frac{dp_{jk}}{d\phi_l} = 2 \Sigma_P^{-1} \Nsub^{-1/2} \Im\left[ h^\prime(\tau_j;\omega_k) h^{\prime*}(\tau_j; t_l) \exp(2\pi i t_l \omega_k) \right].
+    \label{eqn:dP_dphi_expanded}
+\end{equation}
+%
+such that
+%
+\begin{equation}
+\frac{dU}{d\phi_l} = - 2 \Sigma_P^{-1} \sum_j \Im\left[ h^{\prime*}(\tau_j; t_l) h_w(\tau_j; t_l) \right]
+\label{eqn:dU_dphi}
+\end{equation}
+%
+where
+\begin{equation}
+h_w(\tau_j; t_l) = \Nsub^{-1/2} \sum_k  h^\prime(\tau_j;\omega_k)   \left(1+\log_2 p_{jk} \right)  \exp(2\pi i t_l \omega_k)
+\label{eqn:h_w_def}
+\end{equation}
+%
+is the inverse DFT of
+$h^\prime(\tau_j;\omega_k) \left(1+\log_2 p_{jk} \right)$.
+
+By the same substitution of \Eqn{dh_tau_omega_depsilon} into \Eqn{dp_dphi}
+and application of $\Re[-iz]=\Im[z]$,
+%
+\begin{equation}
+\frac{dp_{jk}}{d\epsilon_l} = 2 \Sigma_P^{-1} \Nsub^{-1/2} \Im\left[ h^\prime(\tau_j;\omega_k) \left(\frac{dh^\prime(\tau_j;t_l)}{d\epsilon_l}\right)^*_{\!/i} \exp(2\pi i t_l \omega_k) \right],
+\end{equation}
+%
+where $\left(dh^\prime(\tau_j;t_l)/d\epsilon_l\right)_{/i}$ denotes
+\Eqn{dh_tau_t_depsilon} with its explicit factor of $i$ removed, i.e.
+$\Nchan^{-1/2}\nu_k\exp(i\epsilon_l\nu_k)H(\nu_k;t_l)\exp(2\pi i\tau_j\nu_k)$
+-- exactly as the $\phi_l$ derivation above uses $h^\prime(\tau_j;t_l)$,
+\Eqn{dh_tau_omega_dphi} with its factor of $i$ removed. Such that
+%
+\begin{equation}
+\frac{dU}{d\epsilon_l} = - 2 \Sigma_P^{-1} \sum_j \Im\left[ \left(\frac{dh^\prime(\tau_j;t_l)}{d\epsilon_l}\right)^*_{\!/i} h_w(\tau_j; t_l) \right],
+\label{eqn:dU_depsilon}
+\end{equation}
+%
+with $h_w(\tau_j;t_l)$ the same weighted inverse DFT defined above
+(\Eqn{h_w_def}): its definition depends only on the current
+wavefield and $p_{jk}$, not on which of $\phi_l$ or $\epsilon_l$ is being
+differentiated. \Eqn{dU_depsilon} is implemented, jointly with
+\Eqn{dU_dphi} above, by
+\texttt{pycyc.regularization.spectral\_entropy\_grad\_with\_delay} --
+verified against \Eqn{dP_dphi_expanded}/\Eqn{dU_dphi} by requiring the two
+formulations agree exactly when $\epsilon_l\equiv0$, and against both
+equations directly by finite differences. It is not enabled by default:
+jointly fitting $\{\phi_k\}\cup\{\epsilon_k\}$ doubles the parameter count
+of the $\phi$-only fit, and at the subint counts a full observation
+produces, BFGS convergence is not guaranteed (see
+\texttt{CyclicSolver.minimize\_spectral\_entropy\_delay}).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%  Degenerate-direction removal and reduced-rank jitter model
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Degenerate-direction removal and reduced-rank jitter model}
+\label{sec:jitter}
+
+Sections~\ref{sec:intrinsic_cyclic_spectrum}
+(\S\ref{sec:intrinsic_cyclic_spectrum}) and~\ref{sec:jitter} address the
+same underlying difficulty from two directions. Holding $S_\mu(\alpha)$
+constant in $t$ is what makes \Eqn{ml_intrinsic} well posed at all: the
+degenerate transform $H^\prime(\nu;t)=e^{i(\phi_t+\epsilon_t\nu)}H(\nu;t)$
+leaves every individual model cyclic spectrum unchanged only if
+$S_\mu(\alpha)$ is also held fixed (\S\ref{sec:degenerate_phase}), since
+$\epsilon_t$ enters the model identically to a rigid shift
+$S_\mu(\alpha)\rightarrow S_\mu(\alpha)e^{i\alpha\epsilon_t}$ of the pulse
+profile at that one subintegration. But real pulsars exhibit genuine,
+stochastic, wideband pulse-to-pulse jitter: $S_\mu(\alpha)$ does, in fact,
+vary with $t$. Forcing it constant leaves that real variation nowhere to
+go except into $H(\nu;t)$, where -- because jitter decorrelates between
+subintegrations much faster than the interstellar scintillation timescale
+-- it appears as noise that is white in $t$, and therefore white across
+the entire Doppler axis $\omega$ of the reconstructed wavefield
+$h(\tau,\omega)$, contaminating it well beyond the scintillation arc.
+
+The resolution is to let $S_\mu(\alpha;t)$ vary, but constrain it to vary
+only in the directions that are not degenerate with $H$. Writing the
+per-subintegration profile estimate as
+%
+\begin{equation}
+S_\mu(\alpha;t) = g(t)\,S_\mu^0(\alpha)\,e^{i\alpha\epsilon(t)} + \sum_{k=1}^{N} w_k(t)\,P_k(\alpha),
+\label{eqn:jitter_model}
+\end{equation}
+%
+where $S_\mu^0(\alpha)$ is a stable reference profile (e.g. the
+subintegration- and polarization-averaged \Eqn{ml_intrinsic}), the first
+term is exactly the one-dimensional degenerate direction identified above,
+and the sum is a reduced-rank basis for whatever remains -- by
+construction orthogonal to no particular direction a priori, but in
+practice dominated by genuine jitter once the degenerate direction and the
+real gain $g(t)$ (\S\ref{sec:gain_variations}) have been removed.
+
+\paragraph{Fitting the degenerate direction.} For each subintegration,
+$\epsilon(t)$ (and, when \S\ref{sec:gain_variations}'s $g(t)$ is being
+modeled, a real amplitude scale) is fit by ordinary least squares against
+the reference profile,
+%
+\begin{equation}
+(\hat\epsilon(t)) = \operatorname*{arg\,min}_{\epsilon} \sum_\alpha \left| S_\mu(\alpha;t) - g(t)\,S_\mu^0(\alpha)\,e^{i\alpha\epsilon} \right|^2,
+\label{eqn:fit_epsilon}
+\end{equation}
+%
+deliberately with no free additive phase term: a rigid shift of a
+\emph{real} pulse profile is exactly \Eqn{fit_epsilon}'s alpha-linear ramp
+with zero intercept (the Fourier shift theorem for a real signal), so a
+free phase would only fit noise and inflate the variance of the
+$\hat\epsilon(t)$ estimate. \Eqn{fit_epsilon} is genuinely multi-modal once
+$|\epsilon(t)|\cdot(\Nharm-1)$ exceeds $\sim\pi$ (the ramp has aliased), so
+it is solved by a coarse grid search over $\epsilon$ before a BFGS
+refinement, not gradient descent from a fixed starting guess -- confirmed
+empirically to matter: BFGS from $\epsilon=0$ converges to the wrong local
+minimum routinely at realistic $\Nharm$. This is implemented by
+\texttt{pycyc.profile.fit\_profile\_shift}.
+
+\paragraph{Reduced-rank jitter basis.} Given the residual
+$R(\alpha;t) = S_\mu(\alpha;t) - g(t)\,S_\mu^0(\alpha)\,e^{i\alpha\hat\epsilon(t)}$
+at every subintegration, the basis $\{P_k(\alpha)\}$ and weights
+$\{w_k(t)\}$ in \Eqn{jitter_model} are the leading terms of a singular
+value decomposition of $R$, whitened by the known per-harmonic noise floor
+of the profile estimator. For \Eqn{ml_intrinsic}'s ordinary-least-squares
+estimator, with per-channel noise variance $\sigma_D^2$ assumed independent
+of radio frequency, the noise variance of a single subintegration's
+$S_\mu(\alpha;t)$ is exactly
+%
+\begin{equation}
+\mathrm{Var}\left[S_\mu(\alpha;t)\right] = \sigma_D^2 \, / \, S_\mu^{\downarrow}(\alpha;t),
+\label{eqn:jitter_noise_variance}
+\end{equation}
+%
+where $S_\mu^\downarrow(\alpha;t)$ is \Eqn{ml_intrinsic}'s (real-valued)
+denominator computed for that one subintegration alone -- the standard
+result for ordinary least squares against a known design coefficient with
+i.i.d.\ per-sample noise. Whitening $R(\alpha;t)$ by
+$\sqrt{\mathrm{Var}[S_\mu(\alpha;t)]}$ and comparing the eigenvalues of the
+resulting sample covariance against the Marchenko--Pastur edge,
+$(1+\sqrt{\Nharm/\Nsub})^2$, gives an objective choice of $N$: under the
+null hypothesis that $R$ is pure noise at the variance given by
+\Eqn{jitter_noise_variance}, no eigenvalue should exceed this bound, so
+any that do indicate genuine structure rather than noise. This is
+implemented by \texttt{pycyc.jitter.fit\_jitter\_basis}.
+
+\paragraph{Outer loop.} Because $S_\mu^0(\alpha)$, $\epsilon(t)$, $g(t)$,
+and the jitter basis all depend on the current estimate of $H(\nu;t)$
+-- and, early in an optimization, on how much of the residual is genuine
+jitter versus how much is simply what is still missing from an
+unconverged $H$ -- \Eqn{jitter_model} is refreshed periodically rather
+than fit once: \texttt{CyclicSolver.outer\_loop} alternates the wavefield
+fit with a profile-pooling step and a refresh of
+\Eqn{fit_epsilon}--\Eqn{jitter_noise_variance}, deferring the jitter model
+entirely for an initial number of warm-up passes so it is not fit against
+transient wavefield-model error. The retained rank $N$ and the principal
+angle between successive passes' bases (a standard subspace-distance
+metric, via QR followed by the singular values of the two orthonormalized
+bases' inner product) serve as the natural convergence diagnostic: both
+are expected to stabilize once the outer loop has converged.
+
+
+
+
+
+
+
+
+
+
+
+
+\bibliography{journals,modrefs,psrrefs,crossrefs}
+\bibliographystyle{aasjournal}
+
+\end{document}
+
+
+\subsection{Minimal Spectral Entropy}
+
+Given that the absolute phase of each response function is degenerate, such that 
+$$h^\prime(\tau;t) = \exp(i\phi_t)h(\tau;t)$$ 
+is an equally valid
+solution, choose the set of phases $\{ \phi_k; 1 \le k < \Nsub\}$ that concentrate power in the minimum
+number of wavefield components, which is equivalent to minimizing the spectral entropy,
+%
+\begin{equation}
+U = - \sum_j \sum_k p_{jk} \log_2 p_{jk},
+\end{equation}
+where $p_{jk}$ is the fractional power spectral density,
+\begin{equation}
+p_{jk} = P_{jk} \Sigma_P^{-1},
+\end{equation}
+$P_{jk} = | h^\prime(\tau_j;\omega_k) |^2$ is the power at a
+given delay and Doppler shift, 
+$h^\prime(\tau_j;\omega_k)$ is the forward DFT of $h^\prime(\tau;t)$,
+and
+%
+\begin{equation}
+\Sigma_P =  \sum_m \sum_n P_{mn}
+\end{equation}
+%
+is the total power summed over all delays and Doppler shifts, which remains constant
+as the values of $\phi_k$ are varied.
+%
+Minimizing the spectral entropy is aided by computing its
+gradient with respect to the unknown phases
+%
+\begin{equation}
+\frac{dU}{d\phi_l} = - \sum_j \sum_k \frac{dp_{jk}}{d\phi_l} \left(1+\log_2 p_{jk} \right),
+\end{equation}
+%
+where
+%
+\begin{equation}
+\frac{dp_{jk}}{d\phi_l} 
+= 2 \Sigma_P^{-1} \Re\left[ h^\prime(\tau_j;\omega_k) \frac{dh^{\prime*}(\tau_j;\omega_k)}{d\phi_l} \right]
+     \label{eqn:dp_dphi}
+\end{equation}
+%
+and
+%
+\begin{equation}
+    \frac{dh^\prime(\tau_j;\omega_k)}{d\phi_l} = \Nsub^{-1/2} i \exp(i\phi_l) h(\tau_j; t_l) \exp(- 2\pi i t_l \omega_k)
+    \label{eqn:dh_tau_omega_dphi}.
+\end{equation}
+%
+Substituting \Eqn{dh_tau_omega_dphi} into \Eqn{dp_dphi} and
+applying $\Re[-i z] = \Im[z]$ yields
+%
+\begin{equation}
+\frac{dp_{jk}}{d\phi_l} = 2 \Sigma_P^{-1} \Nsub^{-1/2} \Im\left[ h^\prime(\tau_j;\omega_k) h^{\prime*}(\tau_j; t_l) \exp(2\pi i t_l \omega_k) \right].
+    \label{eqn:dP_dphi_expanded}
+\end{equation}
+%
+such that
+%
+\begin{equation}
+\frac{dU}{d\phi_l} = - 2 \Sigma_P^{-1} \sum_j \Im\left[ h^{\prime*}(\tau_j; t_l) h_w(\tau_j; t_l) \right]
+\end{equation}
+%
+where
+\begin{equation}
+h_w(\tau_j; t_l) = \Nsub^{-1/2} \sum_k  h^\prime(\tau_j;\omega_k)   \left(1+\log_2 p_{jk} \right)  \exp(2\pi i t_l \omega_k) 
+\end{equation}
+%
+is the inverse DFT of
+$h^\prime(\tau_j;\omega_k) \left(1+\log_2 p_{jk} \right)$.
+
+
+\bibliography{journals,modrefs,psrrefs,crossrefs}
+\bibliographystyle{aasjournal}
+
+\end{document}
+
+
+\subsection{Gradient of Maximum Likelihood Intrinsic Profile}
+
+This way leads to madness!  Adding the second terms of equations \ref{eqn:dSconj_dh_degenerate}
+and \ref{eqn:dS_dh_degenerate} to the definition of the merit function causes the problem to become
+degenerate, as described in Section 2.1 of \cite{wdv13}.  If you want to try it out anyhow, express \Eqn{ml_intrinsic} as
+%
+\begin{equation}
+    S_\mu(\alpha) =\frac{ S_\mu^\uparrow(\alpha) }{ S_\mu^\downarrow(\alpha) },
+\label{eqn:ml_profile}
+\end{equation}
+%
+where the (complex-valued) numerator,
+%
+\begin{equation}
+    S_\mu^\uparrow(\alpha) = \sum_{t,\nu} D(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) g(t)
+\end{equation}
+%
+and the (real-valued) denominator,
+%
+\begin{equation}
+    S_\mu^\downarrow(\alpha) = \sum_{t,\nu} | H(\nu+\alpha/2;t) |^2 | H(\nu-\alpha/2;t) |^2 g^2(t).
+\end{equation}
+%
+
+Noting that $S_\mu^\downarrow(\alpha)$ is real-valued,
+\begin{equation}
+\frac{dS_\mu^*(\alpha)}{dh^*(\tau_j;t_l)}
+    = \frac{ 1 }
+                              { S_\mu^\downarrow(\alpha) }\frac{dS_\mu^{\uparrow *}(\alpha)}{dh^*(\tau_j;t_l)}
+    - \frac{ S_\mu^{\uparrow *}(\alpha) }
+                              { (S_\mu^\downarrow(\alpha))^2 }\frac{dS_\mu^\downarrow(\alpha)}{dh^*(\tau_j;t_l)},
+\label{eqn:dSxconj_dh}
+\end{equation}
+%
+where
+%
+\begin{equation}
+\frac{dS_\mu^{\uparrow *}(\alpha)}{dh^*(\tau_j;t_l)}
+= \left[ \Nchan^{-1/2} \sum_\nu D^*(\alpha,\nu;t_l) H(\nu+\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] \exp(-\pi i \tau_j \alpha) g(t_l)
+\end{equation}
+%
+(the bit in square brackets is an inverse DFT) and
+%
+\begin{equation}
+\begin{split}
+\frac{dS_\mu^\downarrow(\alpha)}{dh^*(\tau_j;t_l)}
+&= g^2(t_l) \left[ \Nchan^{-1/2} \sum_\nu |H(\nu+\alpha/2;t_l)|^2 H(\nu-\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] \exp(-\pi i \tau_j \alpha) \\
+&+ g^2(t_l) \left[ \Nchan^{-1/2} \sum_\nu |H(\nu-\alpha/2;t_l)|^2 H(\nu+\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] \exp(\pi i \tau_j \alpha)    
+\end{split}
+\end{equation}
+%
+(the bits in square brackets are inverse DFTs).
+%
+Substitution of the second term of \Eqn{dSconj_dh} into the first term of \Eqn{dM_dh} yields
+\begin{equation}
+g(t_l) \sum_\alpha \frac{dS_\mu^*(\alpha)}{dh^*(\tau_j;t_l)}
+\sum_\nu H(\nu-\alpha/2;t_l) H^*(\nu+\alpha/2;t_l) R(\alpha,\nu;t_l).
+\label{eqn:dM_dh_Sxconj_term}
+\end{equation}
+%
+Similarly,
+%
+\begin{equation}
+\frac{dS_\mu(\alpha)}{dh^*(\tau_j;t_l)}
+    = \frac{ 1 }{ S_\mu^\downarrow(\alpha) }\frac{dS_\mu^\uparrow(\alpha)}{dh^*(\tau_j;t_l)}
+    - \frac{ S_\mu^\uparrow(\alpha) }
+            { (S_\mu^\downarrow(\alpha))^2 }\frac{dS_\mu^\downarrow(\alpha)}{dh^*(\tau_j;t_l)}
+\end{equation}
+%
+where
+%
+\begin{equation}
+\frac{dS_\mu^\uparrow(\alpha)}{dh^*(\tau_j;t_l)}
+= \left[ \Nchan^{-1/2} \sum_\nu D(\alpha,\nu;t_l) H(\nu-\alpha/2;t_l) \exp(2\pi i \tau_j \nu) \right] \exp(\pi i \tau_j \alpha) g(t_l).
+\end{equation}
+%
+Substitution of the second term of \Eqn{dS_dh} into the second term of \Eqn{dM_dh} yields
+\begin{equation}
+g(t_l) \sum_\alpha \frac{dS_\mu(\alpha)}{dh^*(\tau_j;t_l)}
+\sum_\nu H^*(\nu-\alpha/2;t_l) H(\nu+\alpha/2;t_l) R^*(\alpha,\nu;t_l).
+\label{eqn:dM_dh_Sx_term}
+\end{equation}
+%
+Note that the sum over $\nu$ in \Eqn{dM_dh_Sx_term} is simply the complex conjugate of the sum over $\nu$ in
+\Eqn{dM_dh_Sxconj_term}.
+
+\bibliography{journals,modrefs,psrrefs,crossrefs}
+\bibliographystyle{aasjournal}
+
+%% This command is needed to show the entire author+affiliation list when
+%% the collaboration and author truncation commands are used.  It has to
+%% go at the end of the manuscript.
+%\allauthors
+
+%% Include this line if you are using the \added, \replaced, \deleted
+%% commands to see a summary list of all changes at the end of the article.
+%\listofchanges
+
+\end{document}
+
+% End of file `sample631.tex'.
