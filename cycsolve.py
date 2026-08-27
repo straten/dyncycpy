@@ -93,7 +93,21 @@ p.add_argument(
     ),
 )
 
+p.add_argument(
+    "--debug",
+    action="store_true",
+    help=(
+        "set the pycyc.* loggers (pycyc.solver, pycyc.jitter, ...) to DEBUG "
+        "-- raises the 'pycyc' logger specifically, not the root logger, so "
+        "this doesn't also turn on matplotlib/other libraries' own debug "
+        "spam. fista.py's separate 'H-FISTA' logger is untouched for now."
+    ),
+)
+
 args, files = p.parse_known_args()
+
+if args.debug:
+    logging.getLogger("pycyc").setLevel(logging.DEBUG)
 init = args.init
 init_profile = args.init_profile
 
