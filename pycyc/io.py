@@ -12,6 +12,7 @@ every PSRFITS/pickle detail.
 
 __all__ = ["_IOMixin", "loadCyclicSolver"]
 
+import logging
 import pickle
 
 import numpy as np
@@ -25,6 +26,8 @@ from plotting import plot_Doppler_vs_delay
 
 from .io_utils import writeArray, writeProfile
 from .transforms import freq2time, phase2harm, time2freq
+
+logger = logging.getLogger(__name__)
 
 
 class _IOMixin:
@@ -44,9 +47,9 @@ class _IOMixin:
         end_time = ext.get_maximum_epoch()
         dT = (end_time - start_time).in_seconds() / ntime
 
-        print("load_initial_guess loaded:")
-        print(f"\t start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
-        print(f"\t {ntime=} delta-T={dT} -- {nchan=} {bw=}")
+        logger.info("load_initial_guess loaded:")
+        logger.info(f"\t start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
+        logger.info(f"\t {ntime=} delta-T={dT} -- {nchan=} {bw=}")
         data = np.reshape(data, (ntime, nchan))
 
         h_time_delay = freq2time(data, axis=1)
@@ -94,7 +97,7 @@ class _IOMixin:
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
         """
 
-        print(f"loading {filename}")
+        logger.info(f"loading {filename}")
         self.filenames.append(filename)
         # self.filename (singular) is read all over CyclicSolver -- plot
         # titles/directory names, saveResults' default fbase, saveState's
@@ -159,7 +162,7 @@ class _IOMixin:
             self.nharm = self.nphase // 2 + self.include_Nyquist
             # print(f"load nphase={self.nphase} nlag={self.nlag} nharm={self.nharm} inc_Nyquist={self.include_Nyquist}")
             if self.maxharm is not None:
-                print(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
+                logger.info(f"zeroing all harmonics above {self.maxharm} in each cyclic spectrum")
 
             self.time_offsets = np.zeros(self.nsubint)
             total_offset = 0
@@ -186,7 +189,7 @@ class _IOMixin:
                 self.cs_norm = np.zeros((self.nsubint, self.npol))
                 for isub in range(self.nsubint):
                     if self.iprint:
-                        print(f"load calculating cyclic spectrum for isub={isub}/{self.nsubint}")
+                        logger.info(f"load calculating cyclic spectrum for isub={isub}/{self.nsubint}")
                     for ipol in range(self.npol):
                         self.cyclic_spectra[isub, ipol], norm = self.get_cs(data[isub, ipol])
                         self.cs_norm[isub, ipol] = norm
@@ -204,7 +207,7 @@ class _IOMixin:
             gap = next_offset - last_offset
 
             if gap < 0:
-                print(f"last_offset={last_offset} next_offset={next_offset} gap={gap}")
+                logger.info(f"last_offset={last_offset} next_offset={next_offset} gap={gap}")
                 raise ValueError("new file starts before previous one ended (sort files by time)")
 
             missing_subints = 0
@@ -212,8 +215,8 @@ class _IOMixin:
                 missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
 
             if missing_subints > 0:
-                print(f"missing {missing_subints} sub-integrations across {gap} seconds")
-                print(f"mean sub-integration duration is {self.mean_time_offset} seconds")
+                logger.info(f"missing {missing_subints} sub-integrations across {gap} seconds")
+                logger.info(f"mean sub-integration duration is {self.mean_time_offset} seconds")
 
             nsubint, npol, nchan, nbin = data.shape
 
@@ -248,14 +251,14 @@ class _IOMixin:
                 for isub in range(nsubint):
                     jsub = isub + self.nsubint + missing_subints
                     if self.iprint:
-                        print(f"load calculating cyclic spectrum for isub={jsub}/{new_nsubint}")
+                        logger.info(f"load calculating cyclic spectrum for isub={jsub}/{new_nsubint}")
                     for ipol in range(self.npol):
                         self.cyclic_spectra[jsub, ipol], norm = self.get_cs(data[isub, ipol])
                         self.cs_norm[jsub, ipol] = norm
                 self.data = None
                 data = None
                 if missing_subints > 0:
-                    print("setting missing cyclic spectra to average of bounding spectra")
+                    logger.info("setting missing cyclic spectra to average of bounding spectra")
                     for ipol in range(self.npol):
                         previous_idx = self.nsubint - 1
                         previous_cs = self.cyclic_spectra[previous_idx, ipol]
@@ -275,8 +278,8 @@ class _IOMixin:
 
             else:
                 if missing_subints > 0:
-                    print("WARNING: patching up missing sub-integrations not implemented")
-                    print("WARNING: when not saving cyclic spectra")
+                    logger.info("WARNING: patching up missing sub-integrations not implemented")
+                    logger.info("WARNING: when not saving cyclic spectra")
                 self.data = np.append(self.data, data, axis=0)
                 new_nsubint -= missing_subints
 
@@ -305,7 +308,7 @@ class _IOMixin:
         start_time = self.reference_epoch
         end_time = start_time + self.mean_time_offset * self.nsubint
 
-        print(f"unload_solution start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
+        logger.info(f"unload_solution start_time={start_time.printdays(13)} end_time={end_time.printdays(13)}")
         ext.set_minimum_epoch(start_time)
         ext.set_maximum_epoch(end_time)
 
@@ -314,19 +317,19 @@ class _IOMixin:
 
         # unload the intrinsic profile
 
-        print("resizing archive sub-integrations")
+        logger.info("resizing archive sub-integrations")
 
         nsub = nchan = 1
         arch.resize(nsub, self.npol, nchan, self.nbin)
 
-        print("setting profile data")
+        logger.info("setting profile data")
         for subint in arch:
             for ipol in range(self.npol):
                 for ichan in range(nchan):
                     prof = subint.get_Profile(ipol, ichan)
                     prof.get_amps()[:] = self.pp_intrinsic
 
-        print("unload_solution writing to", filename)
+        logger.info("unload_solution writing to %s", filename)
         arch.unload(filename)
 
     def saveResults(self, fbase=None):
@@ -355,7 +358,7 @@ class _IOMixin:
         fh.close()
 
         self.statefile = orig_statefile
-        print("Saved state in:", filename)
+        logger.info("Saved state in: %s", filename)
 
 
 def loadCyclicSolver(statefile):

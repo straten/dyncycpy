@@ -54,14 +54,14 @@ def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     """
     x_power = np.abs(x) ** 2
     if kernel is not None:
-        print("apply threshold: smoothing power using supplied kernel")
+        logger.info("apply threshold: smoothing power using supplied kernel")
         x_power = fftconvolve(x_power, kernel, mode="same")
     var_noise = noise_power_wavefield(x_power)
     limit = var_noise * threshold**2
     out = np.heaviside(x_power - limit, 1) * x
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    print(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.info(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -72,7 +72,7 @@ def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, deca
     """
     x_power = np.abs(x) ** 2
     if kernel is not None:
-        print("apply shrinkage threshold: smoothing power using supplied kernel")
+        logger.info("apply shrinkage threshold: smoothing power using supplied kernel")
         x_power = fftconvolve(x_power, kernel, mode="same")
 
     var_noise = noise_power_wavefield(x_power)
@@ -87,7 +87,7 @@ def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, deca
     out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    print(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.info(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -98,7 +98,7 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     """
     x_power = np.abs(x) ** 2
     if kernel is not None:
-        print("apply delay shrinkage threshold: smoothing power using supplied kernel")
+        logger.info("apply delay shrinkage threshold: smoothing power using supplied kernel")
         x_power = fftconvolve(x_power, kernel, mode="same")
 
     var_noise = delay_noise_power_wavefield(x_power, baseline_threshold)
@@ -109,7 +109,7 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    print(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.info(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -203,11 +203,11 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
               (row, column) of one of the N largest values.
     """
     if not isinstance(arr, np.ndarray) or arr.ndim != 2:
-        print("Error: Input must be a 2D NumPy array.")
+        logger.info("Error: Input must be a 2D NumPy array.")
         return []
 
     if n <= 0:
-        print("Error: N must be a positive integer.")
+        logger.info("Error: N must be a positive integer.")
         return []
 
     # Get a flattened view of the array. This is an O(1) operation
@@ -310,7 +310,7 @@ def minimize_spectral_entropy(h_time_delay):
 
     S_final = spectral_entropy(h_time_delay)
 
-    print(f"minimize_spectral_entropy initial={S_init} final={S_final}")
+    logger.info(f"minimize_spectral_entropy initial={S_init} final={S_final}")
 
 
 def spectral_entropy_grad_with_delay(params, h_time_freq):
@@ -491,20 +491,20 @@ def subtract_degenerate_delay_and_phase(h_delay_grad, h_delay):
 
     # verify orthogonality of basis vectors
     dot12 = np.sum(np.conj(v_phase) * v_delay)
-    print(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
+    logger.info(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
 
     # project gradient onto basis vectors, then subtract the projections from the gradient
     a_phase = np.sum(np.conj(v_phase) * h_freq_grad)
     h_freq_grad -= a_phase * v_phase
 
     b_phase = np.sum(np.conj(v_phase) * h_freq_grad)
-    print(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
+    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
 
     a_delay = np.sum(np.conj(v_delay) * h_freq_grad)
     h_freq_grad -= a_delay * v_delay
 
     b_delay = np.sum(np.conj(v_delay) * h_freq_grad)
-    print(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay}")
+    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay}")
 
     return freq2time(h_freq_grad)
 
@@ -605,11 +605,11 @@ def minimize_difference(hf_ref, hf):
         imax = np.argmax(ccf_power)
         ph_max = np.angle(ccf[imax])
 
-    print(f"{imax=} {ph_max=} {Nchan=}")
+    logger.info(f"{imax=} {ph_max=} {Nchan=}")
 
     limit = 0
     if limit > 0 and imax > limit and imax < Nchan_use - limit:
-        print(f"{imax=} beyond {limit=}")
+        logger.info(f"{imax=} beyond {limit=}")
         imax = 0
         ph_max = 0
 
@@ -639,7 +639,7 @@ def minimize_difference(hf_ref, hf):
     if best_imax > Nchan_use / 2:
         best_imax = best_imax - Nchan_use
         alpha[1] = best_imax * 2.0 * np.pi
-        print(f"{best_imax=}")
+        logger.info(f"{best_imax=}")
 
     hf[:], nus = spectral_shift(alpha, hf)
 
@@ -662,6 +662,6 @@ def align_to_neighbour(h_time_freq):
         if np.abs(R) > 0.05:
             hf0 = hf
         else:
-            print(f"align_to_neighbour i={it} {R=}")
+            logger.info(f"align_to_neighbour i={it} {R=}")
 
         h_time_freq[it, :] = hf

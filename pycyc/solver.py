@@ -9,13 +9,16 @@ rather than a CyclicSolver instance; PSRFITS/pickle I/O is in pycyc.io
 state and the methods that tie the above together.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 try:
     import psrchive
 except Exception:
-    print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
+    logger.info("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures
 import dataclasses
-import logging
 import os
 import pickle
 
@@ -48,8 +51,6 @@ from .objective import (
 from .profile import solve_profile_and_gain, solve_profile_and_gain_batched
 from .regularization import *
 from .transforms import *
-
-logger = logging.getLogger(__name__)
 
 
 class CyclicSolver(_IOMixin):
@@ -355,13 +356,13 @@ class CyclicSolver(_IOMixin):
                 hf = time2freq(ht)
                 for ichan in range(self.nchan):
                     if np.abs(hf[ichan] - 1.0) > 1e-6:
-                        print(f"unexpected initial response[{ichan}]={hf[ichan]}")
+                        logger.info(f"unexpected initial response[{ichan}]={hf[ichan]}")
 
         else:
             self.expected_power = np.sum(np.abs(self.initial_h_time_freq) ** 2)
             current_shape = (self.nspec, self.nchan)
             if self.initial_h_time_freq.shape != current_shape:
-                print(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
+                logger.info(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
                 h_time_freq = pad_wavefield(self.initial_h_time_freq, current_shape)
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
@@ -376,7 +377,7 @@ class CyclicSolver(_IOMixin):
             if self.zero_initial_delay:
                 h_time_power = np.sum(np.abs(self.h_time_delay) ** 2, axis=0)
                 peak = np.argmax(h_time_power)
-                print(f"{peak=}")
+                logger.info(f"{peak=}")
                 self.h_time_delay = np.roll(self.h_time_delay, -peak, axis=1)
                 self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
@@ -384,13 +385,13 @@ class CyclicSolver(_IOMixin):
                 self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
 
         if self.iprint:
-            print(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
+            logger.info(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_doppler_delay.shape)
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
-            print(f"noise smoothing kernel shape: {wshape}")
+            logger.info(f"noise smoothing kernel shape: {wshape}")
             kernel = np.outer(
                 kaiser(wshape[0], self.noise_smoothing_beta),
                 kaiser(wshape[1], self.noise_smoothing_beta),
@@ -448,7 +449,7 @@ class CyclicSolver(_IOMixin):
             phase = delay * self.ref_freq
             bins = phase * self.nbin
             phase_roll = -int(bins)
-            print(
+            logger.info(
                 f"roll initial guesses by {self.roll_initial_guess} time samples and {phase_roll} phase bins"
             )
             self.intrinsic_ph = np.roll(self.intrinsic_ph, phase_roll, axis=1)
@@ -466,7 +467,7 @@ class CyclicSolver(_IOMixin):
 
         # search for the harmonic with the highest Doppler/delay power S/N
         for harm in range(maxharm):
-            print(f"harmonic={harm}")
+            logger.info(f"harmonic={harm}")
             # extract the harmonic and sum over polarizations
             time_freq = np.sum(self.cyclic_spectra[:, :, :, harm], axis=1)
             trial_wavefield = time2freq(freq2time(time_freq, axis=1), axis=0)
@@ -483,10 +484,10 @@ class CyclicSolver(_IOMixin):
             noise_power = np.mean(noise_slice)
             total_power = np.mean(power)
             sn[harm] = np.sqrt(total_power / noise_power)
-            print(f"harmonic={harm} S/N={sn[harm]}")
+            logger.info(f"harmonic={harm} S/N={sn[harm]}")
 
         best_harmonic = np.argmax(sn)
-        print(f"best harmonic={best_harmonic}")
+        logger.info(f"best harmonic={best_harmonic}")
 
         # extract the harmonic and sum over polarizations
         time_freq = np.sum(self.cyclic_spectra[:, :, :, best_harmonic], axis=1)
@@ -502,10 +503,10 @@ class CyclicSolver(_IOMixin):
         log_mean = log_sum / 8
         mean_amp = pow(10, 0.5 * log_mean)
         zero_amp = np.abs(self.h_doppler_delay[0, 0])
-        print(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
+        logger.info(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
 
         if self.delay_noise_shrinkage_threshold is not None:
-            print(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
+            logger.info(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
             np.copyto(
                 self.h_doppler_delay,
                 apply_delay_shrinkage_threshold(
@@ -522,7 +523,7 @@ class CyclicSolver(_IOMixin):
         power = np.abs(self.h_doppler_delay) ** 2
         total_power = np.sum(power)
         scale_factor = np.sqrt(initial_total_power / total_power)
-        print(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
+        logger.info(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
         self.h_doppler_delay *= scale_factor
 
     def solve(self, **kwargs):
@@ -539,7 +540,7 @@ class CyclicSolver(_IOMixin):
         for isub in range(self.nsubint):
             kwargs["isub"] = isub
             self.loop(**kwargs)
-            print("Saving after nopt:", self.nopt)
+            logger.info("Saving after nopt: %s", self.nopt)
             self.saveState(savefile)
 
         self.nloop += 1
@@ -592,7 +593,7 @@ class CyclicSolver(_IOMixin):
             pp = self.harm2phase(ph)
 
             if self.iprint:
-                print(f"update profile isub={isub}/{self.nsubint}")
+                logger.info(f"update profile isub={isub}/{self.nsubint}")
 
             self.intrinsic_profiles[isub, ipol, :] = pp
             return 0
@@ -739,25 +740,25 @@ class CyclicSolver(_IOMixin):
         self.h_time_delay = freq2time(self.h_doppler_delay)
 
         if self.align_frequency_responses:
-            print(f"reduce temporal phase and delay noise")
+            logger.info(f"reduce temporal phase and delay noise")
             h_time_freq = time2freq(self.h_time_delay, axis=1)
             align_to_neighbour(h_time_freq)
             self.h_time_delay = freq2time(h_time_freq, axis=1)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.reduce_temporal_phase_noise:
-            print(f"reduce temporal phase noise")
+            logger.info(f"reduce temporal phase noise")
             minimize_temporal_phase_noise(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.minimize_spectral_entropy:
             if self.minimize_spectral_entropy_delay:
-                print(f"minimize spectral entropy (phi + epsilon)")
+                logger.info(f"minimize spectral entropy (phi + epsilon)")
                 h_time_freq = time2freq(self.h_time_delay, axis=1)
                 minimize_spectral_entropy_with_delay(h_time_freq)
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
             else:
-                print(f"minimize spectral entropy")
+                logger.info(f"minimize spectral entropy")
                 minimize_spectral_entropy(self.h_time_delay)
             self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
@@ -766,7 +767,7 @@ class CyclicSolver(_IOMixin):
             ph = z / np.abs(z)
             ph = np.sqrt(ph)
             abs_origin = np.abs(self.h_doppler_delay[0, 0])
-            print(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
+            logger.info(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
             self.h_doppler_delay *= np.conj(ph)
             self.h_time_delay = freq2time(self.h_doppler_delay)
 
@@ -793,7 +794,7 @@ class CyclicSolver(_IOMixin):
                     try:
                         future.result()
                     except Exception as exc:
-                        print(f"updateProfile isub={isub} exception: {exc}")
+                        logger.info(f"updateProfile isub={isub} exception: {exc}")
 
         self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0, 1))
 
@@ -805,7 +806,7 @@ class CyclicSolver(_IOMixin):
         if self.model_gain_variations:
             # keep the gains from wandering
             mean_gain = self.optimal_gains.mean()
-            print(f"updateProfile mean gain: {mean_gain}")
+            logger.info(f"updateProfile mean gain: {mean_gain}")
             self.optimal_gains /= mean_gain
 
         self.intrinsic_ph_sum = np.zeros(self.nharm, dtype=np.complex128)
@@ -825,7 +826,7 @@ class CyclicSolver(_IOMixin):
         ph_denom = np.average(self.ph_denom, axis=(0, 1))
 
         self.pp_intrinsic = self.harm2phase(safely_divide(ph_numer, ph_denom)) * mean_gain
-        print(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
+        logger.info(f"updateProfile intrinsic profile range: {np.ptp(self.pp_intrinsic)}")
 
     def _refresh_jitter_model(self):
         """
@@ -1126,7 +1127,7 @@ class CyclicSolver(_IOMixin):
         ht = self.h_time_delay[isub]
 
         if self.iprint:
-            print(f"update filter isub={isub}/{self.nspec}")
+            logger.info(f"update filter isub={isub}/{self.nspec}")
 
         self.rindex = isub
         _merit, grad, _nterm = cyclic_merit_and_grad(
@@ -1269,7 +1270,7 @@ class CyclicSolver(_IOMixin):
 
         align_phase_gradient = False
         if align_phase_gradient:
-            print(f"h_doppler_delay_grad[0,0]={self.h_doppler_delay_grad[0,0]}")
+            logger.info(f"h_doppler_delay_grad[0,0]={self.h_doppler_delay_grad[0,0]}")
             phasor = np.conj(self.h_doppler_delay_grad[0, 0])
             phasor /= np.abs(phasor)
             self.h_doppler_delay_grad *= phasor
@@ -1444,7 +1445,7 @@ class CyclicSolver(_IOMixin):
             try:
                 os.mkdir(plotdir)
             except Exception:
-                print("Warning: couldn't make", plotdir, "not plotting")
+                logger.info("Warning: couldn't make %s, not plotting", plotdir)
                 self.make_plots = False
         self.plotdir = plotdir
 
@@ -1564,17 +1565,17 @@ class CyclicSolver(_IOMixin):
                     delay = self.phase_gradient(cs)
                 else:
                     delay = rindex
-                print("initial filter: delta function at delay = %d" % delay)
+                logger.info("initial filter: delta function at delay = %d", delay)
                 ht = np.zeros((self.nlag,), dtype=np.complex128)
                 ht[delay] = self.nlag
                 if use_minphase:
                     if onp is None:
-                        print("onp not specified, so not using minimum phase")
+                        logger.info("onp not specified, so not using minimum phase")
                     else:
                         spect = np.abs(self.data[isub, ipol, :, onp[0] : onp[1]]).mean(1)
                         ht = freq2time(minphase(spect - spect.min()))
                         ht = np.roll(ht, delay)
-                        print("using minimum phase with peak at:", np.abs(ht).argmax())
+                        logger.info("using minimum phase with peak at: %s", np.abs(ht).argmax())
             else:
                 ht = ht0.copy()
             hf = time2freq(ht)
@@ -1591,7 +1592,7 @@ class CyclicSolver(_IOMixin):
             self.rindex = rindex
         else:
             rindex = self.rindex
-        print("max filter index = %d" % self.rindex)
+        logger.info("max filter index = %d", self.rindex)
 
         if maxneg is not None:
             if maxlen is not None:
@@ -1615,17 +1616,17 @@ class CyclicSolver(_IOMixin):
         var, nvalid = self.cyclic_variance(cs)
         self.noise = np.sqrt(var)
         dof = nvalid - dim0 - self.nphase
-        print("variance : %.5e" % var)
-        print("nsamp    : %.5e" % nvalid)
-        print("dof      : %.5e" % dof)
-        print("min obj  : %.5e" % (dof * var))
+        logger.info("variance : %.5e", var)
+        logger.info("nsamp    : %.5e", nvalid)
+        logger.info("dof      : %.5e", dof)
+        logger.info("min obj  : %.5e", dof * var)
 
         tol = 1e-1 / (dof)
-        print("ftol     : %.5e" % (tol))
+        logger.info("ftol     : %.5e", tol)
         scipytol = (
             tolfact * tol / 2.220e-16
         )  # 2.220E-16 is machine epsilon, which the scipy optimizer uses as a unit
-        print("scipytol : %.5e" % scipytol)
+        logger.info("scipytol : %.5e", scipytol)
         x0 = pack_real_params(ht, rindex)
 
         self.niter = 0
