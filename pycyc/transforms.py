@@ -29,6 +29,7 @@ __all__ = [
     "match_two_filters",
     "create_shear_phasors",
     "shear_spectra",
+    "shear_spectra_batched",
 ]
 
 import numpy as np
@@ -203,3 +204,44 @@ def shear_spectra(spectrum, phasors):
     # copy the spectrum for each shift for each harmonic
     spectra = np.repeat(tmp[:, np.newaxis], nharm, axis=1)
     return fft(spectra * np.conj(phasors), axis=0), fft(spectra * phasors, axis=0)
+
+
+def shear_spectra_batched(spectrum, phasors, xp=np, fft_module=None):
+    """
+    Batched sibling of shear_spectra: shifts a whole batch of spectra (e.g.
+    one per subint) by the same phasors in one call, instead of one 1-D
+    spectrum at a time.
+
+    CuPy-by-Claude Stage 1 (see
+    /home/willem/.claude/plans/stateful-dreaming-wall.md): xp=numpy here
+    (the default) makes this usable, and directly comparable against
+    shear_spectra, entirely on CPU; xp=cupy is exercised starting Stage 3.
+
+    Parameters
+    ----------
+    spectrum : (batch, nchan) array to be shifted, one row per subint.
+    phasors : (nchan, nharm) phase gradients, shared across the batch --
+        the same array shear_spectra takes.
+    xp : array module to compute with (numpy or cupy).
+    fft_module : module providing fft/ifft with scipy.fft's default
+        (unnormalized-forward) convention -- shear_spectra's own fft/ifft
+        calls don't pass norm="ortho" either, only time2freq/freq2time do.
+        Defaults to scipy.fft for xp=numpy or cupyx.scipy.fft for xp=cupy
+        (see pycyc.backend.get_fft) if not given explicitly.
+
+    Returns (hfplus, hfminus), each (batch, nchan, nharm) -- unlike
+    shear_spectra, no np.repeat: (batch, nchan, 1) broadcasts against
+    (nchan, nharm) directly, avoiding an unnecessary (batch, nchan, nharm)
+    copy before the multiply.
+    """
+    if fft_module is None:
+        from .backend import get_fft
+
+        fft_module = get_fft(xp)
+
+    tmp = fft_module.ifft(spectrum, axis=1)
+    spectra = tmp[..., xp.newaxis]  # (batch, nchan, 1), broadcasts against phasors
+    return (
+        fft_module.fft(spectra * xp.conj(phasors), axis=1),
+        fft_module.fft(spectra * phasors, axis=1),
+    )

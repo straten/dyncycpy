@@ -14,6 +14,7 @@ Package layout
 pycyc used to be a single ~3000-line pycyc.py; it's now this package, split
 by concern so the underlying math is usable on its own:
 
+    pycyc/backend.py         numpy/CuPy array-backend selection (get_xp, get_fft)
     pycyc/transforms.py     FFT-convention helpers (time2freq, cs2cc, ...)
     pycyc/model.py           cyclic-spectrum shape helpers + CyclicModelParams
     pycyc/objective.py       the merit function and its gradient (pure functions)
@@ -112,6 +113,7 @@ CS.loop(make_plots=True, tolfact=10, maxneg=10, maxlen = 110)
 
 """
 
+from .backend import *
 from .io_utils import *
 from .jitter import *
 from .model import *

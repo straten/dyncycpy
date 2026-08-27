@@ -17,9 +17,11 @@ from __future__ import annotations
 
 __all__ = [
     "make_model_cs",
+    "make_model_cs_batched",
     "pack_real_params",
     "unpack_real_params",
     "cyclic_merit_and_grad",
+    "cyclic_merit_and_grad_batched",
     "cyclic_merit_lag_x",
 ]
 
@@ -30,7 +32,7 @@ from typing import Callable
 import numpy as np
 
 from .model import CyclicModelParams, chan_limits_cs, cyclic_padding, total_cyclic_power
-from .transforms import cs2cc, shear_spectra, time2freq
+from .transforms import cs2cc, shear_spectra, shear_spectra_batched, time2freq
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,52 @@ def make_model_cs(
 
     if padding:
         cs = cyclic_padding(cs, bw, ref_freq)
+
+    return cs, hfplus, hfminus
+
+
+def make_model_cs_batched(
+    params: CyclicModelParams, hf_batch: np.ndarray, s0_batch: np.ndarray, xp=np, fft_module=None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Batched sibling of make_model_cs: builds the model cyclic spectrum for a
+    whole batch of subints (e.g. all of them, or one chunk) in a single
+    call. CuPy-by-Claude Stage 1 (see
+    /home/willem/.claude/plans/stateful-dreaming-wall.md).
+
+    hf_batch: (batch, nchan). s0_batch: (nharm,) [a single profile shared
+    across the batch, e.g. self.ph_ref] or (batch, nharm) [a distinct
+    profile per subint, e.g. self.jitter_profiles] -- both broadcast
+    correctly against (batch, nchan, nharm) with no reshaping by the
+    caller. xp/fft_module: see shear_spectra_batched.
+
+    Returns (cs, hfplus, hfminus), each (batch, nchan, nharm).
+
+    pad_cyclic_spectra=True is not supported here (raises
+    NotImplementedError): cyclic_padding's per-harmonic Python loop isn't
+    batched/GPU-friendly yet, and cycfista.py/cycsolve.py (this function's
+    intended caller, via the FISTA gradient path) both run with
+    pad_cyclic_spectra=False.
+    """
+    if params.pad_cyclic_spectra:
+        raise NotImplementedError(
+            "make_model_cs_batched does not support pad_cyclic_spectra=True "
+            "yet -- see the CuPy port plan's Stage 1 scope note."
+        )
+
+    phasors = params.shear_phasors
+    nharm = s0_batch.shape[-1]
+
+    hfplus, hfminus = shear_spectra_batched(hf_batch, phasors, xp=xp, fft_module=fft_module)
+
+    # s0_batch[..., newaxis, :] is (1, nharm) for a shared (nharm,) profile
+    # or (batch, 1, nharm) for a per-subint (batch, nharm) profile -- either
+    # way it broadcasts against (batch, nchan, nharm) with no repeat/copy.
+    cs = s0_batch[..., xp.newaxis, :] * hfplus * xp.conj(hfminus)
+
+    # force the Nyquist harmonic to be real-valued
+    if params.include_Nyquist:
+        cs[:, :, nharm - 1] = xp.abs(cs[:, :, nharm - 1])
 
     return cs, hfplus, hfminus
 
@@ -215,6 +263,105 @@ def cyclic_merit_and_grad(
 
     if iprint:
         logger.debug("merit= %.7e  grad= %.7e", merit, (np.abs(grad) ** 2).sum())
+
+    return merit, grad, nonzero
+
+
+def cyclic_merit_and_grad_batched(
+    ht_batch: np.ndarray,
+    params: CyclicModelParams,
+    s0_batch: np.ndarray,
+    cs_data_batch: np.ndarray,
+    gain_batch=1.0,
+    xp=np,
+    fft_module=None,
+    dump_residual: bool = False,
+    on_residual: ResidualCallback | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Batched sibling of cyclic_merit_and_grad: computes the merit and
+    Wirtinger gradient for a whole batch of subints (e.g. all of them, or
+    one chunk) in a single call. CuPy-by-Claude Stage 1 (see
+    /home/willem/.claude/plans/stateful-dreaming-wall.md) -- intended
+    caller is CyclicSolver.compute_gradient_batched (the FISTA gradient
+    path), not the classical per-subint loop()/outer_loop path.
+
+    ht_batch: (batch, nlag). s0_batch: (nharm,) [shared profile] or
+    (batch, nharm) [per-subint, e.g. jitter profiles] -- see
+    make_model_cs_batched. cs_data_batch: (batch, nchan, nharm).
+    gain_batch: scalar or (batch,).
+
+    Returns (merit, grad, nonzero) as (batch,), (batch, nlag), (batch,)
+    arrays -- per-subint, unlike cyclic_merit_and_grad's scalars; a caller
+    that wants a batch total (as CyclicSolver.compute_gradient's
+    self.merit/self.nterm_merit accumulate today) sums merit/nonzero
+    itself.
+
+    dump_residual/on_residual are not supported here (raises
+    NotImplementedError if either is passed) -- diagnostics-only, out of
+    scope for the initial batched path; nothing on the FISTA path uses
+    them today.
+    """
+    if dump_residual or on_residual is not None:
+        raise NotImplementedError(
+            "cyclic_merit_and_grad_batched does not support dump_residual/"
+            "on_residual (diagnostics-only, out of scope for the initial "
+            "batched path -- see the CuPy port plan's Stage 1 scope note)."
+        )
+
+    if fft_module is None:
+        from .backend import get_fft
+
+        fft_module = get_fft(xp)
+
+    # time2freq's convention (norm="ortho"), batched over the nlag axis
+    hf_batch = fft_module.fft(ht_batch, axis=1, norm="ortho")
+    cs_model, hfplus, hfminus = make_model_cs_batched(params, hf_batch, s0_batch, xp=xp, fft_module=fft_module)
+
+    gain_arr = xp.asarray(gain_batch)
+    cs_model = cs_model * gain_arr[..., xp.newaxis, xp.newaxis]
+
+    if params.maxharm is not None:
+        cs_model = cs_model.copy()
+        cs_model[:, :, params.maxharm + 1 :] = 0.0
+
+    extract = cs_model[:, :, params.exclude_DC :]
+    nonzero = xp.count_nonzero(extract, axis=(1, 2))
+
+    # WDvS13 Equation 19 and eqn:merit_function of appendix
+    merit = (xp.abs(extract - cs_data_batch[:, :, params.exclude_DC :]) ** 2).sum(axis=(1, 2))
+
+    # residual, R = model - data
+    residual = cs_model - cs_data_batch
+
+    # zero the gradient's view of the residual wherever the model can't
+    # depend on ht in the first place (see _active_mask) -- shared across
+    # the whole batch (depends only on params, not on data), so computed
+    # once here rather than per subint
+    active = xp.asarray(_active_mask(residual.shape[1], residual.shape[2], params))
+    gradient_residual = xp.where(active[xp.newaxis, :, :], residual, 0)
+
+    phasors = params.shear_phasors
+
+    # (1, nharm) for a shared profile or (batch, 1, nharm) for a per-subint
+    # one -- either way broadcasts against grad2's (batch, nlag, nharm),
+    # standing in for the non-batched version's explicit
+    # np.repeat(s0[np.newaxis, :], params.nlag, axis=0)
+    cs0 = s0_batch[..., xp.newaxis, :]
+
+    # cs2cc's convention (norm="ortho"), batched over the radio-frequency/lag axis
+    cc1 = fft_module.ifft(gradient_residual * hfminus, axis=1, norm="ortho")
+    grad2 = cc1 * phasors * xp.conj(cs0)  # WDvS Equation 37
+    grad_sum1 = grad2[:, :, params.exclude_DC :].sum(axis=2)  # sum over all harmonics
+
+    cc1 = fft_module.ifft(xp.conj(gradient_residual) * hfplus, axis=1, norm="ortho")
+    grad2 = cc1 * xp.conj(phasors) * cs0
+    grad_sum2 = grad2[:, :, params.exclude_DC :].sum(axis=2)  # sum over all harmonics
+
+    # WDvS13 Appendix, Equations dSconj_dh/dS_dh: each term carries an
+    # explicit factor of g(t_l) from differentiating through the gain-scaled
+    # model, independent of the gain already folded into `residual` above.
+    grad = gain_arr[..., xp.newaxis] * (grad_sum1 + grad_sum2)
 
     return merit, grad, nonzero
 
