@@ -9,6 +9,7 @@ import logger
 
 # from lib import Residual, extract_part_of_array
 from pycyc import CyclicSolver as Residual  # TODO dirty hack
+from pycyc import freq2time
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
@@ -214,18 +215,52 @@ def take_fista_step(
     # if relative_difference > ???
     grad_phase = np.vdot(y_grad, func_grad)
     print(f"take_fista_step: wavefield gradient phase difference={np.angle(grad_phase)}")
-    # grad(h * e^{i phi}) == e^{i phi} * grad(h) exactly for this merit
-    # function (the degenerate global wavefield phase cancels identically
-    # in cs_model = H(+)*conj(H(-))*S -- verified numerically to ~1e-14),
-    # so removing the same degenerate phase from the gradient difference
-    # requires the same `z` rotation already applied to x_np1 above, not
-    # the raw func_grad. Without this, gdiff picks up a spurious
-    # contribution from exactly the degenerate phase drift that var_diff
-    # (correctly) already removed, and L_min can blow up by orders of
-    # magnitude whenever an iteration happens to be dominated by phase
-    # drift rather than genuine wavefield movement.
-    gdiff = y_grad - z * func_grad
-    L_min = np.sqrt(np.real(np.vdot(gdiff, gdiff) / var_diff))
+
+    # L_min itself is computed with a *per-subint* gauge correction, not
+    # the single shared `z` above (which is kept only for the diagnostic
+    # prints): x_np1/y_n/y_grad/func_grad live in Doppler-delay space (FFT
+    # of the wavefield along the subint axis), but the cyclic-spectrum
+    # merit is invariant under an *independent* phase rotation of each
+    # subint's own time-delay wavefield (each subint's contribution to the
+    # merit depends only on its own h_time_delay row, with no cross-subint
+    # coupling in the model) -- a single shared phasor can only remove the
+    # mean component of that drift across subints; the independent
+    # per-subint part shows up as a convolution across Doppler bins rather
+    # than a simple pointwise correction there. So the correction is done
+    # here in the time-delay domain instead, where each row genuinely is
+    # one subint and the same closed-form phase-alignment trick applies
+    # per row. grad(h_t * e^{i phi_t}) == e^{i phi_t} * grad(h_t) exactly
+    # per subint (same derivation as the global case, since each row's
+    # merit/gradient has no cross-subint coupling), so the same per-row
+    # phasor corrects the gradient difference too. Verified empirically:
+    # this estimate stays stable (its var_diff/gdiff are each exactly
+    # correct by construction, regardless of drift magnitude) whereas a
+    # single shared phasor's var_diff/gdiff can each individually be
+    # inflated by many orders of magnitude by independent per-subint
+    # drift that isn't real wavefield movement -- whether that visibly
+    # distorts the final L ratio (not just its two ingredients) depends
+    # on the specific noise realization, so this is a robustness fix, not
+    # only a fix for a specific observed blow-up the way the `z` fix
+    # above was.
+    x_np1_time = freq2time(x_np1, axis=0)
+    y_n_time = freq2time(y_n, axis=0)
+    y_grad_time = freq2time(y_grad, axis=0)
+    func_grad_time = freq2time(func_grad, axis=0)
+
+    z_t = np.sum(np.conj(x_np1_time) * y_n_time, axis=1)
+    z_t_abs = np.abs(z_t)
+    # guard against a degenerate (exactly zero/orthogonal) subint row --
+    # nsubint independent divisions here vs. one for the global `z` above,
+    # so a rare-but-possible zero denominator is more likely to be hit
+    # over a long run; leave that row's phasor at 1 (no correction) rather
+    # than propagating NaN into the whole L_min estimate
+    z_t = np.divide(z_t, z_t_abs, out=np.ones_like(z_t), where=z_t_abs > 0)
+
+    diff_t = z_t[:, np.newaxis] * x_np1_time - y_n_time
+    var_diff_t = np.vdot(diff_t, diff_t)
+
+    gdiff_t = y_grad_time - z_t[:, np.newaxis] * func_grad_time
+    L_min = np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
 
     if math.isfinite(func_val):
         demerits = np.append(demerits, func_val)

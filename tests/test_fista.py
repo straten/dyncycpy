@@ -131,3 +131,157 @@ def test_L_min_bounded_for_phase_drift_dominated_step():
     # phase drift) is a modest, finite number
     assert np.isfinite(L_min)
     assert L_min < 100
+
+
+def _l_min_for_independent_subint_drift(rng_seed, phi_spread, nsub=10, nchan=8, alpha=1.0):
+    """Builds a scenario in the time-delay domain (each row an
+    independent subint, with its own independent phase drift phi_t plus a
+    tiny genuine step), transforms to Doppler-delay (what take_fista_step
+    actually operates on, exactly as CyclicSolver.evaluate returns), and
+    runs it through the real take_fista_step. Returns (x_n in Doppler-delay,
+    L_min, target_x_np1_time) so callers can check both correctness and
+    the stability of L_min across different drift magnitudes."""
+    rng = np.random.default_rng(rng_seed)
+    shape = (nsub, nchan)
+    y_n_time = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    phi_t = rng.uniform(-phi_spread, phi_spread, nsub)
+    tiny_step_time = 1e-6 * (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+
+    target_x_np1_time = np.exp(1j * phi_t)[:, None] * y_n_time + tiny_step_time
+    y_grad_time = (y_n_time - target_x_np1_time) / alpha
+    func_grad_time = np.exp(1j * phi_t)[:, None] * y_grad_time  # per-subint grad(h*e^{iphi})==e^{iphi}*grad(h)
+
+    y_n = pycyc.time2freq(y_n_time, axis=0)
+    y_grad = pycyc.time2freq(y_grad_time, axis=0)
+    func_grad = pycyc.time2freq(func_grad_time, axis=0)
+
+    func = _StubFunc([(0.0, y_grad), (0.0, func_grad)])
+    x_n, y_np1, L_min, t_np1, demerits = fista.take_fista_step(
+        iter=0,
+        func=func,
+        backtrack=False,
+        alpha=alpha,
+        eta=5,
+        y_n=y_n,
+        _lambda=None,
+        delay_for_inf=-nchan,
+        zero_penalty_coords=np.array([]),
+        fix_phase_value=None,
+        fix_phase_coords=None,
+        fix_support=np.array([]),
+        t_n=1.0,
+        x_n=y_n,
+        demerits=np.array([1.0]),
+        eps=None,
+    )
+    return x_n, L_min, target_x_np1_time
+
+
+def _per_subint_L_min_formula(x_np1_time, y_n_time, y_grad_time, func_grad_time):
+    """Direct implementation of the per-subint formula
+    test_L_min_matches_reference_per_subint_formula (below) already
+    confirms take_fista_step's real code computes exactly -- used here to
+    probe the formula's *properties* against independently-constructed
+    (not reverse-engineered through take_fista_step's x_np1 = y_n -
+    alpha*y_grad constraint) inputs. That constraint ties y_grad's value
+    to whatever x_np1 is chosen, which contaminates a same-y_grad,
+    different-x_np1 stability comparison -- driving genuinely independent
+    inputs through take_fista_step itself isn't possible without hitting
+    that same coupling, so this tests the formula on its own, with
+    take_fista_step's equivalence already established separately."""
+    z_t = np.sum(np.conj(x_np1_time) * y_n_time, axis=1)
+    z_t /= np.abs(z_t)
+    diff_t = z_t[:, None] * x_np1_time - y_n_time
+    var_diff_t = np.vdot(diff_t, diff_t)
+    gdiff_t = y_grad_time - z_t[:, None] * func_grad_time
+    return np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
+
+
+def _l_min_stability_case(rng_seed, phi_spread, nsub=10, nchan=16, nharm=6):
+    """y_n_time and its real gradient (y_grad_time) are independent of
+    phi_spread -- only x_np1_time's per-subint rotation (and the gradient
+    evaluated there) varies, giving a genuine like-for-like comparison
+    across drift magnitudes."""
+    rng = np.random.default_rng(rng_seed)
+    bw, ref_freq, nlag = 1.0, 1e5, nchan
+    params = pycyc.CyclicModelParams(
+        bw=bw,
+        ref_freq=ref_freq,
+        shear_phasors=pycyc.create_shear_phasors(nchan, nharm, bw, ref_freq),
+        pad_cyclic_spectra=False,
+        include_Nyquist=True,
+        maxharm=None,
+        exclude_DC=0,
+        nlag=nlag,
+    )
+    s0 = rng.standard_normal(nharm) + 1j * rng.standard_normal(nharm)
+    cs_data_per_subint = [
+        rng.standard_normal((nchan, nharm)) + 1j * rng.standard_normal((nchan, nharm)) for _ in range(nsub)
+    ]
+    y_n_time = rng.standard_normal((nsub, nlag)) + 1j * rng.standard_normal((nsub, nlag))
+    phi_t = rng.uniform(-phi_spread, phi_spread, nsub)
+    tiny_step_time = 1e-6 * (rng.standard_normal((nsub, nlag)) + 1j * rng.standard_normal((nsub, nlag)))
+    x_np1_time = np.exp(1j * phi_t)[:, None] * y_n_time + tiny_step_time
+
+    y_grad_time = np.zeros_like(y_n_time)
+    func_grad_time = np.zeros_like(y_n_time)
+    for t in range(nsub):
+        _, y_grad_time[t], _ = pycyc.cyclic_merit_and_grad(y_n_time[t], params, s0, cs_data_per_subint[t])
+        _, func_grad_time[t], _ = pycyc.cyclic_merit_and_grad(x_np1_time[t], params, s0, cs_data_per_subint[t])
+
+    return _per_subint_L_min_formula(x_np1_time, y_n_time, y_grad_time, func_grad_time)
+
+
+def test_L_min_stable_under_independent_per_subint_phase_drift():
+    """The per-subint generalization: with independent (not shared) phase
+    drift per subint, a single global phasor can only remove the mean
+    component -- L_min must stay close to the same value regardless of
+    how large the independent per-subint drift is, since none of it is
+    genuine wavefield movement. y_n and its real gradient are identical
+    (same seed) between the two calls; only the injected drift differs.
+
+    This per-subint formula's own var_diff/gdiff are provably exact
+    regardless of drift magnitude (each row's contribution is fully
+    removed by construction, not just approximately cancelled) -- unlike
+    a single shared phasor, whose var_diff/gdiff can each individually be
+    inflated by many orders of magnitude by independent per-subint drift
+    (confirmed separately during development). Whether that contamination
+    also visibly distorts the final L *ratio* turned out to depend on the
+    specific noise realization in testing -- sometimes it stayed nearly
+    as stable as this formula's, sometimes not -- so this test asserts
+    the property this formula is actually guaranteed to have (stability),
+    not a specific side-by-side margin over the single-phasor version."""
+    seed = 101
+    L_small_spread = _l_min_stability_case(seed, phi_spread=0.1)
+    L_large_spread = _l_min_stability_case(seed, phi_spread=0.5)
+
+    assert np.isfinite(L_small_spread) and np.isfinite(L_large_spread)
+    np.testing.assert_allclose(L_large_spread, L_small_spread, rtol=0.1)
+
+
+def test_L_min_matches_reference_per_subint_formula():
+    """Direct check that take_fista_step's actual L_min matches the
+    per-subint formula it's documented to implement (time-delay domain,
+    per-row phase alignment applied to both position and gradient
+    differences) -- not just "doesn't blow up," but the specific,
+    derived value."""
+    seed = 7
+    x_n, L_min, target_x_np1_time = _l_min_for_independent_subint_drift(seed, phi_spread=0.3)
+
+    rng = np.random.default_rng(seed)
+    shape = (10, 8)
+    y_n_time = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    phi_t = rng.uniform(-0.3, 0.3, 10)
+    tiny_step_time = 1e-6 * (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    target_x_np1_time_ref = np.exp(1j * phi_t)[:, None] * y_n_time + tiny_step_time
+    y_grad_time = y_n_time - target_x_np1_time_ref
+    func_grad_time = np.exp(1j * phi_t)[:, None] * y_grad_time
+
+    z_t = np.sum(np.conj(target_x_np1_time_ref) * y_n_time, axis=1)
+    z_t /= np.abs(z_t)
+    diff_t = z_t[:, None] * target_x_np1_time_ref - y_n_time
+    var_diff_t = np.vdot(diff_t, diff_t)
+    gdiff_t = y_grad_time - z_t[:, None] * func_grad_time
+    L_ref = np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
+
+    np.testing.assert_allclose(L_min, L_ref, rtol=1e-8)
