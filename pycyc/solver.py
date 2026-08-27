@@ -45,7 +45,7 @@ from .objective import (
     pack_real_params,
     unpack_real_params,
 )
-from .profile import solve_profile_and_gain
+from .profile import solve_profile_and_gain, solve_profile_and_gain_batched
 from .regularization import *
 from .transforms import *
 
@@ -597,6 +597,108 @@ class CyclicSolver(_IOMixin):
             self.intrinsic_profiles[isub, ipol, :] = pp
             return 0
 
+    def updateProfile_batched(self):
+        """
+        Batched sibling of the per-subint updateProfileSubint loop inside
+        updateProfile -- dispatched there when self.use_gpu is True,
+        mirroring updateWavefield's dispatch to compute_gradient_batched.
+        CuPy port Stage 5 (see
+        /home/willem/.claude/plans/stateful-dreaming-wall.md).
+
+        Requires self.save_cyclic_spectra=True (same as
+        compute_gradient_batched) and self.include_Nyquist=True: with
+        include_Nyquist=False, self.harm2phase's else-branch assumes a
+        single 1-D profile (ph.shape[0] is treated as a harmonic count),
+        not a (batch, nharm) array.
+
+        Does not support self.compute_scattered_profile or
+        self.save_dynamic_spectrum (raises NotImplementedError if either
+        is True): both are one-time-setup-only features, only ever True
+        on initProfile()'s own first updateProfile() call -- cycsolve.py
+        sets self.use_gpu only after initProfile() completes, specifically
+        so this method never has to see either True.
+        """
+        if not self.save_cyclic_spectra:
+            raise NotImplementedError("updateProfile_batched requires self.save_cyclic_spectra=True.")
+        if not self.include_Nyquist:
+            raise NotImplementedError(
+                "updateProfile_batched requires self.include_Nyquist=True "
+                "(self.harm2phase's include_Nyquist=False branch assumes a "
+                "single 1-D profile, not batched)."
+            )
+        if self.compute_scattered_profile:
+            raise NotImplementedError(
+                "updateProfile_batched does not support compute_scattered_profile "
+                "-- a one-time-setup-only feature; set self.use_gpu after "
+                "initProfile() completes, not before."
+            )
+        if self.save_dynamic_spectrum:
+            raise NotImplementedError(
+                "updateProfile_batched does not support save_dynamic_spectrum "
+                "-- a one-time-setup-only feature; set self.use_gpu after "
+                "initProfile() completes, not before."
+            )
+
+        xp = get_xp(self.use_gpu)
+        fft_module = get_fft(xp)
+        chunk_size = self.gpu_chunk_size or self.nspec
+        dtype = self.gpu_dtype if self.use_gpu else None
+
+        params = self._model_params()
+        params_xp = dataclasses.replace(params, shear_phasors=self._device_phasors(xp, dtype))
+        cyclic_spectra_dev = self._device_cyclic_spectra(xp, dtype)
+
+        for ipol in range(self.npol):
+            update_gain = self.model_gain_variations and ipol == 0
+            cs_full = cyclic_spectra_dev[:, ipol]
+
+            # intrinsic_ph_sum/intrinsic_ph_sumsq are (nharm,), shared
+            # across the whole batch (running sums from the *previous*
+            # pass, not per-subint) -- transfer once per ipol, not per chunk
+            intrinsic_ph_sum_dev = (
+                self._to_device_dtype(self.intrinsic_ph_sum, xp, dtype) if update_gain else None
+            )
+            intrinsic_ph_sumsq_dev = (
+                self._to_device_dtype(self.intrinsic_ph_sumsq, xp, dtype) if update_gain else None
+            )
+
+            for start in range(0, self.nspec, chunk_size):
+                stop = min(start + chunk_size, self.nspec)
+                sl = slice(start, stop)
+
+                ht_chunk = self._to_device_dtype(self.h_time_delay[sl], xp, dtype)
+                hf_chunk = fft_module.fft(ht_chunk, axis=1, norm="ortho")  # time2freq's convention, batched
+                cs_chunk = cs_full[sl]
+
+                ph_chunk, gain_chunk, ph_numer_chunk, ph_denom_chunk = solve_profile_and_gain_batched(
+                    cs_chunk,
+                    hf_chunk,
+                    params_xp,
+                    update_gain,
+                    intrinsic_ph_sum_dev,
+                    intrinsic_ph_sumsq_dev,
+                    xp=xp,
+                    fft_module=fft_module,
+                )
+
+                self.ph_numer[ipol, sl] = to_host(ph_numer_chunk)
+                self.ph_denom[ipol, sl] = to_host(ph_denom_chunk)
+
+                if update_gain:
+                    self.optimal_gains[sl] = to_host(xp.real(gain_chunk))
+
+                ph_host = to_host(ph_chunk)
+                if self.exclude_DC:
+                    ph_host[:, 0] = 0.0
+                if self.maxinitharm:
+                    ph_host[:, self.maxinitharm :] = 0.0
+
+                # harm2phase (scipy.fft-bound, host-only) transforms along
+                # the last axis by default, which is exactly the batched
+                # semantics needed here when include_Nyquist=True (see the
+                # guard above) -- no changes to harm2phase itself needed
+                self.intrinsic_profiles[sl, ipol, :] = self.harm2phase(ph_host)
+
     def updateProfile(self):
         """
         Update the reference profile
@@ -672,7 +774,11 @@ class CyclicSolver(_IOMixin):
             self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
             self.h_time_delay = freq2time(self.h_doppler_delay)
 
-        if self.nthread == 1:
+        # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
+        # same single-flag dispatch as updateWavefield/compute_gradient_batched.
+        if self.use_gpu:
+            self.updateProfile_batched()
+        elif self.nthread == 1:
             for isub in range(self.nspec):
                 self.updateProfileSubint(isub)
 

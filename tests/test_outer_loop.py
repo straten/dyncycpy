@@ -72,6 +72,13 @@ def _build_synthetic_cyclic_solver(rng, nsubint=8, inject_jitter=True):
     CS.jitter_rank = 0
     CS._jitter_basis = None
     CS.jitter_principal_angle = None
+    CS.use_gpu = False
+    CS.gpu_chunk_size = None
+    CS.gpu_dtype = np.complex64
+    CS._gpu_cyclic_spectra = None
+    CS._gpu_cyclic_spectra_key = None
+    CS._gpu_phasors = None
+    CS._gpu_phasors_key = None
     CS.intrinsic_ph_sum = None
     CS.intrinsic_ph_sumsq = None
     CS.compute_scattered_profile = False

@@ -11,7 +11,7 @@ here.
 
 from __future__ import annotations
 
-__all__ = ["solve_profile_and_gain", "fit_profile_shift"]
+__all__ = ["solve_profile_and_gain", "solve_profile_and_gain_batched", "fit_profile_shift"]
 
 import logging
 
@@ -20,7 +20,7 @@ from scipy.optimize import minimize
 
 from .model import CyclicModelParams, fscrunch_cs
 from .regularization import spectral_distance, spectral_shift
-from .transforms import shear_spectra
+from .transforms import shear_spectra, shear_spectra_batched
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,81 @@ def solve_profile_and_gain(
     # When the denominator is zero, set the intrinsic profile to zero
     ph = ph_numer / ph_denom
     ph[np.real(ph_denom) <= 0.0] = 0
+
+    return ph, gain, ph_numer, ph_denom
+
+
+def solve_profile_and_gain_batched(
+    cs_batch: np.ndarray,
+    hf_batch: np.ndarray,
+    params: CyclicModelParams,
+    update_gain: bool,
+    intrinsic_ph_sum: np.ndarray | None = None,
+    intrinsic_ph_sumsq: np.ndarray | None = None,
+    xp=np,
+    fft_module=None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Batched sibling of solve_profile_and_gain: fits a whole batch of
+    subints' intrinsic profiles (and, optionally, gains) in a single call.
+    CuPy-by-Claude Stage 5 (see
+    /home/willem/.claude/plans/stateful-dreaming-wall.md) -- intended
+    caller is CyclicSolver.updateProfile_batched.
+
+    cs_batch: (batch, nchan, nharm). hf_batch: (batch, nchan).
+    intrinsic_ph_sum/intrinsic_ph_sumsq: (nharm,), shared across the whole
+    batch (CyclicSolver.intrinsic_ph_sum/.intrinsic_ph_sumsq are running
+    sums over the *previous* pass's subints, not per-subint) -- broadcast
+    against (batch, nchan, nharm) with no reshaping needed.
+
+    Returns (ph, gain, ph_numer, ph_denom) as (batch, nharm), (batch,),
+    (batch, nharm), (batch, nharm) arrays -- gain is always an array here
+    (1.0-filled when update_gain is False), unlike solve_profile_and_gain's
+    plain float 1, so a caller can always index/broadcast it uniformly.
+
+    pad_cyclic_spectra=True is not supported here (raises
+    NotImplementedError), matching make_model_cs_batched's scope note.
+    """
+    if params.pad_cyclic_spectra:
+        raise NotImplementedError(
+            "solve_profile_and_gain_batched does not support pad_cyclic_spectra=True "
+            "yet -- see the CuPy port plan's Stage 1 scope note (fscrunch_cs's "
+            "per-harmonic Python loop isn't batched/GPU-friendly)."
+        )
+
+    if fft_module is None:
+        from .backend import get_fft
+
+        fft_module = get_fft(xp)
+
+    hfplus, hfminus = shear_spectra_batched(hf_batch, params.shear_phasors, xp=xp, fft_module=fft_module)
+
+    # cs H(-)H(+)*
+    cshmhp = cs_batch * hfminus * xp.conj(hfplus)
+    # |H(-)|^2 |H(+)|^2
+    maghmhp = (xp.abs(hfminus) * xp.abs(hfplus)) ** 2
+
+    if update_gain and intrinsic_ph_sum is not None:
+        # Equation A5 numerator -- fscrunch (sum over the radio-frequency
+        # axis, axis=1 here vs axis=0 for a single subint) without padding
+        tmp = (xp.conj(cshmhp) * intrinsic_ph_sum).sum(axis=1)  # (batch, nharm)
+        gain_numer = tmp[:, 1:].sum(axis=1)  # sum over all harmonics -> (batch,)
+        # Equation A5 denominator
+        tmp = (maghmhp * intrinsic_ph_sumsq).sum(axis=1)
+        gain_denom = tmp[:, 1:].sum(axis=1)
+        gain = xp.real(gain_numer) / xp.real(gain_denom)  # (batch,)
+    else:
+        gain = xp.ones(cs_batch.shape[0])
+
+    gain_col = gain[..., xp.newaxis]  # (batch, 1), broadcasts against (batch, nharm)
+
+    # Equation A7 numerator/denominator
+    ph_numer = cshmhp.sum(axis=1) * gain_col
+    ph_denom = maghmhp.sum(axis=1) * (gain_col**2)
+
+    # When the denominator is zero, set the intrinsic profile to zero
+    ph = ph_numer / ph_denom
+    ph = xp.where(xp.real(ph_denom) <= 0.0, 0, ph)
 
     return ph, gain, ph_numer, ph_denom
 

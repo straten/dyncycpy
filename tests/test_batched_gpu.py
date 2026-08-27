@@ -14,6 +14,7 @@ import pytest
 import pycyc
 
 from .test_batched_solver import _build_gradient_test_solver
+from .test_outer_loop import _build_synthetic_cyclic_solver
 
 cp = pytest.importorskip("cupy")
 
@@ -120,3 +121,31 @@ def test_gpu_chunking_matches_single_batch():
 
     np.testing.assert_allclose(CS_chunked.h_time_delay_grad, CS_whole.h_time_delay_grad, rtol=1e-3, atol=1e-3)
     np.testing.assert_allclose(CS_chunked.merit, CS_whole.merit, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("model_gain_variations", [False, True])
+def test_update_profile_batched_gpu_complex64_close_to_cpu(model_gain_variations):
+    """Stage 5's real-device counterpart to test_gpu_complex64_close_to_cpu_complex128:
+    updateProfile_batched under a real self.use_gpu=True (complex64,
+    genuine cupy backend) must stay close to the threaded/complex128 CPU
+    path -- same rtol=1e-3 rationale (complex64's ~7 decimal digits)."""
+    rng = np.random.default_rng(113)
+    CS_threaded = _build_synthetic_cyclic_solver(rng, nsubint=6, inject_jitter=False)
+    rng = np.random.default_rng(113)
+    CS_gpu = _build_synthetic_cyclic_solver(rng, nsubint=6, inject_jitter=False)
+
+    for CS in (CS_threaded, CS_gpu):
+        CS.model_gain_variations = model_gain_variations
+        if model_gain_variations:
+            CS.optimal_gains = np.ones(6)
+        CS.updateProfile()  # prime self.pp_scattered via the ordinary path first
+
+    CS_gpu.use_gpu = True  # real cupy backend, gpu_dtype=complex64 (the default)
+
+    CS_threaded.updateProfile()
+    CS_gpu.updateProfile()
+
+    np.testing.assert_allclose(CS_gpu.pp_intrinsic, CS_threaded.pp_intrinsic, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(CS_gpu.intrinsic_profiles, CS_threaded.intrinsic_profiles, rtol=1e-3, atol=1e-3)
+    if model_gain_variations:
+        np.testing.assert_allclose(CS_gpu.optimal_gains, CS_threaded.optimal_gains, rtol=1e-3, atol=1e-3)

@@ -71,13 +71,14 @@ p.add_argument(
     "--gpu",
     action="store_true",
     help=(
-        "run the fista solver's gradient computation on the GPU via CuPy "
-        "(pycyc.CyclicSolver.compute_gradient_batched, CS.use_gpu=True) "
-        "instead of the CPU ThreadPoolExecutor path. Requires cupy "
-        "(pip install cupy-cudaXXx matching your CUDA version). Ignored "
-        "for --solver outer, which has no GPU path -- see the CuPy port "
-        "plan (/home/willem/.claude/plans/stateful-dreaming-wall.md) for "
-        "why the classical per-subint L-BFGS-B loop isn't a GPU target."
+        "run the fista solver's gradient and profile computations on the "
+        "GPU via CuPy (pycyc.CyclicSolver.compute_gradient_batched / "
+        ".updateProfile_batched, CS.use_gpu=True) instead of the CPU "
+        "ThreadPoolExecutor path. Requires cupy (pip install cupy-cudaXXx "
+        "matching your CUDA version). Ignored for --solver outer, which "
+        "has no GPU path -- see the CuPy port plan "
+        "(/home/willem/.claude/plans/stateful-dreaming-wall.md) for why "
+        "the classical per-subint L-BFGS-B loop isn't a GPU target."
     ),
 )
 
@@ -109,14 +110,16 @@ alpha_history = 10
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
 
-if args.gpu:
-    if args.solver == "outer":
-        print("cycsolve: --gpu has no effect with --solver outer (CPU-only); ignoring")
-    else:
-        print("cycsolve: running the fista gradient computation on the GPU (CuPy)")
-        CS.use_gpu = True
-        if args.gpu_chunk_size is not None:
-            CS.gpu_chunk_size = args.gpu_chunk_size
+use_gpu = args.gpu and args.solver != "outer"
+if args.gpu and args.solver == "outer":
+    print("cycsolve: --gpu has no effect with --solver outer (CPU-only); ignoring")
+if args.gpu_chunk_size is not None:
+    CS.gpu_chunk_size = args.gpu_chunk_size
+# CS.use_gpu itself is set later, after initProfile()/initWavefield() --
+# updateProfile_batched (see pycyc/solver.py) doesn't support the
+# one-time compute_scattered_profile/save_dynamic_spectrum work
+# initProfile()'s own first updateProfile() call does, so use_gpu must
+# stay off through setup and only turn on for the main loop.
 
 # CS.enforce_real_at_origin = True
 
@@ -231,6 +234,10 @@ with open("cycsolve_cs_norm.pkl", "wb") as fh:
 pp_scattered = np.copy(CS.pp_scattered)
 
 CS.initWavefield()
+
+if use_gpu:
+    print("cycsolve: running the fista gradient/profile computation on the GPU (CuPy)")
+    CS.use_gpu = True
 
 if args.solver == "fista":
     y_n = np.copy(CS.h_doppler_delay)
