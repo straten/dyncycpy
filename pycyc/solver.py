@@ -14,6 +14,7 @@ try:
 except Exception:
     print("pycyc.py: psrchive python libraries not found. You will not be able to load psrchive files.")
 import concurrent.futures
+import dataclasses
 import logging
 import os
 import pickle
@@ -26,6 +27,7 @@ from scipy.signal.windows import kaiser
 
 from plotting import plot_current_solution, plot_Doppler_vs_delay
 
+from .backend import get_fft, get_xp, to_device, to_host
 from .io import _IOMixin
 from .io_utils import *
 from .jitter import (
@@ -37,6 +39,7 @@ from .jitter import (
 from .model import *
 from .objective import (
     cyclic_merit_and_grad,
+    cyclic_merit_and_grad_batched,
     cyclic_merit_lag_x,
     make_model_cs,
     pack_real_params,
@@ -207,6 +210,16 @@ class CyclicSolver(_IOMixin):
         self.jitter_rank = 0
         self._jitter_basis = None
         self.jitter_principal_angle = None
+
+        # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
+        # compute_gradient_batched's device/chunking knobs. use_gpu is off
+        # by default -- experimental, opt-in; requires cupy (see
+        # pycyc.backend.get_xp) only when actually set True.
+        self.use_gpu = False
+        # subints processed per batched call; None means all self.nspec at
+        # once (fine on CPU). GPU VRAM budgets require a real chunk size --
+        # see the CuPy port plan's Stage 3 memory-budget notes.
+        self.gpu_chunk_size = None
 
         # normalize each cyclic spectrum
         self.normalize_cyclic_spectra = False
@@ -1150,6 +1163,74 @@ class CyclicSolver(_IOMixin):
 
                     except Exception:
                         logger.exception("compute_gradient isub=%d raised", isub)
+
+    def compute_gradient_batched(self):
+        """
+        Batched sibling of compute_gradient: evaluates the merit and
+        gradient for a whole chunk of subints in one call to
+        pycyc.objective.cyclic_merit_and_grad_batched, instead of
+        ThreadPoolExecutor-dispatching updateWavefieldSubint one subint at
+        a time. CuPy port Stage 2 (see
+        /home/willem/.claude/plans/stateful-dreaming-wall.md) -- reads
+        self.use_gpu (off by default until Stage 3 exercises it) and
+        self.gpu_chunk_size (None = all self.nspec subints in one call,
+        fine on CPU; a real chunk size is needed once self.use_gpu=True,
+        to fit the GPU's memory budget -- see the plan's Stage 3 notes).
+
+        Requires self.save_cyclic_spectra=True: the self.data/self.get_cs
+        per-subint fallback compute_gradient supports isn't batched here,
+        and nothing on the FISTA path (cycfista.py/cycsolve.py) runs
+        without self.save_cyclic_spectra=True anyway.
+        """
+        if not self.save_cyclic_spectra:
+            raise NotImplementedError(
+                "compute_gradient_batched requires self.save_cyclic_spectra=True "
+                "(the self.data/self.get_cs per-subint fallback isn't batched here)."
+            )
+
+        xp = get_xp(self.use_gpu)
+        fft_module = get_fft(xp)
+        chunk_size = self.gpu_chunk_size or self.nspec
+
+        params = self._model_params()
+        params_xp = dataclasses.replace(params, shear_phasors=to_device(params.shear_phasors, xp))
+
+        self.h_time_delay_grad[:, :] = 0.0 + 0.0j
+
+        for ipol in range(self.npol):
+            self.ph_ref = self.intrinsic_ph[ipol]
+
+            if self.jitter_profiles is not None:
+                s0_full = self.jitter_profiles  # (nsubint, nharm)
+            elif self.use_integrated_profile:
+                s0_full = self.ph_ref  # (nharm,) -- shared across the batch
+            else:
+                s0_full = self.ph_numer[ipol] / self.ph_denom[ipol]  # (nsubint, nharm)
+
+            cs_full = self.cyclic_spectra[:, ipol]  # (nsubint, nchan, nharm)
+
+            for start in range(0, self.nspec, chunk_size):
+                stop = min(start + chunk_size, self.nspec)
+                sl = slice(start, stop)
+
+                ht_chunk = to_device(self.h_time_delay[sl], xp)
+                cs_chunk = to_device(cs_full[sl], xp)
+                gain_chunk = to_device(self.optimal_gains[sl], xp)
+                s0_chunk = to_device(s0_full if s0_full.ndim == 1 else s0_full[sl], xp)
+
+                merit_chunk, grad_chunk, nonzero_chunk = cyclic_merit_and_grad_batched(
+                    ht_chunk,
+                    params_xp,
+                    s0_chunk,
+                    cs_chunk,
+                    gain_batch=gain_chunk,
+                    xp=xp,
+                    fft_module=fft_module,
+                )
+
+                self.h_time_delay_grad[sl, :] += to_host(grad_chunk)
+                self.merit += float(to_host(merit_chunk).sum())
+                self.nterm_merit += int(to_host(nonzero_chunk).sum())
 
     def optimize_profile(self, cs, hf, bw, ref_freq, update_gain):
         # bw/ref_freq are taken from the explicit arguments (not self.bw/
