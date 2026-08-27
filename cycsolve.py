@@ -273,7 +273,26 @@ if args.solver == "fista":
             or ((update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0)
         ):
             print("cycsolve: update profile")
+            # CyclicSolver.evaluate() leaves CS.h_doppler_delay holding
+            # whatever it last set it to -- the previous iteration's
+            # x_np1 (== x_n), not y_n (this iteration's momentum-
+            # extrapolated starting point, tracked separately as a local
+            # variable here). Sync it from y_n first, so updateProfile()
+            # (which derives self.h_time_delay from self.h_doppler_delay
+            # as its own first step, and may further adjust either place
+            # -- power normalization always, spectral-entropy
+            # minimization if CS.minimize_spectral_entropy) actually
+            # gauge-fixes the point FISTA is about to take a gradient
+            # step from, not a stale copy of x_n. Cheap: an array copy,
+            # not a gradient recompute.
+            CS.h_doppler_delay = np.copy(y_n)
             CS.updateProfile()
+            # Resync y_n so whatever updateProfile() just did (power
+            # normalization, and spectral-entropy minimization when
+            # enabled) actually reaches the FISTA iterate sequence,
+            # instead of being silently discarded by the next
+            # evaluate() call's overwrite of CS.h_doppler_delay.
+            y_n = np.copy(CS.h_doppler_delay)
 
         if CS.model_jitter and i >= warmup_passes:
             CS._refresh_jitter_model()
