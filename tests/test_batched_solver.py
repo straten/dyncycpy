@@ -40,6 +40,11 @@ def _build_gradient_test_solver(rng, nsubint=6, use_jitter_profiles=False, use_i
     CS.use_integrated_profile = use_integrated_profile
     CS.use_gpu = False
     CS.gpu_chunk_size = None
+    CS.gpu_dtype = np.complex64
+    CS._gpu_cyclic_spectra = None
+    CS._gpu_cyclic_spectra_key = None
+    CS._gpu_phasors = None
+    CS._gpu_phasors_key = None
 
     ht_true = rng.standard_normal(nlag) + 1j * rng.standard_normal(nlag)
     hf_true = pycyc.time2freq(ht_true)

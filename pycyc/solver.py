@@ -220,6 +220,24 @@ class CyclicSolver(_IOMixin):
         # once (fine on CPU). GPU VRAM budgets require a real chunk size --
         # see the CuPy port plan's Stage 3 memory-budget notes.
         self.gpu_chunk_size = None
+        # dtype used on-device when self.use_gpu is True (irrelevant
+        # otherwise): complex64 by default for VRAM headroom, validated
+        # against complex128 CPU results in tests/test_batched_gpu.py.
+        # None means "don't downcast" (use whatever dtype the source
+        # arrays already are, i.e. complex128).
+        self.gpu_dtype = np.complex64
+        # device-resident cache of self.cyclic_spectra/self.shear_phasors
+        # (populated lazily by compute_gradient_batched, keyed on the host
+        # array's id() plus gpu_dtype so a reload/reassignment invalidates
+        # it automatically) -- avoids re-transferring these across every
+        # FISTA iteration. Assumes self.cyclic_spectra/self.shear_phasors
+        # aren't mutated *in place* once the FISTA loop starts calling
+        # compute_gradient_batched (today's in-place tapering happens
+        # earlier, during initProfile/load).
+        self._gpu_cyclic_spectra = None
+        self._gpu_cyclic_spectra_key = None
+        self._gpu_phasors = None
+        self._gpu_phasors_key = None
 
         # normalize each cyclic spectrum
         self.normalize_cyclic_spectra = False
@@ -1164,18 +1182,61 @@ class CyclicSolver(_IOMixin):
                     except Exception:
                         logger.exception("compute_gradient isub=%d raised", isub)
 
+    def _to_device_dtype(self, arr, xp, dtype):
+        """to_device, additionally downcasting to `dtype` first if given
+        (so the smaller array is what actually crosses the host->device
+        transfer, not transferred at full precision and downcast after)."""
+        if dtype is not None:
+            arr = arr.astype(dtype, copy=False)
+        return to_device(arr, xp)
+
+    def _device_cyclic_spectra(self, xp, dtype):
+        """Device-resident, dtype-cast cache of self.cyclic_spectra, keyed
+        on the host array's id() (so a reload/reassignment invalidates it
+        automatically) plus dtype. Avoids re-transferring the whole
+        (nsubint, npol, nchan, nharm) array across every FISTA iteration --
+        see this method's callers' docstrings for the in-place-mutation
+        assumption this relies on."""
+        if xp is np:
+            return self.cyclic_spectra
+        cache_key = (id(self.cyclic_spectra), dtype)
+        if self._gpu_cyclic_spectra_key != cache_key:
+            self._gpu_cyclic_spectra = self._to_device_dtype(self.cyclic_spectra, xp, dtype)
+            self._gpu_cyclic_spectra_key = cache_key
+        return self._gpu_cyclic_spectra
+
+    def _device_phasors(self, xp, dtype):
+        """Device-resident, dtype-cast cache of self.shear_phasors -- same
+        rationale as _device_cyclic_spectra, much smaller array but reused
+        identically every single subint fit within every iteration."""
+        if xp is np:
+            return self.shear_phasors
+        cache_key = (id(self.shear_phasors), dtype)
+        if self._gpu_phasors_key != cache_key:
+            self._gpu_phasors = self._to_device_dtype(self.shear_phasors, xp, dtype)
+            self._gpu_phasors_key = cache_key
+        return self._gpu_phasors
+
     def compute_gradient_batched(self):
         """
         Batched sibling of compute_gradient: evaluates the merit and
         gradient for a whole chunk of subints in one call to
         pycyc.objective.cyclic_merit_and_grad_batched, instead of
         ThreadPoolExecutor-dispatching updateWavefieldSubint one subint at
-        a time. CuPy port Stage 2 (see
+        a time. CuPy port Stages 2-3 (see
         /home/willem/.claude/plans/stateful-dreaming-wall.md) -- reads
-        self.use_gpu (off by default until Stage 3 exercises it) and
-        self.gpu_chunk_size (None = all self.nspec subints in one call,
-        fine on CPU; a real chunk size is needed once self.use_gpu=True,
-        to fit the GPU's memory budget -- see the plan's Stage 3 notes).
+        self.use_gpu (off by default) and self.gpu_chunk_size (None = all
+        self.nspec subints in one call, fine on CPU; a real chunk size is
+        needed once self.use_gpu=True, to fit the GPU's memory budget) and
+        self.gpu_dtype (downcast precision on-device, default complex64;
+        None keeps whatever dtype the source arrays already are).
+
+        self.cyclic_spectra and self.shear_phasors -- read identically by
+        every chunk/iteration -- are cached device-resident (see
+        _device_cyclic_spectra/_device_phasors) rather than re-transferred
+        every call; this assumes neither is mutated *in place* once the
+        FISTA loop starts calling this method (today's in-place tapering
+        happens earlier, during initProfile/load).
 
         Requires self.save_cyclic_spectra=True: the self.data/self.get_cs
         per-subint fallback compute_gradient supports isn't batched here,
@@ -1191,9 +1252,12 @@ class CyclicSolver(_IOMixin):
         xp = get_xp(self.use_gpu)
         fft_module = get_fft(xp)
         chunk_size = self.gpu_chunk_size or self.nspec
+        dtype = self.gpu_dtype if self.use_gpu else None
 
         params = self._model_params()
-        params_xp = dataclasses.replace(params, shear_phasors=to_device(params.shear_phasors, xp))
+        params_xp = dataclasses.replace(params, shear_phasors=self._device_phasors(xp, dtype))
+
+        cyclic_spectra_dev = self._device_cyclic_spectra(xp, dtype)
 
         self.h_time_delay_grad[:, :] = 0.0 + 0.0j
 
@@ -1207,16 +1271,17 @@ class CyclicSolver(_IOMixin):
             else:
                 s0_full = self.ph_numer[ipol] / self.ph_denom[ipol]  # (nsubint, nharm)
 
-            cs_full = self.cyclic_spectra[:, ipol]  # (nsubint, nchan, nharm)
+            cs_full = cyclic_spectra_dev[:, ipol]  # (nsubint, nchan, nharm), already device-resident
 
             for start in range(0, self.nspec, chunk_size):
                 stop = min(start + chunk_size, self.nspec)
                 sl = slice(start, stop)
 
-                ht_chunk = to_device(self.h_time_delay[sl], xp)
-                cs_chunk = to_device(cs_full[sl], xp)
-                gain_chunk = to_device(self.optimal_gains[sl], xp)
-                s0_chunk = to_device(s0_full if s0_full.ndim == 1 else s0_full[sl], xp)
+                ht_chunk = self._to_device_dtype(self.h_time_delay[sl], xp, dtype)
+                cs_chunk = cs_full[sl]
+                gain_chunk = to_device(self.optimal_gains[sl], xp)  # tiny, keep full precision
+                s0_source = s0_full if s0_full.ndim == 1 else s0_full[sl]
+                s0_chunk = self._to_device_dtype(s0_source, xp, dtype)
 
                 merit_chunk, grad_chunk, nonzero_chunk = cyclic_merit_and_grad_batched(
                     ht_chunk,
