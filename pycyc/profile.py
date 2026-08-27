@@ -241,7 +241,7 @@ def fit_profile_shift(
     grid_values = [_epsilon_objective(np.array([e]))[0] for e in grid]
     x0 = [grid[int(np.argmin(grid_values))]]
 
-    logger.info("fit_profile_shift: initial phase shift = %f", x0[0])
+    logger.debug("fit_profile_shift: initial phase shift = %f", x0[0])
 
     result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True)
     if not result.success:
