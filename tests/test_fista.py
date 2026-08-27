@@ -285,3 +285,129 @@ def test_L_min_matches_reference_per_subint_formula():
     L_ref = np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
 
     np.testing.assert_allclose(L_min, L_ref, rtol=1e-8)
+
+
+class _RealMultiSubintFunc:
+    """func stand-in whose evaluate() computes the *real* per-subint merit
+    and Wirtinger gradient (pycyc.cyclic_merit_and_grad, one independent
+    synthetic problem per subint) in the time-delay domain and transforms
+    to/from Doppler-delay exactly as CyclicSolver.evaluate/updateWavefield
+    do -- unlike _StubFunc's pre-scripted returns, this actually computes
+    a gradient from whatever wavefield it's given, so it can drive a
+    genuine, many-iteration FISTA trajectory through the real
+    fista.take_fista_step rather than a single hand-constructed step."""
+
+    def __init__(self, params, s0, cs_data_per_subint):
+        self.params = params
+        self.s0 = s0
+        self.cs_data_per_subint = cs_data_per_subint
+
+    def normalize(self, h_dopp):
+        return h_dopp  # identity, matching conserve_wavefield_energy=False
+
+    def evaluate(self, h_dopp):
+        h_time = pycyc.freq2time(h_dopp, axis=0)
+        merit_total = 0.0
+        grad_time = np.zeros_like(h_time)
+        for t in range(h_time.shape[0]):
+            m, g, _ = pycyc.cyclic_merit_and_grad(h_time[t], self.params, self.s0, self.cs_data_per_subint[t])
+            merit_total += m
+            grad_time[t] = g
+        return merit_total, pycyc.time2freq(grad_time, axis=0)
+
+
+def test_no_gauge_drift_over_long_fista_run():
+    """Regression test for the reasoning documented in pycyc.tex
+    (degenerate-phase section, "Stability of the gauge alignment under
+    FISTA/momentum dynamics"): the per-subint gauge-alignment angle used
+    by L_min must not accumulate drift over a long FISTA trajectory --
+    including through the Nesterov momentum term, whose exactness is not
+    obvious a priori (it's a linear combination of two different
+    iterations' gradient-descended points, not a single step) -- because
+    the merit function's phase invariance is exact (not a small-angle
+    approximation) at every point visited along the trajectory, not just
+    the starting point.
+
+    Drives the real fista.take_fista_step (not a reimplementation) for
+    300 iterations of a genuine multi-subint gradient-descent-with-
+    momentum trajectory (real pycyc.cyclic_merit_and_grad gradients, no
+    prox/normalize to keep the check focused on the gradient+momentum
+    dynamics specifically), independently recomputing the global and
+    per-subint alignment angles after each call from that call's own
+    inputs/outputs (x_np1, y_n) -- not from any value take_fista_step
+    itself returns, so this doesn't just re-check the formula, it checks
+    the actual trajectory's gauge stability."""
+    rng = np.random.default_rng(9)
+    nsub, nchan, nharm = 5, 16, 6
+    bw, ref_freq, nlag = 1.0, 1e5, nchan
+    params = pycyc.CyclicModelParams(
+        bw=bw,
+        ref_freq=ref_freq,
+        shear_phasors=pycyc.create_shear_phasors(nchan, nharm, bw, ref_freq),
+        pad_cyclic_spectra=False,
+        include_Nyquist=True,
+        maxharm=None,
+        exclude_DC=0,
+        nlag=nlag,
+    )
+    s0 = rng.standard_normal(nharm) + 1j * rng.standard_normal(nharm)
+    cs_data_per_subint = [
+        rng.standard_normal((nchan, nharm)) + 1j * rng.standard_normal((nchan, nharm)) for _ in range(nsub)
+    ]
+    func = _RealMultiSubintFunc(params, s0, cs_data_per_subint)
+
+    y_n_time = rng.standard_normal((nsub, nlag)) + 1j * rng.standard_normal((nsub, nlag))
+    y_n = pycyc.time2freq(y_n_time, axis=0)
+    x_n = y_n.copy()
+    t_n = 1.0
+    alpha = 1e-6
+    demerits = np.array([1.0])
+
+    max_angle_global_deg = 0.0
+    max_angle_subint_deg = 0.0
+    n_iter = 300
+
+    for i in range(n_iter):
+        x_n_new, y_n_new, L, t_n, demerits = fista.take_fista_step(
+            iter=i,
+            func=func,
+            backtrack=False,
+            alpha=alpha,
+            eta=5,
+            y_n=y_n,
+            _lambda=None,
+            delay_for_inf=-nchan,  # no-op prox, isolates the gradient+momentum dynamics
+            zero_penalty_coords=np.array([]),
+            fix_phase_value=None,
+            fix_phase_coords=None,
+            fix_support=np.array([]),
+            t_n=t_n,
+            x_n=x_n,
+            demerits=demerits,
+            eps=None,
+        )
+        assert np.isfinite(L)
+
+        # independently recompute both alignment angles from this call's
+        # own inputs (y_n) and outputs (x_n_new == x_np1) -- not derived
+        # from L or from take_fista_step's internals
+        z = np.vdot(x_n_new, y_n)
+        z /= np.abs(z)
+        max_angle_global_deg = max(max_angle_global_deg, abs(np.degrees(np.angle(z))))
+
+        x_time = pycyc.freq2time(x_n_new, axis=0)
+        y_time = pycyc.freq2time(y_n, axis=0)
+        z_t = np.sum(np.conj(x_time) * y_time, axis=1)
+        z_t /= np.abs(z_t)
+        max_angle_subint_deg = max(max_angle_subint_deg, float(np.max(np.abs(np.degrees(np.angle(z_t))))))
+
+        x_n, y_n = x_n_new, y_n_new
+        alpha = 1.0 / max(L, 1.0)  # adapt like a real FISTA loop would
+
+    # Both angles must stay at floating-point noise level (~1e-14 deg
+    # observed) over the whole run, many orders of magnitude below
+    # anything that would indicate real accumulation -- 1e-6 deg leaves
+    # generous headroom above the noise floor while still catching any
+    # genuine systematic drift.
+    assert max_angle_global_deg < 1e-6, f"global alignment angle drifted: {max_angle_global_deg:.3e} deg"
+    assert max_angle_subint_deg < 1e-6, f"per-subint alignment angle drifted: {max_angle_subint_deg:.3e} deg"

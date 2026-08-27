@@ -256,7 +256,7 @@ Where $M$ is minimized, the partial derivative of $M$ with respect to $g(t)$ is 
     \frac{dM}{dg(t)}
     = \sum_{\alpha,\nu,\mu} 2\mathrm{Re} \left[
     R_\mu(\alpha,\nu;t) H^*(\nu+\alpha/2;t) H(\nu-\alpha/2;t) S^*_\mu(\alpha) \right] = 0;
-\label{eqn:dM_dP}
+\label{eqn:dM_dg}
 \end{equation}
 which is solved by
 \begin{equation}
@@ -290,15 +290,13 @@ Noting that $zz^*=1$, the partial derivatives of $M'$ with respect to $\phi_t$ m
     \frac{dM'}{d\phi_t} = \frac{dM'}{dz^*}\frac{dz^*}{d\phi_t}
     = \sum_{\alpha,\nu,\mu} 2\mathrm{Re} \left[
     R'_\mu(\alpha,\nu;t) S^{\prime *}_\mu(\alpha,\nu;t) \right] = 0;
-\label{eqn:dM_dP}
+\label{eqn:dM_dphi}
 \end{equation}
 that is
 \begin{equation}
 \sum_{\alpha,\nu,\mu} \mathrm{Re} \left[D_\mu(\alpha,\nu;t) S^{\prime *}_\mu(\alpha,\nu;t) \right] =
 \sum_{\alpha,\nu,\mu} |S'_\mu(\alpha)|^2
 \end{equation}
-
-\fiZ
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -456,6 +454,112 @@ Use these definitions to compute the partial derivative of $M$ with respect to $
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%  Degenerate phase along the optimization trajectory
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Degenerate phase along the optimization trajectory}
+\label{sec:gauge_stability}
+
+\noindent
+Section~\ref{sec:degenerate_phase} shows that $M$ is stationary with respect to $\phi_t$ at
+$\phi_t=0$ (\Eqn{dM_dphi}). That result is in fact the linearization of a stronger, global
+statement. Set $H'(\nu;t_l) = H(\nu;t_l)\exp(i\phi_{t_l})$, holding $H(\nu;t_{l'})$ for every
+$t_{l'}\ne t_l$, $S_\mu(\alpha)$, and $g(t)$ fixed. As shown in Section~\ref{sec:degenerate_phase},
+$S''_\mu(\alpha,\nu;t_l) = S'_\mu(\alpha,\nu;t_l)\, z(t_l) z^*(t_l) = S'_\mu(\alpha,\nu;t_l)$
+identically, for every $\phi_{t_l}\in[0,2\pi)$ -- not merely to first order, since $z(t_l)z^*(t_l)=1$
+is itself an identity, true for every $\phi_{t_l}$, not an approximation valid only for small
+$\phi_{t_l}$. Because no term of \Eqn{merit_function} couples different subintegrations, $M$
+depends on $t_l$ only through $S'_\mu(\cdot,\cdot;t_l)$, so $M$ is exactly invariant under this
+rotation of any single subintegration's response function, at every rotation angle.
+
+Because $h(\tau;t)$ (\Eqn{inverse_dft}) is the inverse DFT of $H(\nu;t)$ over $\nu$ at fixed $t$,
+and $\phi_{t_l}$ does not depend on $\nu$, the same rotation reads
+$h(\tau;t_l) \to h(\tau;t_l)\exp(i\phi_{t_l})$ for every delay $\tau$. Writing $M$ as a function of
+the independent Wirtinger variables $h(\tau;t_l)$ and $h^*(\tau;t_l)$, exact invariance for every
+$\phi_{t_l}$ means
+\begin{equation}
+M\!\left[h(\cdot;t_l)e^{i\phi_{t_l}},\, h^*(\cdot;t_l)e^{-i\phi_{t_l}}\right]
+= M\!\left[h(\cdot;t_l),\, h^*(\cdot;t_l)\right]
+\label{eqn:M_gauge_invariant}
+\end{equation}
+identically in $\phi_{t_l}$, at every $h(\cdot;t_l)$, not just at a stationary point. Differentiating
+both sides with respect to $h^*(\tau_j;t_l)$, and applying the chain rule to the left-hand side
+(which depends on $h^*(\tau_j;t_l)$ only through the combination $h^*(\tau_j;t_l)e^{-i\phi_{t_l}}$),
+gives
+\begin{equation}
+\exp(-i\phi_{t_l}) \left.\frac{dM}{dh^*(\tau_j;t_l)}\right|_{h(\cdot;t_l)e^{i\phi_{t_l}}}
+= \left.\frac{dM}{dh^*(\tau_j;t_l)}\right|_{h(\cdot;t_l)},
+\end{equation}
+i.e.
+\begin{equation}
+\left.\frac{dM}{dh^*(\tau_j;t_l)}\right|_{h(\cdot;t_l)e^{i\phi_{t_l}}}
+= \exp(i\phi_{t_l}) \left.\frac{dM}{dh^*(\tau_j;t_l)}\right|_{h(\cdot;t_l)}
+\label{eqn:grad_rotation}
+\end{equation}
+for every $\phi_{t_l}$: the gradient at a rotated wavefield equals the rotated gradient at the
+original wavefield, exactly -- not a linearization valid only for small $\phi_{t_l}$. Expanding
+\Eqn{grad_rotation} to $O(\phi_{t_l})$ and comparing coefficients reproduces \Eqn{dM_dphi};
+\Eqn{grad_rotation} is the stronger, all-angle statement of the same degeneracy, verified
+numerically (to floating-point precision, at every angle from $1^\circ$ to $359^\circ$ and for
+$\phi_{t_l}=\pi$ exactly) against \texttt{pycyc.cyclic\_merit\_and\_grad} in
+\texttt{tests/test\_fista.py}.
+
+\Eqn{grad_rotation} holds per subintegration because the underlying invariance does: an
+independent phase pattern $\{\phi_{t_l}\}$, one value per $t_l$, leaves every
+$S'_\mu(\cdot,\cdot;t_l)$, and hence $M$, exactly unchanged, again because no term of
+\Eqn{merit_function} couples different $t_l$. Expressed in the Doppler-delay wavefield
+$h(\tau;\omega)$ (\Eqn{forward_dft_tau_omega}), such an independent pattern is \emph{not} a
+pointwise operation: since $h(\tau;\omega)$ is the DFT of $h(\tau;t)$ over $t$, an independent
+rotation $\{\exp(i\phi_{t_l})\}$ acts, by the convolution theorem, as a convolution of
+$h(\tau;\cdot)$ with the DFT of $\{\exp(i\phi_{t_l})\}$ over $\omega$, mixing every Doppler bin.
+Only a $t$-independent pattern, $\phi_{t_l}\equiv\phi$, factors out of the sum defining
+$h(\tau;\omega)$ and reduces to the simple pointwise rotation $h(\tau;\omega) \to
+h(\tau;\omega)\exp(i\phi)$ used in Section~\ref{sec:degenerate_phase}.
+
+\subsubsection*{Application: the FISTA step-size estimate}
+
+\texttt{fista.take\_fista\_step} estimates a local Lipschitz constant for the wavefield gradient
+from two nearby Doppler-delay iterates, $y_n$ and $x_{n+1} = y_n - \alpha\, dM/dh^*[y_n]$, by a
+discrete secant, $L \sim \|dM/dh^*[x_{n+1}] - dM/dh^*[y_n]\| / \|x_{n+1}-y_n\|$ (following the
+FISTA backtracking procedure of \citealt{beck17}, chapter 10.7.1). Because \Eqn{grad_rotation}'s
+degeneracy is exact, for every subintegration and every rotation angle, any component of
+$x_{n+1}-y_n$ along a per-subintegration phase rotation of $y_n$ is physically unobservable and
+must be removed before this ratio is evaluated. Working in the time-delay domain, where the
+degeneracy is pointwise per the convolution argument above, each subintegration's best-fit
+rotation
+\begin{equation}
+z(t_l) = \frac{\sum_\tau x^*_{n+1}(\tau;t_l)\, y_n(\tau;t_l)}
+              {\left|\sum_\tau x^*_{n+1}(\tau;t_l)\, y_n(\tau;t_l)\right|}
+\end{equation}
+is applied to both the position difference, $z(t_l)\,x_{n+1}(\tau;t_l) - y_n(\tau;t_l)$, and, by
+\Eqn{grad_rotation}, to the gradient difference,
+$dM/dh^*[y_n](\tau;t_l) - z(t_l)\, dM/dh^*[x_{n+1}](\tau;t_l)$, before their norms are formed.
+Applying $z(t_l)$ to only the position difference and not the gradient difference -- as an earlier
+version of \texttt{take\_fista\_step} did -- leaves the gradient difference contaminated by exactly
+the degenerate content the position difference had already had removed, and can inflate $L$
+(and so shrink the resulting step $\alpha=1/L$) by orders of magnitude whenever an iteration
+happens to be dominated by phase drift rather than genuine wavefield movement.
+
+Because \Eqn{grad_rotation} holds at every point $h$, not only at $y_n$, it holds identically at
+every iterate the FISTA momentum recursion
+\begin{equation}
+y_{n+1} = x_{n+1} + \frac{t_n-1}{t_{n+1}}\left(x_{n+1}-x_n\right)
+\end{equation}
+visits, whether or not the two iterates being compared were separated by a single gradient step
+or by many. Since the same exact identity governs the gradient at every visited point, no
+approximation is introduced by comparing iterates many steps apart, and no drift can accumulate
+along the trajectory: confirmed to floating-point precision ($<10^{-13}$ degrees, no growth trend)
+over 300 iterations of gradient descent with momentum in
+\texttt{tests/test\_fista.py::test\_no\_gauge\_drift\_over\_long\_fista\_run}. This is not merely
+a favorable empirical observation -- no step of \Eqn{grad_rotation}'s derivation depends on how
+$h$ was reached, only on $M$ being exactly, not approximately, invariant under the rotation at
+$h$ itself.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 %%  Minimal Spectral Entropy
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -589,8 +693,7 @@ produces, BFGS convergence is not guaranteed (see
 \subsection{Degenerate-direction removal and reduced-rank jitter model}
 \label{sec:jitter}
 
-Sections~\ref{sec:intrinsic_cyclic_spectrum}
-(\S\ref{sec:intrinsic_cyclic_spectrum}) and~\ref{sec:jitter} address the
+Sections~\ref{sec:intrinsic_cyclic_spectrum} and~\ref{sec:jitter} address the
 same underlying difficulty from two directions. Holding $S_\mu(\alpha)$
 constant in $t$ is what makes \Eqn{ml_intrinsic} well posed at all: the
 degenerate transform $H^\prime(\nu;t)=e^{i(\phi_t+\epsilon_t\nu)}H(\nu;t)$
