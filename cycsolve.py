@@ -67,6 +67,31 @@ p.add_argument(
     ),
 )
 
+p.add_argument(
+    "--gpu",
+    action="store_true",
+    help=(
+        "run the fista solver's gradient computation on the GPU via CuPy "
+        "(pycyc.CyclicSolver.compute_gradient_batched, CS.use_gpu=True) "
+        "instead of the CPU ThreadPoolExecutor path. Requires cupy "
+        "(pip install cupy-cudaXXx matching your CUDA version). Ignored "
+        "for --solver outer, which has no GPU path -- see the CuPy port "
+        "plan (/home/willem/.claude/plans/stateful-dreaming-wall.md) for "
+        "why the classical per-subint L-BFGS-B loop isn't a GPU target."
+    ),
+)
+
+p.add_argument(
+    "--gpu-chunk-size",
+    type=int,
+    default=None,
+    help=(
+        "subints processed per batched GPU call (CS.gpu_chunk_size); "
+        "default (unset) processes all subints in one call. Only matters "
+        "with --gpu; see the CuPy port plan's memory-budget notes."
+    ),
+)
+
 args, files = p.parse_known_args()
 init = args.init
 init_profile = args.init_profile
@@ -83,6 +108,15 @@ alpha_history = 10
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
+
+if args.gpu:
+    if args.solver == "outer":
+        print("cycsolve: --gpu has no effect with --solver outer (CPU-only); ignoring")
+    else:
+        print("cycsolve: running the fista gradient computation on the GPU (CuPy)")
+        CS.use_gpu = True
+        if args.gpu_chunk_size is not None:
+            CS.gpu_chunk_size = args.gpu_chunk_size
 
 # CS.enforce_real_at_origin = True
 

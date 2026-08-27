@@ -1122,7 +1122,15 @@ class CyclicSolver(_IOMixin):
         if self.shear_phasors is None:
             self.shear_phasors = create_shear_phasors(self.nchan, self.nharm, self.bw, self.ref_freq)
 
-        self.compute_gradient()
+        # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
+        # self.use_gpu selects both the batched-vs-threaded gradient path
+        # and, within the batched path, numpy vs cupy -- there's no use
+        # case for "batched but still on CPU" outside compute_gradient_batched's
+        # own tests, so a single flag controls both here.
+        if self.use_gpu:
+            self.compute_gradient_batched()
+        else:
+            self.compute_gradient()
 
         if self.subtract_degenerate_projections:
             self.h_time_delay_grad = subtract_degenerate_dof(self.h_time_delay_grad, self.h_time_delay)
