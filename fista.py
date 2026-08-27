@@ -212,9 +212,19 @@ def take_fista_step(
 
     # TO-DO compute L/curvature only when the difference is significant
     # if relative_difference > ???
-    z = np.vdot(y_grad, func_grad)
-    print(f"take_fista_step: wavefield gradient phase difference={np.angle(z)}")
-    gdiff = y_grad - func_grad
+    grad_phase = np.vdot(y_grad, func_grad)
+    print(f"take_fista_step: wavefield gradient phase difference={np.angle(grad_phase)}")
+    # grad(h * e^{i phi}) == e^{i phi} * grad(h) exactly for this merit
+    # function (the degenerate global wavefield phase cancels identically
+    # in cs_model = H(+)*conj(H(-))*S -- verified numerically to ~1e-14),
+    # so removing the same degenerate phase from the gradient difference
+    # requires the same `z` rotation already applied to x_np1 above, not
+    # the raw func_grad. Without this, gdiff picks up a spurious
+    # contribution from exactly the degenerate phase drift that var_diff
+    # (correctly) already removed, and L_min can blow up by orders of
+    # magnitude whenever an iteration happens to be dominated by phase
+    # drift rather than genuine wavefield movement.
+    gdiff = y_grad - z * func_grad
     L_min = np.sqrt(np.real(np.vdot(gdiff, gdiff) / var_diff))
 
     if math.isfinite(func_val):
