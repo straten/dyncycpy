@@ -68,6 +68,7 @@ def _build_synthetic_cyclic_solver(rng, nsubint=8, inject_jitter=True):
     CS.model_jitter = True
     CS.jitter_warmup_passes = 1
     CS.jitter_max_rank = None
+    CS.jitter_fit_gain = True
     CS.jitter_profiles = None
     CS.jitter_rank = 0
     CS._jitter_basis = None

@@ -200,6 +200,23 @@ class CyclicSolver(_IOMixin):
         # isn't fit against transient wavefield-model error rather than
         # genuine jitter (see the jitter/degeneracy plan's Stage 4 design).
         self.jitter_warmup_passes = 2
+        # fit and remove each subint's gain (not just its epsilon/delay
+        # shift) before computing jitter residuals (pycyc.jitter.
+        # compute_residuals's fit_gain). Deliberately independent of
+        # self.model_gain_variations (which additionally gates the
+        # wavefield-domain Eq. A5 gain fit, updateProfile's gain-wandering
+        # correction, and cyclic-spectrum normalization method -- a much
+        # broader behavior change): gain, like epsilon, is a pure
+        # degenerate/nuisance direction that says nothing about genuine
+        # pulse-shape jitter, so it should always be removed before PCA
+        # looks for real structure in what's left, independent of whether
+        # the rest of the pipeline models gain variation too. Confirmed on
+        # real data that leaving this off (the old behavior, before this
+        # was split out) lets real per-subint flux variation (scintillation,
+        # gain drift -- nothing else in the pipeline corrects for it when
+        # model_gain_variations=False) leak into the residuals as a
+        # mean-profile-shaped signal, dominating the PCA's top eigenvector.
+        self.jitter_fit_gain = True
         # optional cap on the PCA rank chosen by pycyc.jitter.fit_jitter_basis
         self.jitter_max_rank = None
         # current per-subint jitter-aware profile (nsubint, nharm), or None
@@ -967,7 +984,7 @@ class CyclicSolver(_IOMixin):
         ph_denom_per_subint = np.average(self.ph_denom, axis=0)
         s_t_all = safely_divide(ph_numer_per_subint, ph_denom_per_subint)
 
-        epsilon_t, gain_t, residuals = compute_residuals(ph_ref, s_t_all, fit_gain=self.model_gain_variations)
+        epsilon_t, gain_t, residuals = compute_residuals(ph_ref, s_t_all, fit_gain=self.jitter_fit_gain)
 
         if self.save_cyclic_spectra:
             cs0 = self.cyclic_spectra[0, 0]
