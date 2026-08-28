@@ -211,6 +211,16 @@ class CyclicSolver(_IOMixin):
         self.jitter_rank = 0
         self._jitter_basis = None
         self.jitter_principal_angle = None
+        # (nsubint, jitter_rank) per-subint PCA weights from the most
+        # recent jitter refresh, (min(nsubint,nharm), nharm) every basis
+        # vector from that same SVD (not just the jitter_rank-retained
+        # subset -- self._jitter_basis is full_jitter_basis[:jitter_rank]),
+        # its full eigenvalue spectrum, and the Marchenko-Pastur threshold
+        # used to pick jitter_rank -- see pycyc.jitter.fit_jitter_basis.
+        self.jitter_weights = None
+        self.jitter_full_basis = None
+        self.jitter_eigenvalues = None
+        self.jitter_threshold = None
 
         # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
         # compute_gradient_batched's device/chunking knobs. use_gpu is off
@@ -248,6 +258,16 @@ class CyclicSolver(_IOMixin):
 
         # delay the initial wavefield estimate by this many samples
         self.first_wavefield_delay = 0
+
+        # rms of complex Gaussian noise added to the initial wavefield guess
+        # (h_doppler_delay, after first_wavefield_from_best_harmonic if that
+        # is also enabled), to break the exact symmetry of a bare delta
+        # function and test whether a naive first guess is trapping FISTA
+        # near a shallow local minimum. 0 (default) adds nothing. Total
+        # wavefield power is rescaled back to its pre-perturbation value
+        # afterward, so this only redistributes power, it doesn't change
+        # the overall flux normalization the rest of initWavefield expects.
+        self.initial_guess_noise_perturbation_rms = 0.0
 
         # taper data (cyclic spectra) in frequency using the specified window
         # see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.get_window.html
@@ -417,6 +437,9 @@ class CyclicSolver(_IOMixin):
         if self.first_wavefield_from_best_harmonic:
             self.compute_first_wavefield_from_best_harmonic()
 
+        if self.initial_guess_noise_perturbation_rms > 0:
+            self._perturb_initial_wavefield_guess()
+
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
         self.first_harmonic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan), dtype=np.complex128)
         self.optimized_filters = np.zeros((self.nsubint, self.nchan), dtype=np.complex128)
@@ -483,7 +506,19 @@ class CyclicSolver(_IOMixin):
 
             noise_power = np.mean(noise_slice)
             total_power = np.mean(power)
-            sn[harm] = np.sqrt(total_power / noise_power)
+            if noise_power > 0:
+                sn[harm] = np.sqrt(total_power / noise_power)
+            else:
+                # harmonic 0 is always exactly zero when self.exclude_DC is
+                # set (get_cs zeroes cs[:, 0] at load time -- the default),
+                # and any other harmonic could be degenerate too (e.g.
+                # zapped via self.maxharm). Without this guard,
+                # noise_power==0 gives sn[harm]=nan, and np.argmax silently
+                # returns a nan's index rather than skipping it -- reliably
+                # "selecting" an empty harmonic as best. sn=0 guarantees
+                # this harmonic loses to any harmonic with real content.
+                logger.info(f"harmonic={harm}: noise-slice power is exactly zero, excluding from selection")
+                sn[harm] = 0.0
             logger.info(f"harmonic={harm} S/N={sn[harm]}")
 
         best_harmonic = np.argmax(sn)
@@ -492,19 +527,21 @@ class CyclicSolver(_IOMixin):
         # extract the harmonic and sum over polarizations
         time_freq = np.sum(self.cyclic_spectra[:, :, :, best_harmonic], axis=1)
         self.h_doppler_delay = time2freq(freq2time(time_freq, axis=1), axis=0)
-        power = np.abs(self.h_doppler_delay) ** 2
 
-        # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
-        log_sum = 0
-        for i in [-1, 0, 1]:
-            for j in [-1, 0, 1]:
-                if i != 0 or j != 0:
-                    log_sum += np.log10(power[i, j])
-        log_mean = log_sum / 8
-        mean_amp = pow(10, 0.5 * log_mean)
-        zero_amp = np.abs(self.h_doppler_delay[0, 0])
-        logger.info(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
-
+        # apply general denoising *before* computing the origin-specific
+        # fix below -- previously this ran after, so the geometric-mean
+        # target (mean_amp/zero_amp, computed from the pre-shrinkage
+        # array) was applied as a multiplicative ratio to the
+        # *post*-shrinkage h[0,0], which is a different value than the one
+        # the ratio was computed from. That silently broke the fix's own
+        # stated intent ("set origin amplitude to the geometric mean of
+        # its neighbours") whenever shrinkage changed h[0,0]'s magnitude --
+        # confirmed on real data (P2067_full): zero_amp/mean_amp computed
+        # pre-shrinkage were 733128/15136, nothing like the post-shrinkage
+        # value they'd actually be multiplying. Computing both from the
+        # same (post-shrinkage) array fixes this, and is also more
+        # representative, since the neighbours' own noise has already been
+        # suppressed by the same shrinkage.
         if self.delay_noise_shrinkage_threshold is not None:
             logger.info(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
             np.copyto(
@@ -517,14 +554,75 @@ class CyclicSolver(_IOMixin):
                 ),
             )
 
-        self.h_doppler_delay[0, 0] *= mean_amp / zero_amp
+        power = np.abs(self.h_doppler_delay) ** 2
+
+        # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
+        # (excluding any neighbour that is exactly zero -- log10(0) is -inf
+        # and would otherwise poison the whole average with a single
+        # degenerate cell; if every neighbour is zero there's no
+        # information to seed the origin with, so fall back to 0)
+        log_sum = 0.0
+        n_nonzero = 0
+        for i in [-1, 0, 1]:
+            for j in [-1, 0, 1]:
+                if (i != 0 or j != 0) and power[i, j] > 0:
+                    log_sum += np.log10(power[i, j])
+                    n_nonzero += 1
+        mean_amp = pow(10, 0.5 * log_sum / n_nonzero) if n_nonzero > 0 else 0.0
+        zero_amp = np.abs(self.h_doppler_delay[0, 0])
+        logger.info(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
+
+        if zero_amp > 0:
+            self.h_doppler_delay[0, 0] *= mean_amp / zero_amp
+        else:
+            # phase is undefined for an exactly-zero complex value -- 0 is
+            # as good a default as any, and avoids a 0/0 division
+            self.h_doppler_delay[0, 0] = mean_amp + 0.0j
         self.h_doppler_delay[:, self.nchan // 2 :] = 0.0
 
         power = np.abs(self.h_doppler_delay) ** 2
         total_power = np.sum(power)
-        scale_factor = np.sqrt(initial_total_power / total_power)
-        logger.info(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
+        if total_power > 0:
+            scale_factor = np.sqrt(initial_total_power / total_power)
+            logger.info(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
+            self.h_doppler_delay *= scale_factor
+        else:
+            logger.info(
+                f"total power original={initial_total_power} new={total_power}: "
+                "best-harmonic wavefield is entirely zero, leaving unscaled"
+            )
+
+    def _perturb_initial_wavefield_guess(self):
+        """
+        Add complex Gaussian noise (rms=self.initial_guess_noise_perturbation_rms)
+        to the initial h_doppler_delay guess, to break the exact symmetry of a
+        bare delta function (or any other degenerate/sparse first guess) and
+        test whether FISTA is trapped near a shallow local minimum by a naive
+        starting point. Total wavefield power is rescaled back to its
+        pre-perturbation value, so this only redistributes power rather than
+        changing the overall flux normalization the rest of initWavefield
+        expects downstream (e.g. updateProfile's gain fit).
+        """
+        initial_total_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+
+        rng = np.random.default_rng()
+        sigma = self.initial_guess_noise_perturbation_rms / np.sqrt(2.0)
+        noise = sigma * (
+            rng.standard_normal(self.h_doppler_delay.shape) + 1j * rng.standard_normal(self.h_doppler_delay.shape)
+        )
+        self.h_doppler_delay = self.h_doppler_delay + noise
+        # the initial guess must respect causality regardless of how long
+        # self.enforce_causality holds during the FISTA loop itself
+        self.h_doppler_delay[:, self.nchan // 2 :] = 0.0
+
+        perturbed_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+        scale_factor = np.sqrt(initial_total_power / perturbed_power)
+        logger.info(
+            f"initial_guess_noise_perturbation_rms={self.initial_guess_noise_perturbation_rms}: "
+            f"total power original={initial_total_power} after-noise={perturbed_power} scale={scale_factor}"
+        )
         self.h_doppler_delay *= scale_factor
+        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
 
     def solve(self, **kwargs):
         """
@@ -869,7 +967,7 @@ class CyclicSolver(_IOMixin):
         ph_denom_avg = np.real(np.mean(ph_denom_per_subint, axis=0))
         noise_variance_per_harmonic = sigma_D2 / np.maximum(ph_denom_avg, 1e-300)
 
-        rank, weights, basis, eigenvalues, threshold = fit_jitter_basis(
+        rank, weights, basis, eigenvalues, threshold, full_basis = fit_jitter_basis(
             residuals, noise_variance_per_harmonic, max_rank=self.jitter_max_rank
         )
 
@@ -887,6 +985,10 @@ class CyclicSolver(_IOMixin):
         self._jitter_basis = basis
         self.jitter_rank = rank
         self.jitter_principal_angle = angle
+        self.jitter_weights = weights
+        self.jitter_full_basis = full_basis
+        self.jitter_eigenvalues = eigenvalues
+        self.jitter_threshold = threshold
         self.jitter_profiles = reconstruct_jittered_profile(ph_ref, epsilon_t, gain_t, weights, basis)
 
     def outer_loop(

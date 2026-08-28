@@ -56,12 +56,15 @@ def test_fit_jitter_basis_finds_no_significant_rank_in_pure_noise():
     noise_variance_per_harmonic = np.full(nharm, 2 * noise_sigma**2)
     residuals = noise_sigma * random_complex(rng, (nsubint, nharm))
 
-    rank, weights, basis, eigenvalues, threshold = pycyc.fit_jitter_basis(residuals, noise_variance_per_harmonic)
+    rank, weights, basis, eigenvalues, threshold, full_basis = pycyc.fit_jitter_basis(
+        residuals, noise_variance_per_harmonic
+    )
 
     assert rank == 0
     assert weights.shape == (nsubint, 0)
     assert basis.shape == (0, nharm)
     assert eigenvalues.max() < threshold * 1.5  # comfortably below, not just barely
+    assert full_basis.shape == (min(nsubint, nharm), nharm)
 
 
 def test_fit_jitter_basis_recovers_injected_low_rank_structure():
@@ -76,9 +79,13 @@ def test_fit_jitter_basis_recovers_injected_low_rank_structure():
     noise = noise_sigma * random_complex(rng, (nsubint, nharm))
     residuals = true_jitter + noise
 
-    rank, weights, basis, eigenvalues, threshold = pycyc.fit_jitter_basis(residuals, noise_variance_per_harmonic)
+    rank, weights, basis, eigenvalues, threshold, full_basis = pycyc.fit_jitter_basis(
+        residuals, noise_variance_per_harmonic
+    )
 
     assert rank == true_rank
+    assert full_basis.shape == (min(nsubint, nharm), nharm)
+    np.testing.assert_array_equal(full_basis[:rank], basis)
 
     # basis vectors are only defined up to a unitary rotation within the
     # retained subspace -- compare subspaces (projector), not raw vectors
@@ -107,7 +114,7 @@ def test_reconstruct_jittered_profile_matches_injected_noiseless_model():
     # near-noiseless (not exactly 0, to keep the whitening well-conditioned)
     # -> any real structure is "significant"
     noise_variance_per_harmonic = np.full(nharm, 1e-4)
-    rank, weights, basis, _eig, _thr = pycyc.fit_jitter_basis(residuals, noise_variance_per_harmonic)
+    rank, weights, basis, _eig, _thr, _full_basis = pycyc.fit_jitter_basis(residuals, noise_variance_per_harmonic)
     assert rank >= true_rank
 
     reconstructed = pycyc.reconstruct_jittered_profile(s0, epsilon_t, gain_t, weights, basis)

@@ -13,7 +13,12 @@ import numpy as np
 
 import fista
 import pycyc
-from plotting import plot_Doppler_vs_delay, plot_intrinsic_vs_observed, plot_power_vs_delay
+from plotting import (
+    plot_Doppler_vs_delay,
+    plot_intrinsic_vs_observed,
+    plot_jitter_eigenvectors,
+    plot_power_vs_delay,
+)
 
 mpl.rcParams["image.aspect"] = "auto"
 
@@ -216,7 +221,19 @@ plot_all = True
 # CS.spectral_taper_alpha = 0.25
 
 # CS.first_wavefield_delay = 0
-# CS.first_wavefield_from_best_harmonic = 10
+CS.first_wavefield_from_best_harmonic = 10
+
+# break the exact symmetry of the bare-delta initial wavefield guess with
+# a small amount of complex Gaussian noise, to test whether FISTA is
+# trapped near a shallow local minimum by the naive starting point. rms
+# calibrated to roughly match the real reference-noise-floor amplitude
+# observed in a converged run on this dataset (sqrt(2.62e-2) ~= 0.162,
+# from cycsolve_fista_iter150's final wavefield) -- a physically-motivated
+# "just above the eventual noise floor" perturbation scale, not a guess.
+# Tested alone (50-iteration comparison run): no measurable improvement
+# over the bare delta -- final demerit and wavefield concentration were
+# statistically indistinguishable from an unperturbed control.
+# CS.initial_guess_noise_perturbation_rms = 0.162
 
 # CS.noise_threshold = 1.0
 # CS.noise_smoothing_duty_cycle = 0.05
@@ -321,8 +338,8 @@ if args.solver == "fista":
             # evaluate() call's overwrite of CS.h_doppler_delay.
             y_n = np.copy(CS.h_doppler_delay)
 
-        if CS.model_jitter and i >= warmup_passes:
-            CS._refresh_jitter_model()
+            if CS.model_jitter and i >= warmup_passes:
+                CS._refresh_jitter_model()
 
         x_n, y_n, L, t_n, demerits = fista.take_fista_step(
             iter=i,
@@ -422,6 +439,37 @@ if args.solver == "fista":
 
             plot_intrinsic_vs_observed(CS, pp_scattered, base + "_compare.png")
             plt.close()
+
+            if CS.model_jitter and i >= warmup_passes:
+                # eigenvectors: every basis vector from the jitter PCA fit
+                # (not just the jitter_rank retained ones); rank: how many
+                # of those are actually retained (Marchenko-Pastur
+                # threshold); weights: the per-subint principal-component
+                # coefficients for the retained rank-N subspace, one row
+                # per subint. See pycyc.jitter.fit_jitter_basis.
+                with open(base + "_jitter.pkl", "wb") as fh:
+                    pickle.dump(
+                        {
+                            "eigenvectors": CS.jitter_full_basis,
+                            "rank": CS.jitter_rank,
+                            "weights": CS.jitter_weights,
+                            "eigenvalues": CS.jitter_eigenvalues,
+                            "threshold": CS.jitter_threshold,
+                        },
+                        fh,
+                    )
+
+                # the retained (rank-N) eigenvectors are complex, in the
+                # harmonic domain (like intrinsic_ph vs. pp_intrinsic) --
+                # inverse-FFT each back to the real pulse-phase domain the
+                # same way CyclicSolver.harm2phase does for pp_intrinsic,
+                # for a qualitative look at their shape.
+                try:
+                    retained = CS.jitter_full_basis[: CS.jitter_rank]
+                    eigenvector_profiles = np.array([CS.harm2phase(vec) for vec in retained])
+                    plot_jitter_eigenvectors(eigenvector_profiles, base + "_jitter_eigenvectors.png")
+                except Exception:
+                    print("##################################### jitter eigenvector plot failed")
 
 else:  # args.solver == "outer"
     # CyclicSolver.outer_loop alternates a classical per-subint L-BFGS-B

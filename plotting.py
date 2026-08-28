@@ -176,6 +176,49 @@ def plot_power_vs_delay (h_doppler_delay, bw, filename=None):
     else:
         plt.show()
 
+
+def plot_jitter_eigenvectors(eigenvector_profiles, filename=None):
+    """
+    Plot each row of eigenvector_profiles (N, nbin) in its own small panel
+    of an adaptive grid, for a quick qualitative look at what the jitter
+    PCA model (pycyc.jitter.fit_jitter_basis) is fitting. Callers are
+    expected to have already converted from the complex harmonic-domain
+    basis vectors fit_jitter_basis returns to the real pulse-phase domain
+    (e.g. via CyclicSolver.harm2phase) before calling this -- this
+    function itself takes only a plain real array, no CyclicSolver
+    coupling, consistent with the rest of this module.
+
+    No axes/ticks/units/labels: this is meant to convey shape, not scale.
+    """
+    n = eigenvector_profiles.shape[0]
+    if n == 0:
+        print("plot_jitter_eigenvectors: nothing to plot (0 eigenvectors)")
+        return
+
+    ncols = int(np.ceil(np.sqrt(n)))
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 1.2, nrows * 1.2))
+    axs = np.atleast_2d(axs)
+
+    for idx in range(nrows * ncols):
+        row, col = divmod(idx, ncols)
+        ax = axs[row, col]
+        if idx < n:
+            ax.plot(eigenvector_profiles[idx], linewidth=0.8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(idx < n)
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.05, left=0.02, right=0.98, top=0.98, bottom=0.02)
+
+    if filename is not None:
+        fig.savefig(filename)
+        plt.close()
+    else:
+        plt.show()
+
 def plot_current_solution(
     plot_cs,
     cs_model,

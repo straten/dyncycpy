@@ -62,7 +62,7 @@ def compute_residuals(
 
 def fit_jitter_basis(
     residuals: np.ndarray, noise_variance_per_harmonic: np.ndarray, max_rank: int | None = None
-) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, float]:
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     """
     Fit a reduced-rank basis for the genuine jitter left in `residuals`
     (nsubint, nharm), after whitening by the known per-harmonic noise
@@ -83,7 +83,7 @@ def fit_jitter_basis(
     CyclicSolver.optimize_profile/solve_profile_and_gain -- computing that
     is the caller's job (typically CyclicSolver), not this pure module's.
 
-    Returns (rank, weights, basis, eigenvalues, threshold):
+    Returns (rank, weights, basis, eigenvalues, threshold, full_basis):
     - rank: number of components retained (eigenvalue > threshold).
     - weights: (nsubint, rank) real... complex weights w_k(T).
     - basis: (rank, nharm) complex basis vectors P_k(alpha), in the
@@ -93,6 +93,12 @@ def fit_jitter_basis(
       eigenvalue spectrum of the whitened covariance, largest first -- for
       tracking convergence across outer-loop passes (Stage 4).
     - threshold: the Marchenko-Pastur eigenvalue threshold used.
+    - full_basis: (min(nsubint,nharm), nharm) -- every basis vector from
+      the SVD, not just the rank-retained subset (i.e. `basis` is
+      `full_basis[:rank]`), same physical (non-whitened) units. For
+      inspecting the whole eigenspectrum/eigenvectors, e.g. to see what
+      the jitter model is doing near a rank boundary or before enough
+      significant structure has accumulated to be retained.
     """
     nsubint, nharm = residuals.shape
     sigma = np.sqrt(noise_variance_per_harmonic)
@@ -114,8 +120,9 @@ def fit_jitter_basis(
 
     weights = U[:, :rank] * s[np.newaxis, :rank]  # whitened-domain weights
     basis = Vh[:rank, :] * sigma[np.newaxis, :]  # un-whitened back to physical profile units
+    full_basis = Vh * sigma[np.newaxis, :]  # every SVD component, same un-whitened units
 
-    return rank, weights, basis, eigenvalues, threshold
+    return rank, weights, basis, eigenvalues, threshold, full_basis
 
 
 def reconstruct_jittered_profile(
