@@ -104,8 +104,17 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     var_noise = delay_noise_power_wavefield(x_power, baseline_threshold)
     shrinkage = np.sqrt(var_noise) * threshold
 
-    # add a small offset to absx to avoid division by zero in next step
-    absx = np.abs(x) + shrinkage * 1e-6
+    # add a small offset to absx to avoid division by zero in next step --
+    # this offset must not itself vanish when shrinkage==0 (e.g. a delay
+    # column whose robust per-delay noise estimate is legitimately zero,
+    # such as an already-all-zero acausal column under a permanent
+    # enforce_causality): shrinkage*1e-6 degenerates to exactly 0 in that
+    # case, and any exactly-zero x in that column then produces a 0/0 NaN
+    # (confirmed on real P2067_full data -- see the delay/omega
+    # noise-growth investigation). An absolute floor, independent of
+    # shrinkage/x, avoids that while staying negligible next to any real
+    # signal or noise amplitude in this problem (~1e-2 and up).
+    absx = np.abs(x) + shrinkage * 1e-6 + 1e-30
     out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)

@@ -1195,7 +1195,18 @@ class CyclicSolver(_IOMixin):
                 ),
             )
 
-        if rms_noise > 0 and self.delay_noise_shrinkage_threshold is not None:
+        # Not gated on rms_noise > 0 like the two blocks above: rms_noise
+        # comes from rms_wavefield's fixed reference region (nchan*5//8 :
+        # nchan*7//8), which sits entirely inside the acausal (negative-
+        # delay) half. When self.enforce_causality holds permanently
+        # (rather than expiring after a few warmup iterations), that whole
+        # half -- including this reference region -- is exactly zero every
+        # iteration, so rms_noise is always 0 and this block would
+        # silently never fire if gated the same way. apply_delay_shrinkage_
+        # threshold doesn't need rms_noise anyway: it computes its own
+        # per-delay noise estimate (delay_noise_power_wavefield, from the
+        # Doppler-edge strip) independently of the reference region above.
+        if self.delay_noise_shrinkage_threshold is not None:
             # print(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
             np.copyto(
                 h_doppler_delay,

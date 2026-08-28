@@ -108,6 +108,9 @@ args, files = p.parse_known_args()
 
 if args.debug:
     logging.getLogger("pycyc").setLevel(logging.DEBUG)
+else:
+    logging.getLogger("pycyc").setLevel(logging.INFO)
+
 init = args.init
 init_profile = args.init_profile
 
@@ -149,8 +152,15 @@ CS.conserve_wavefield_energy = True
 # set cyclic spectra to zero where shifted content is out of band
 CS.pad_cyclic_spectra = False
 
-# set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 8
+# set h(tau,omega) to zero for tau < 0, for the whole run (permanently
+# enforced, not just an early-iteration warmup) -- letting this expire
+# after a fixed number of iterations, as this used to do, was found to
+# let white noise accumulate unconstrained in the (physically required to
+# be exactly zero) negative-delay region: growing to ~11% of total
+# wavefield power / ~8x the reference noise floor by iteration 150 of a
+# 150-iteration fista run with no L1 penalty (_lambda=None below) to
+# otherwise suppress it. See the delay/omega noise-growth investigation.
+CS.enforce_causality = True
 
 warmup_passes = 10
 CS.model_jitter = True
@@ -171,9 +181,12 @@ CS.minimize_spectral_entropy = True
 # align the phase and delay of time-adjacent frequency responses computed from the wavefield
 # CS.align_frequency_responses = True
 
-# use a delay-dependent threshold to perform shrinkage
-# CS.delay_noise_shrinkage_threshold = 1.0
-# CS.delay_noise_selection_threshold = 2.0
+# use a delay-dependent threshold to perform shrinkage -- targets the
+# positive-delay white-noise band (elevated, delay-varying noise floor
+# spread flat across all Doppler shifts) that a single global threshold
+# can't adapt to. See the delay/omega noise-growth investigation.
+CS.delay_noise_shrinkage_threshold = 1.0
+CS.delay_noise_selection_threshold = 2.0
 
 # CS.noise_shrinkage_threshold = 1.0
 
@@ -332,11 +345,9 @@ if args.solver == "fista":
 
         assert math.isfinite(CS.get_reduced_chisq())
 
-        if CS.enforce_causality:
-            print(f"enforcing causality for {CS.enforce_causality} more iterations")
-            CS.enforce_causality -= 1
-            if CS.enforce_causality == 0:
-                CS.zap_gradient_harmonics = 0
+        # CS.enforce_causality is now permanently True (see comment at its
+        # assignment above) rather than an expiring countdown, so there is
+        # nothing left to do here each iteration.
 
         if i == 0 or L > L_max:
             L_max = L
