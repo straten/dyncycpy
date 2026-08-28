@@ -443,10 +443,13 @@ if args.solver == "fista":
             if CS.model_jitter and i >= warmup_passes:
                 # eigenvectors: every basis vector from the jitter PCA fit
                 # (not just the jitter_rank retained ones); rank: how many
-                # of those are actually retained (Marchenko-Pastur
-                # threshold); weights: the per-subint principal-component
-                # coefficients for the retained rank-N subspace, one row
-                # per subint. See pycyc.jitter.fit_jitter_basis.
+                # of those are actually retained, against a Marchenko-
+                # Pastur threshold whose noise_variance_per_harmonic input
+                # has been empirically recalibrated against a "non-pulsar"
+                # high-harmonic noise-only band (noise_h_start/noise_kappa
+                # -- see pycyc.jitter.fit_jitter_basis_calibrated); weights:
+                # the per-subint principal-component coefficients for the
+                # retained rank-N subspace, one row per subint.
                 with open(base + "_jitter.pkl", "wb") as fh:
                     pickle.dump(
                         {
@@ -455,6 +458,8 @@ if args.solver == "fista":
                             "weights": CS.jitter_weights,
                             "eigenvalues": CS.jitter_eigenvalues,
                             "threshold": CS.jitter_threshold,
+                            "noise_h_start": CS.jitter_noise_h_start,
+                            "noise_kappa": CS.jitter_noise_kappa,
                         },
                         fh,
                     )

@@ -19,6 +19,9 @@ from __future__ import annotations
 __all__ = [
     "compute_residuals",
     "fit_jitter_basis",
+    "estimate_significant_harmonic_cutoff",
+    "calibrate_noise_variance",
+    "fit_jitter_basis_calibrated",
     "reconstruct_jittered_profile",
     "subspace_principal_angle",
 ]
@@ -123,6 +126,157 @@ def fit_jitter_basis(
     full_basis = Vh * sigma[np.newaxis, :]  # every SVD component, same un-whitened units
 
     return rank, weights, basis, eigenvalues, threshold, full_basis
+
+
+def estimate_significant_harmonic_cutoff(
+    ph_ref: np.ndarray,
+    noise_variance_per_harmonic: np.ndarray,
+    nsubint: int,
+    false_alarm_rate: float = 0.01,
+    guard_band: int = 5,
+) -> int:
+    """
+    Find the first harmonic beyond which the pooled reference profile
+    ph_ref carries no statistically significant power -- i.e. where the
+    real pulsar signal (which, like any physically plausible profile
+    shape, is concentrated at low harmonics) has decayed into the noise
+    floor. Everything from the returned index onward is "non-pulsar"
+    harmonic content: real measurement noise, uncontaminated by genuine
+    signal, usable as an independent calibration band (see
+    calibrate_noise_variance).
+
+    ph_ref: (nharm,) pooled/reference profile in the harmonic domain
+    (e.g. phase2harm(pp_intrinsic), DC-zeroed if exclude_DC).
+    noise_variance_per_harmonic: (nharm,) Var(S_t(alpha)) for a *single*
+    subint's profile estimate (the same quantity fit_jitter_basis takes) --
+    ph_ref pools nsubint of these, so its own noise variance is this
+    divided by nsubint (exact for equal per-subint weights, the same
+    simplifying approximation used elsewhere in this module).
+    nsubint: number of subints pooled into ph_ref.
+    false_alarm_rate: family-wise false-alarm probability for declaring a
+    harmonic significant, Bonferroni-corrected across all nharm harmonics
+    tested (i.e. the per-harmonic test uses false_alarm_rate/nharm). For
+    a circularly-symmetric complex Gaussian, |z|^2/Var(z) is
+    Exponential(mean=1) under the null of no signal, so the per-harmonic
+    threshold is -log(per_harmonic_false_alarm_rate).
+    guard_band: extra harmonics added past the last significant one,
+    to stay clear of any smoothing/leakage into nominally-noise harmonics.
+
+    Returns h_noise_start (int, clipped to nharm): index of the first
+    harmonic in the noise-only band. If every harmonic looks significant
+    (h_noise_start would exceed nharm), returns nharm -- i.e. an empty
+    band, signalling that no calibration is possible from this profile.
+    """
+    nharm = ph_ref.shape[0]
+    pooled_noise_variance = noise_variance_per_harmonic / nsubint
+    snr = np.abs(ph_ref) ** 2 / np.maximum(pooled_noise_variance, 1e-300)
+
+    per_harmonic_false_alarm_rate = false_alarm_rate / nharm
+    threshold = -np.log(per_harmonic_false_alarm_rate)
+
+    significant = np.flatnonzero(snr > threshold)
+    h_signal_max = int(significant.max()) if significant.size > 0 else -1
+
+    return min(h_signal_max + 1 + guard_band, nharm)
+
+
+def calibrate_noise_variance(
+    residuals: np.ndarray,
+    noise_variance_per_harmonic: np.ndarray,
+    h_noise_start: int,
+) -> tuple[float, np.ndarray]:
+    """
+    Empirically calibrate noise_variance_per_harmonic against the
+    observed residual power in a known-signal-free harmonic band (see
+    estimate_significant_harmonic_cutoff), correcting for any systematic
+    mis-specification of the assumed noise model -- e.g.
+    CyclicSolver._refresh_jitter_model's sigma_D^2 comes from a single
+    representative subint's cyclic_variance, not an average across all
+    subints, so it can be biased if that one subint happens to be
+    quieter or noisier than typical.
+
+    residuals: (nsubint, nharm), from compute_residuals.
+    noise_variance_per_harmonic: (nharm,), the assumed per-subint noise
+    model (same convention as fit_jitter_basis).
+    h_noise_start: index of the first harmonic in the noise-only band
+    (estimate_significant_harmonic_cutoff's return value).
+
+    Returns (kappa, noise_variance_per_harmonic_corrected):
+    - kappa: median ratio of observed to assumed variance over the
+      noise-only band -- 1.0 if the assumed model was already correct,
+      >1 if it underestimated the true noise (the case that inflates
+      fit_jitter_basis's retained rank), <1 if it overestimated it.
+      Median rather than mean, to resist any one harmonic's outlier
+      fluctuation dominating the estimate.
+    - noise_variance_per_harmonic_corrected: kappa * noise_variance_per_
+      harmonic (uniformly rescaled -- the noise-only band only
+      constrains the overall scale, not per-harmonic shape). Equal to
+      the uncorrected input if h_noise_start leaves no noise-only band
+      (kappa=1.0 in that case; nothing to calibrate against).
+    """
+    nharm = residuals.shape[1]
+    if h_noise_start >= nharm:
+        return 1.0, noise_variance_per_harmonic
+
+    observed_variance = np.mean(np.abs(residuals[:, h_noise_start:]) ** 2, axis=0)
+    ratio = observed_variance / np.maximum(noise_variance_per_harmonic[h_noise_start:], 1e-300)
+    kappa = float(np.median(ratio))
+
+    return kappa, kappa * noise_variance_per_harmonic
+
+
+def fit_jitter_basis_calibrated(
+    ph_ref: np.ndarray,
+    residuals: np.ndarray,
+    noise_variance_per_harmonic: np.ndarray,
+    nsubint: int,
+    max_rank: int | None = None,
+    false_alarm_rate: float = 0.01,
+    guard_band: int = 5,
+) -> tuple[int, np.ndarray, np.ndarray, np.ndarray, float, np.ndarray, int, float]:
+    """
+    fit_jitter_basis, but with noise_variance_per_harmonic empirically
+    recalibrated first against a "non-pulsar" harmonic band -- high
+    harmonics where the real pulsar signal (concentrated at low
+    harmonics, like any physically plausible profile shape) has decayed
+    into the noise floor, identified from the pooled reference profile
+    ph_ref (see estimate_significant_harmonic_cutoff). This directly
+    measures how big residual-covariance eigenvalues get from noise
+    alone in *this* dataset, rather than trusting the Marchenko-Pastur
+    formula's idealized-noise assumption outright -- correcting for
+    known simplifications elsewhere in the noise model (see
+    calibrate_noise_variance).
+
+    Args as fit_jitter_basis, plus ph_ref (pooled reference profile,
+    harmonic domain), nsubint (subints pooled into ph_ref),
+    false_alarm_rate/guard_band (passed to
+    estimate_significant_harmonic_cutoff).
+
+    Returns (rank, weights, basis, eigenvalues, threshold, full_basis,
+    h_noise_start, kappa) -- the first six as fit_jitter_basis (rank/
+    eigenvalues/threshold are all relative to the *corrected* noise
+    model); h_noise_start and kappa are the calibration diagnostics from
+    estimate_significant_harmonic_cutoff/calibrate_noise_variance.
+    """
+    h_noise_start = estimate_significant_harmonic_cutoff(
+        ph_ref, noise_variance_per_harmonic, nsubint, false_alarm_rate, guard_band
+    )
+    kappa, corrected_noise_variance = calibrate_noise_variance(
+        residuals, noise_variance_per_harmonic, h_noise_start
+    )
+
+    rank, weights, basis, eigenvalues, threshold, full_basis = fit_jitter_basis(
+        residuals, corrected_noise_variance, max_rank=max_rank
+    )
+
+    logger.info(
+        "fit_jitter_basis_calibrated: h_noise_start=%d kappa=%.4g rank=%d",
+        h_noise_start,
+        kappa,
+        rank,
+    )
+
+    return rank, weights, basis, eigenvalues, threshold, full_basis, h_noise_start, kappa
 
 
 def reconstruct_jittered_profile(

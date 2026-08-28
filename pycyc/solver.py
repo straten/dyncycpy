@@ -35,7 +35,7 @@ from .io import _IOMixin
 from .io_utils import *
 from .jitter import (
     compute_residuals,
-    fit_jitter_basis,
+    fit_jitter_basis_calibrated,
     reconstruct_jittered_profile,
     subspace_principal_angle,
 )
@@ -221,6 +221,17 @@ class CyclicSolver(_IOMixin):
         self.jitter_full_basis = None
         self.jitter_eigenvalues = None
         self.jitter_threshold = None
+        # noise-calibration diagnostics from pycyc.jitter.
+        # fit_jitter_basis_calibrated: the first harmonic believed free of
+        # real pulsar signal (estimated from the pooled reference
+        # profile), and the empirical correction factor applied to
+        # noise_variance_per_harmonic before the Marchenko-Pastur
+        # threshold -- >1 means the assumed noise model (e.g.
+        # self.cyclic_variance's single-representative-subint sigma_D^2)
+        # was underestimating the true noise, which would otherwise
+        # inflate jitter_rank.
+        self.jitter_noise_h_start = None
+        self.jitter_noise_kappa = None
 
         # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
         # compute_gradient_batched's device/chunking knobs. use_gpu is off
@@ -967,18 +978,27 @@ class CyclicSolver(_IOMixin):
         ph_denom_avg = np.real(np.mean(ph_denom_per_subint, axis=0))
         noise_variance_per_harmonic = sigma_D2 / np.maximum(ph_denom_avg, 1e-300)
 
-        rank, weights, basis, eigenvalues, threshold, full_basis = fit_jitter_basis(
-            residuals, noise_variance_per_harmonic, max_rank=self.jitter_max_rank
+        rank, weights, basis, eigenvalues, threshold, full_basis, h_noise_start, noise_kappa = (
+            fit_jitter_basis_calibrated(
+                ph_ref,
+                residuals,
+                noise_variance_per_harmonic,
+                residuals.shape[0],
+                max_rank=self.jitter_max_rank,
+            )
         )
 
         angle = (
             subspace_principal_angle(self._jitter_basis, basis) if self._jitter_basis is not None else None
         )
         logger.info(
-            "outer_loop jitter refresh: rank=%d threshold=%.4g max_eigenvalue=%.4g principal_angle=%s",
+            "outer_loop jitter refresh: rank=%d threshold=%.4g max_eigenvalue=%.4g "
+            "h_noise_start=%d kappa=%.4g principal_angle=%s",
             rank,
             threshold,
             eigenvalues.max() if eigenvalues.size else float("nan"),
+            h_noise_start,
+            noise_kappa,
             angle,
         )
 
@@ -989,6 +1009,8 @@ class CyclicSolver(_IOMixin):
         self.jitter_full_basis = full_basis
         self.jitter_eigenvalues = eigenvalues
         self.jitter_threshold = threshold
+        self.jitter_noise_h_start = h_noise_start
+        self.jitter_noise_kappa = noise_kappa
         self.jitter_profiles = reconstruct_jittered_profile(ph_ref, epsilon_t, gain_t, weights, basis)
 
     def outer_loop(
