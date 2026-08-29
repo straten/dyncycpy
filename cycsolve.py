@@ -348,9 +348,6 @@ if args.solver == "fista":
             if CS.model_jitter and i >= warmup_passes:
                 CS._refresh_jitter_model()
 
-        y_n_before_step = y_n
-        x_n_before_step = x_n
-
         x_n, y_n, L, t_n, demerits = fista.take_fista_step(
             iter=i,
             func=CS,
@@ -392,37 +389,10 @@ if args.solver == "fista":
 
         really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
 
-        # Adaptive restart (O'Donoghue & Candes 2012, "gradient scheme"):
-        # restart when the search direction this step actually took
-        # (y_n_before_step - x_n, the generalized gradient mapping) and the
-        # net progress it produced (x_n - x_n_before_step) point in
-        # conflicting directions -- Re(<a,b>) > 0 for the Hermitian inner
-        # product, the same real-part convention used throughout this
-        # codebase's complex-valued gradients (e.g. cyclic_merit_and_grad).
-        # That misalignment is the geometric signature of the momentum term
-        # having pushed the extrapolated point past where true descent
-        # wants to go, independent of whether merit itself still happened
-        # to improve this particular step.
-        #
-        # Tried instead of the simpler "function scheme" (restart whenever
-        # merit merely increases) from the previous commit: that version
-        # fired on nearly every small overshoot and, on real P2067_full
-        # data, measurably slowed overall convergence (stuck oscillating
-        # ~76270-76305 instead of reaching ~76222 by the same iteration) by
-        # discarding momentum's genuine benefit too eagerly. O'Donoghue &
-        # Candes report the gradient-scheme criterion restarts less often
-        # in practice, so it should suppress the pathological ripple
-        # without also suppressing legitimate acceleration through small,
-        # harmless overshoots.
-        gradient_misaligned = np.real(np.vdot(y_n_before_step - x_n, x_n - x_n_before_step)) > 0
-        if gradient_misaligned:
-            print("**** momentum misaligned - restart")
-            t_n = 1
-
         # Statistically-scaled early stopping: see merit_n_sigma/merit_patience's
-        # definition above. A momentum-misaligned step is not evidence either
+        # definition above. A really_bad step is a reset, not evidence either
         # way about convergence, so it doesn't count toward or break the streak.
-        if not gradient_misaligned:
+        if not really_bad:
             dof = CS.get_dof()
             merit_rel_change = abs(reduced_chisq - prev_merit) / abs(prev_merit) if prev_merit != 0 else math.inf
             merit_tol = merit_n_sigma * math.sqrt(2.0 / dof) if dof > 0 else 0.0
