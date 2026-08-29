@@ -97,7 +97,7 @@ class _IOMixin:
         Load periodic spectrum from psrchive compatible file (.ar or .fits)
         """
 
-        logger.info(f"loading {filename}")
+        logger.debug(f"loading {filename}")
         self.filenames.append(filename)
         # self.filename (singular) is read all over CyclicSolver -- plot
         # titles/directory names, saveResults' default fbase, saveState's
@@ -188,8 +188,7 @@ class _IOMixin:
                 )
                 self.cs_norm = np.zeros((self.nsubint, self.npol))
                 for isub in range(self.nsubint):
-                    if self.iprint:
-                        logger.info(f"load calculating cyclic spectrum for isub={isub}/{self.nsubint}")
+                    logger.debug(f"load calculating cyclic spectrum for isub={isub}/{self.nsubint}")
                     for ipol in range(self.npol):
                         self.cyclic_spectra[isub, ipol], norm = self.get_cs(data[isub, ipol])
                         self.cs_norm[isub, ipol] = norm
@@ -207,7 +206,7 @@ class _IOMixin:
             gap = next_offset - last_offset
 
             if gap < 0:
-                logger.info(f"last_offset={last_offset} next_offset={next_offset} gap={gap}")
+                logger.warn(f"last_offset={last_offset} next_offset={next_offset} gap={gap}")
                 raise ValueError("new file starts before previous one ended (sort files by time)")
 
             missing_subints = 0
@@ -215,8 +214,8 @@ class _IOMixin:
                 missing_subints = int(np.round(gap / self.mean_time_offset)) - 1
 
             if missing_subints > 0:
-                logger.info(f"missing {missing_subints} sub-integrations across {gap} seconds")
-                logger.info(f"mean sub-integration duration is {self.mean_time_offset} seconds")
+                logger.warn(f"missing {missing_subints} sub-integrations across {gap} seconds")
+                logger.warn(f"mean sub-integration duration is {self.mean_time_offset} seconds")
 
             nsubint, npol, nchan, nbin = data.shape
 
@@ -250,15 +249,14 @@ class _IOMixin:
                 self.time_offsets.resize(new_nsubint)
                 for isub in range(nsubint):
                     jsub = isub + self.nsubint + missing_subints
-                    if self.iprint:
-                        logger.info(f"load calculating cyclic spectrum for isub={jsub}/{new_nsubint}")
+                    logger.debug(f"load calculating cyclic spectrum for isub={jsub}/{new_nsubint}")
                     for ipol in range(self.npol):
                         self.cyclic_spectra[jsub, ipol], norm = self.get_cs(data[isub, ipol])
                         self.cs_norm[jsub, ipol] = norm
                 self.data = None
                 data = None
                 if missing_subints > 0:
-                    logger.info("setting missing cyclic spectra to average of bounding spectra")
+                    logger.warn("setting missing cyclic spectra to average of bounding spectra")
                     for ipol in range(self.npol):
                         previous_idx = self.nsubint - 1
                         previous_cs = self.cyclic_spectra[previous_idx, ipol]
@@ -278,8 +276,8 @@ class _IOMixin:
 
             else:
                 if missing_subints > 0:
-                    logger.info("WARNING: patching up missing sub-integrations not implemented")
-                    logger.info("WARNING: when not saving cyclic spectra")
+                    logger.warn("WARNING: patching up missing sub-integrations not implemented")
+                    logger.warn("WARNING: when not saving cyclic spectra")
                 self.data = np.append(self.data, data, axis=0)
                 new_nsubint -= missing_subints
 
@@ -317,12 +315,12 @@ class _IOMixin:
 
         # unload the intrinsic profile
 
-        logger.info("resizing archive sub-integrations")
+        logger.debug("resizing archive sub-integrations")
 
         nsub = nchan = 1
         arch.resize(nsub, self.npol, nchan, self.nbin)
 
-        logger.info("setting profile data")
+        logger.debug("setting profile data")
         for subint in arch:
             for ipol in range(self.npol):
                 for ichan in range(nchan):

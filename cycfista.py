@@ -83,7 +83,11 @@ CS.conserve_wavefield_energy = True
 CS.pad_cyclic_spectra = False
 
 # set h(tau,omega) to zero for tau < 0 for the first N iterations
-CS.enforce_causality = 15
+CS.enforce_causality = 8
+
+warmup_passes = 10
+CS.model_jitter = True
+CS.minimize_spectral_entropy = True
 
 # subtract degenerate degrees of freedom from gradient
 # CS.subtract_degenerate_projections = True
@@ -205,9 +209,15 @@ min_step_factor = 0.5
 for i in range(max_iterations + 1):
     CS.nopt += 1
 
-    if update_profile and (i < update_profile_every_iteration_until or ( (update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0 )):
+    if update_profile and (
+        i < update_profile_every_iteration_until
+        or ((update_profile_after == 0 or i > update_profile_after) and i % update_profile_period == 0)
+    ):
         print("cycfista: update profile")
         CS.updateProfile()
+
+        if CS.model_jitter and i >= warmup_passes:
+            CS._refresh_jitter_model()
 
     x_n, y_n, L, t_n, demerits = fista.take_fista_step(
         iter=i,

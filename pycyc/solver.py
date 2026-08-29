@@ -518,7 +518,7 @@ class CyclicSolver(_IOMixin):
 
         # search for the harmonic with the highest Doppler/delay power S/N
         for harm in range(maxharm):
-            logger.info(f"harmonic={harm}")
+            logger.debug(f"harmonic={harm}")
             # extract the harmonic and sum over polarizations
             time_freq = np.sum(self.cyclic_spectra[:, :, :, harm], axis=1)
             trial_wavefield = time2freq(freq2time(time_freq, axis=1), axis=0)
@@ -537,20 +537,13 @@ class CyclicSolver(_IOMixin):
             if noise_power > 0:
                 sn[harm] = np.sqrt(total_power / noise_power)
             else:
-                # harmonic 0 is always exactly zero when self.exclude_DC is
-                # set (get_cs zeroes cs[:, 0] at load time -- the default),
-                # and any other harmonic could be degenerate too (e.g.
-                # zapped via self.maxharm). Without this guard,
-                # noise_power==0 gives sn[harm]=nan, and np.argmax silently
-                # returns a nan's index rather than skipping it -- reliably
-                # "selecting" an empty harmonic as best. sn=0 guarantees
-                # this harmonic loses to any harmonic with real content.
-                logger.info(f"harmonic={harm}: noise-slice power is exactly zero, excluding from selection")
+                # harmonic 0 is always exactly zero when self.exclude_DC is set
+                logger.debug(f"harmonic={harm}: noise-slice power is exactly zero, excluding from selection")
                 sn[harm] = 0.0
-            logger.info(f"harmonic={harm} S/N={sn[harm]}")
+            logger.debug(f"harmonic={harm} S/N={sn[harm]}")
 
         best_harmonic = np.argmax(sn)
-        logger.info(f"best harmonic={best_harmonic}")
+        logger.debug(f"best harmonic={best_harmonic}")
 
         # extract the harmonic and sum over polarizations
         time_freq = np.sum(self.cyclic_spectra[:, :, :, best_harmonic], axis=1)
@@ -571,7 +564,7 @@ class CyclicSolver(_IOMixin):
         # representative, since the neighbours' own noise has already been
         # suppressed by the same shrinkage.
         if self.delay_noise_shrinkage_threshold is not None:
-            logger.info(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
+            logger.debug(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
             np.copyto(
                 self.h_doppler_delay,
                 apply_delay_shrinkage_threshold(
@@ -598,7 +591,7 @@ class CyclicSolver(_IOMixin):
                     n_nonzero += 1
         mean_amp = pow(10, 0.5 * log_sum / n_nonzero) if n_nonzero > 0 else 0.0
         zero_amp = np.abs(self.h_doppler_delay[0, 0])
-        logger.info(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
+        logger.debug(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
 
         if zero_amp > 0:
             self.h_doppler_delay[0, 0] *= mean_amp / zero_amp
@@ -612,10 +605,10 @@ class CyclicSolver(_IOMixin):
         total_power = np.sum(power)
         if total_power > 0:
             scale_factor = np.sqrt(initial_total_power / total_power)
-            logger.info(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
+            logger.debug(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
             self.h_doppler_delay *= scale_factor
         else:
-            logger.info(
+            logger.debug(
                 f"total power original={initial_total_power} new={total_power}: "
                 "best-harmonic wavefield is entirely zero, leaving unscaled"
             )
@@ -645,7 +638,7 @@ class CyclicSolver(_IOMixin):
 
         perturbed_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
         scale_factor = np.sqrt(initial_total_power / perturbed_power)
-        logger.info(
+        logger.debug(
             f"initial_guess_noise_perturbation_rms={self.initial_guess_noise_perturbation_rms}: "
             f"total power original={initial_total_power} after-noise={perturbed_power} scale={scale_factor}"
         )
@@ -666,7 +659,7 @@ class CyclicSolver(_IOMixin):
         for isub in range(self.nsubint):
             kwargs["isub"] = isub
             self.loop(**kwargs)
-            logger.info("Saving after nopt: %s", self.nopt)
+            logger.debug("Saving after nopt: %s", self.nopt)
             self.saveState(savefile)
 
         self.nloop += 1
@@ -718,8 +711,7 @@ class CyclicSolver(_IOMixin):
                 ph[self.maxinitharm :] = 0.0
             pp = self.harm2phase(ph)
 
-            if self.iprint:
-                logger.info(f"update profile isub={isub}/{self.nsubint}")
+            logger.debug(f"update profile isub={isub}/{self.nsubint}")
 
             self.intrinsic_profiles[isub, ipol, :] = pp
             return 0
@@ -908,7 +900,6 @@ class CyclicSolver(_IOMixin):
         elif self.nthread == 1:
             for isub in range(self.nspec):
                 self.updateProfileSubint(isub)
-
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.nthread) as executor:
                 future_subint = {
@@ -920,7 +911,7 @@ class CyclicSolver(_IOMixin):
                     try:
                         future.result()
                     except Exception as exc:
-                        logger.info(f"updateProfile isub={isub} exception: {exc}")
+                        logger.warn(f"updateProfile isub={isub} exception: {exc}")
 
         self.pp_intrinsic = np.average(self.intrinsic_profiles, axis=(0, 1))
 

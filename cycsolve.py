@@ -127,7 +127,7 @@ alpha_init = args.alpha
 CS = pycyc.CyclicSolver(zap_edges=args.zap)
 
 # use the minimum of the last N estimates of alpha = 1 / Lipschitz
-alpha_history = 10
+alpha_history = 2
 
 # solve sub-integrations in parallel using nthread threads
 CS.nthread = 8
@@ -167,7 +167,7 @@ CS.pad_cyclic_spectra = False
 # otherwise suppress it. See the delay/omega noise-growth investigation.
 CS.enforce_causality = True
 
-warmup_passes = 10
+warmup_passes = 1
 CS.model_jitter = True
 CS.minimize_spectral_entropy = True
 
