@@ -169,16 +169,9 @@ CS.enforce_causality = True
 
 warmup_passes = 1
 CS.model_jitter = True
-CS.minimize_spectral_entropy = True
 
-# subtract degenerate degrees of freedom from gradient
-# CS.subtract_degenerate_projections = True
-
-# still under development
-# CS.zap_gradient_harmonics = 0
-
-# reduce phase noise by minimizing the spectral entropy
-# CS.minimize_spectral_entropy = True
+# seems to have little impact and too great a computational cost
+CS.minimize_spectral_entropy = False
 
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
 # CS.low_pass_filter_Doppler = 0.5
