@@ -348,6 +348,9 @@ if args.solver == "fista":
             if CS.model_jitter and i >= warmup_passes:
                 CS._refresh_jitter_model()
 
+        y_n_before_step = y_n
+        x_n_before_step = x_n
+
         x_n, y_n, L, t_n, demerits = fista.take_fista_step(
             iter=i,
             func=CS,
@@ -384,33 +387,42 @@ if args.solver == "fista":
         else:
             print(f"\n** greater than best={best_merit}")
 
-        bad_step = reduced_chisq > prev_merit
-        if bad_step:
+        if reduced_chisq > prev_merit:
             print("**** bad step")
 
         really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
 
-        # Adaptive restart (O'Donoghue & Candes 2012, "function scheme"): any
-        # non-improving step means the momentum-extrapolated y_n overshot
-        # past a better point, so the steadily-growing momentum coefficient
-        # t_n is no longer trustworthy. really_bad already reset it (below)
-        # for a >2x blowup, but a much smaller overshoot left it growing
-        # unchecked, producing exactly the small-amplitude, slowly-damping
-        # oscillation this loop saw around iterations 50-56 of one real run
-        # (t_n climbing ~26.8->29.8 while demerit overshot and only partially
-        # recovered) -- which the stopping criterion below could mistake for
-        # genuine convergence. Resetting t_n=1 here makes take_fista_step's
-        # next momentum blend factor (t_n-1)/t_np1 exactly 0, i.e. the next
-        # y_{n+1} = x_{n+1} with no extrapolation, the same effect really_bad's
-        # reset has, without also discarding this step's otherwise-legitimate
-        # x_n/y_n.
-        if bad_step:
+        # Adaptive restart (O'Donoghue & Candes 2012, "gradient scheme"):
+        # restart when the search direction this step actually took
+        # (y_n_before_step - x_n, the generalized gradient mapping) and the
+        # net progress it produced (x_n - x_n_before_step) point in
+        # conflicting directions -- Re(<a,b>) > 0 for the Hermitian inner
+        # product, the same real-part convention used throughout this
+        # codebase's complex-valued gradients (e.g. cyclic_merit_and_grad).
+        # That misalignment is the geometric signature of the momentum term
+        # having pushed the extrapolated point past where true descent
+        # wants to go, independent of whether merit itself still happened
+        # to improve this particular step.
+        #
+        # Tried instead of the simpler "function scheme" (restart whenever
+        # merit merely increases) from the previous commit: that version
+        # fired on nearly every small overshoot and, on real P2067_full
+        # data, measurably slowed overall convergence (stuck oscillating
+        # ~76270-76305 instead of reaching ~76222 by the same iteration) by
+        # discarding momentum's genuine benefit too eagerly. O'Donoghue &
+        # Candes report the gradient-scheme criterion restarts less often
+        # in practice, so it should suppress the pathological ripple
+        # without also suppressing legitimate acceleration through small,
+        # harmless overshoots.
+        gradient_misaligned = np.real(np.vdot(y_n_before_step - x_n, x_n - x_n_before_step)) > 0
+        if gradient_misaligned:
+            print("**** momentum misaligned - restart")
             t_n = 1
 
         # Statistically-scaled early stopping: see merit_n_sigma/merit_patience's
-        # definition above. A bad (overshooting) step is not evidence either
+        # definition above. A momentum-misaligned step is not evidence either
         # way about convergence, so it doesn't count toward or break the streak.
-        if not bad_step:
+        if not gradient_misaligned:
             dof = CS.get_dof()
             merit_rel_change = abs(reduced_chisq - prev_merit) / abs(prev_merit) if prev_merit != 0 else math.inf
             merit_tol = merit_n_sigma * math.sqrt(2.0 / dof) if dof > 0 else 0.0
@@ -418,6 +430,7 @@ if args.solver == "fista":
 
         if really_bad:
             print("**** really bad step - RESET")
+            t_n = 1
             CS.h_doppler_delay[:] = y_n[:] = x_n[:] = best_x[:]
         else:
             alphas = np.append(alphas, 1.0 / L)
