@@ -384,15 +384,33 @@ if args.solver == "fista":
         else:
             print(f"\n** greater than best={best_merit}")
 
-        if reduced_chisq > prev_merit:
+        bad_step = reduced_chisq > prev_merit
+        if bad_step:
             print("**** bad step")
 
         really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
 
+        # Adaptive restart (O'Donoghue & Candes 2012, "function scheme"): any
+        # non-improving step means the momentum-extrapolated y_n overshot
+        # past a better point, so the steadily-growing momentum coefficient
+        # t_n is no longer trustworthy. really_bad already reset it (below)
+        # for a >2x blowup, but a much smaller overshoot left it growing
+        # unchecked, producing exactly the small-amplitude, slowly-damping
+        # oscillation this loop saw around iterations 50-56 of one real run
+        # (t_n climbing ~26.8->29.8 while demerit overshot and only partially
+        # recovered) -- which the stopping criterion below could mistake for
+        # genuine convergence. Resetting t_n=1 here makes take_fista_step's
+        # next momentum blend factor (t_n-1)/t_np1 exactly 0, i.e. the next
+        # y_{n+1} = x_{n+1} with no extrapolation, the same effect really_bad's
+        # reset has, without also discarding this step's otherwise-legitimate
+        # x_n/y_n.
+        if bad_step:
+            t_n = 1
+
         # Statistically-scaled early stopping: see merit_n_sigma/merit_patience's
-        # definition above. A really_bad step is a reset, not evidence either
+        # definition above. A bad (overshooting) step is not evidence either
         # way about convergence, so it doesn't count toward or break the streak.
-        if not really_bad:
+        if not bad_step:
             dof = CS.get_dof()
             merit_rel_change = abs(reduced_chisq - prev_merit) / abs(prev_merit) if prev_merit != 0 else math.inf
             merit_tol = merit_n_sigma * math.sqrt(2.0 / dof) if dof > 0 else 0.0
@@ -400,7 +418,6 @@ if args.solver == "fista":
 
         if really_bad:
             print("**** really bad step - RESET")
-            t_n = 1
             CS.h_doppler_delay[:] = y_n[:] = x_n[:] = best_x[:]
         else:
             alphas = np.append(alphas, 1.0 / L)
