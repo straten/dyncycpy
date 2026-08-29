@@ -159,10 +159,59 @@ def solve_profile_and_gain_batched(
     return ph, gain, ph_numer, ph_denom
 
 
+def _coarse_epsilon_search(
+    s_ref_n: np.ndarray, s_t_n: np.ndarray, index: np.ndarray, search_range: float, search_points: int
+) -> float:
+    """
+    FFT-based replacement for fit_profile_shift's former brute-force grid
+    search, using the same shift-theorem cross-correlation trick as
+    pycyc.regularization.minimize_difference: minimizing
+    sum|s_t - s_ref*exp(i*epsilon*index)|**2 over epsilon (the objective
+    spectral_distance([0, epsilon], s_t_n, s_ref_n, index) computes) is,
+    after dropping the epsilon-independent ||s_t||**2 + ||s_ref||**2 terms,
+    equivalent to maximizing
+        g(epsilon) = Re(sum_k conj(s_t_n[k]) * s_ref_n[k] * exp(i*epsilon*index[k]))
+    which -- since index is np.arange(nharm) here -- is (N times) the real
+    part of a zero-padded inverse DFT of conj(s_t_n)*s_ref_n, sampled at N
+    equally spaced epsilon values via a single FFT instead of evaluating
+    the objective at `search_points` separate grid points.
+
+    Unlike minimize_difference (which fits phase and slope jointly, so it
+    peak-finds on the cross-correlation's *magnitude*, |ccf|**2, and reads
+    off the phase separately), fit_profile_shift holds phase fixed at 0
+    (real gain only -- see its docstring), so the correct quantity to
+    peak-find here is Re(ccf), not |ccf|**2: using the magnitude would
+    silently reintroduce the constant-phase degree of freedom this
+    function's docstring explicitly says must not be fit.
+
+    Only covers the full identifiable range (-pi, pi] (see the epsilon-
+    aliasing note in fit_profile_shift's docstring); falls back to the
+    original grid search for a narrower search_range, which no in-repo
+    caller currently requests.
+    """
+    nharm = index.shape[0]
+
+    if not np.isclose(search_range, np.pi):
+        grid = np.linspace(-search_range, search_range, search_points)
+        grid_values = [
+            spectral_distance([0.0, e], s_t_n, s_ref_n, index=index)[0] for e in grid
+        ]
+        return float(grid[int(np.argmin(grid_values))])
+
+    n_fft = max(search_points, 2 * nharm)
+    n_fft = 1 << (n_fft - 1).bit_length()  # next power of two, for a fast FFT
+
+    c = np.conj(s_t_n) * s_ref_n
+    ccf = np.fft.ifft(c, n=n_fft) * n_fft
+    m = int(np.argmax(np.real(ccf)))
+
+    return 2.0 * np.pi * m / n_fft if m < n_fft // 2 else 2.0 * np.pi * (m - n_fft) / n_fft
+
+
 def fit_profile_shift(
     s_ref: np.ndarray,
     s_t: np.ndarray,
-    fit_gain: bool = False,
+    fit_gain: bool = True,
     search_range: float = np.pi,
     search_points: int = 361,
 ) -> tuple[float, float, np.ndarray, np.ndarray]:
@@ -237,13 +286,18 @@ def fit_profile_shift(
         diff, grad = spectral_distance([0.0, x[0]], s_t_n, s_ref_n, index=index)
         return diff, np.array([grad[1]])
 
-    grid = np.linspace(-search_range, search_range, search_points)
-    grid_values = [_epsilon_objective(np.array([e]))[0] for e in grid]
-    x0 = [grid[int(np.argmin(grid_values))]]
+    x0 = [_coarse_epsilon_search(s_ref_n, s_t_n, index, search_range, search_points)]
 
     logger.debug("fit_profile_shift: initial phase shift = %f", x0[0])
 
-    result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True)
+    # Default gtol=1e-5 is loose enough that BFGS's exact stopping point (and
+    # hence epsilon's last few digits of precision) depends on the coarse
+    # search's starting point -- harmless on its own, but that residual
+    # error gets amplified by up to (nharm-1)*|gain*s_ref| in `aligned`
+    # below, which can matter for high-harmonic-count, high-amplitude data.
+    # A tighter gtol costs at most one extra iteration and removes the
+    # dependency on the starting point's exact value.
+    result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True, options={"gtol": 1e-8})
     if not result.success:
         logger.warning("fit_profile_shift: BFGS did not converge (%s)", result.message)
     epsilon = float(result.x[0])
