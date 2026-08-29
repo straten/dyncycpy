@@ -82,7 +82,11 @@ def test_fit_profile_shift_recovers_injected_shift_noiseless(true_epsilon, true_
     injected_gain = true_gain if fit_gain else 1.0
     s_t = injected_gain * s_ref * np.exp(1j * alpha * true_epsilon)
 
-    epsilon, gain, aligned, residual = pycyc.fit_profile_shift(s_ref, s_t, fit_gain=fit_gain)
+    # Noiseless synthetic data: unlike real per-subint fits (see
+    # fit_profile_shift's gtol docstring), the gradient at the true optimum
+    # really is ~0 here, so it's meaningful -- and necessary, given this
+    # test's atol -- to ask BFGS for tighter-than-default precision.
+    epsilon, gain, aligned, residual = pycyc.fit_profile_shift(s_ref, s_t, fit_gain=fit_gain, gtol=1e-10)
 
     np.testing.assert_allclose(epsilon, true_epsilon, atol=1e-6)
     if fit_gain:

@@ -214,6 +214,7 @@ def fit_profile_shift(
     fit_gain: bool = True,
     search_range: float = np.pi,
     search_points: int = 361,
+    gtol: float = 1e-5,
 ) -> tuple[float, float, np.ndarray, np.ndarray]:
     """
     Fit and remove the "degenerate phase" rigid pulse-shift freedom
@@ -258,6 +259,16 @@ def fit_profile_shift(
     nuisance amplitude parameter, not an exact joint MLE of (epsilon, gain)
     together.
 
+    gtol: BFGS's gradient-norm convergence tolerance (passed straight
+    through to scipy.optimize.minimize), default matching scipy's own
+    BFGS default. Real data's gradient at the true optimum is not exactly
+    zero (there is a genuine noise floor, not a noiseless exact model), so
+    tightening this below the default to chase extra digits of precision
+    makes BFGS unable to satisfy it on real per-subint fits and reports
+    spurious "precision loss" warnings on essentially every call -- only
+    raise this for callers working with noiseless/synthetic data (e.g.
+    exact-recovery tests) that can actually be fit to tighter precision.
+
     Returns (epsilon, gain, aligned, residual), where
     aligned = gain * s_ref * exp(i * alpha * epsilon) and
     residual = s_t - aligned -- this residual is R(alpha;T) from the outer
@@ -290,14 +301,7 @@ def fit_profile_shift(
 
     logger.debug("fit_profile_shift: initial phase shift = %f", x0[0])
 
-    # Default gtol=1e-5 is loose enough that BFGS's exact stopping point (and
-    # hence epsilon's last few digits of precision) depends on the coarse
-    # search's starting point -- harmless on its own, but that residual
-    # error gets amplified by up to (nharm-1)*|gain*s_ref| in `aligned`
-    # below, which can matter for high-harmonic-count, high-amplitude data.
-    # A tighter gtol costs at most one extra iteration and removes the
-    # dependency on the starting point's exact value.
-    result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True, options={"gtol": 1e-8})
+    result = minimize(_epsilon_objective, x0=x0, method="BFGS", jac=True, options={"gtol": gtol})
     if not result.success:
         logger.warning("fit_profile_shift: BFGS did not converge (%s)", result.message)
     epsilon = float(result.x[0])
