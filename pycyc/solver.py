@@ -1026,7 +1026,7 @@ class CyclicSolver(_IOMixin):
         n_passes,
         warmup_passes=None,
         loop_kwargs=None,
-        merit_tol=1e-4,
+        merit_n_sigma=1.0,
         jitter_angle_tol=1e-3,
         patience=2,
         use_last_soln=False,
@@ -1089,9 +1089,10 @@ class CyclicSolver(_IOMixin):
         self.nthread = 1 to use it.
 
         Stopping condition: a pass counts as "stable" when the total
-        merit's relative change from the previous pass is below merit_tol,
-        AND -- only once the jitter model is active (self.model_jitter and
-        past warmup) -- the jitter basis has also stopped moving, i.e.
+        merit's relative change from the previous pass is below a
+        statistically-motivated, self-calibrating tolerance, AND -- only
+        once the jitter model is active (self.model_jitter and past
+        warmup) -- the jitter basis has also stopped moving, i.e.
         self.jitter_principal_angle (set by _refresh_jitter_model, the
         principal angle in radians between this pass's and the previous
         pass's jitter subspace) is below jitter_angle_tol. Requiring both
@@ -1101,10 +1102,52 @@ class CyclicSolver(_IOMixin):
         are stable; n_passes is always a hard cap regardless. Set
         patience<=0 to disable early stopping entirely and always run
         exactly n_passes passes.
+
+        The merit tolerance is merit_n_sigma * sqrt(2 / dof): total_merit is
+        a sum-of-squared-residuals statistic, so (treating it as
+        approximately proportional to a chi-squared random variable with
+        `dof` degrees of freedom -- the proportionality constant, whatever
+        it is, cancels in the relative comparison below, so this
+        does not require total_merit to be on an absolute unit-chi-squared
+        scale) its natural relative fluctuation scale is
+        std(merit)/mean(merit) = sqrt(2/dof). merit_n_sigma expresses the
+        tolerance in units of that noise floor (1.0 = one sigma) instead of
+        an opaque fixed constant, so it self-calibrates across datasets of
+        very different size instead of needing per-dataset re-tuning --
+        the same philosophy as fit_jitter_basis's Marchenko-Pastur rank
+        threshold and calibrate_noise_variance (pycyc.jitter): comparing an
+        observed change against the magnitude noise alone would produce,
+        rather than an arbitrary cutoff. Unlike the FISTA path's get_dof
+        (self.nterm_merit - self.nfree_parameters, not populated by this
+        classical per-subint path -- it's set only inside updateWavefield),
+        dof here reuses loop()'s own per-subint L-BFGS-B tolerance formula
+        (dof_per_subint = nvalid - (2*self.nlag - 1) - self.nphase, from
+        self.cyclic_variance) from one representative subint, scaled by
+        self.nspec -- the same single-representative-subint simplification
+        _refresh_jitter_model already makes for its own noise estimate.
+        Computed once before the pass loop, not per pass: unlike the FISTA
+        wavefield's evolving L1 sparsity, this classical path's dof doesn't
+        change pass to pass. Note this is a practical proxy, not a formal
+        hypothesis test: pass-to-pass merit change during optimization reflects a
+        genuinely improving model fit on fixed data, not repeated-sampling
+        noise, so "smaller than the noise floor" means "not worth another
+        pass," not a rigorously-derived p-value.
         """
         if warmup_passes is None:
             warmup_passes = self.jitter_warmup_passes
         loop_kwargs = dict(loop_kwargs or {})
+
+        # Degrees of freedom for the merit-tolerance calibration below --
+        # see this method's own docstring for why this doesn't reuse
+        # self.get_dof() and isn't recomputed every pass.
+        if self.save_cyclic_spectra:
+            cs0 = self.cyclic_spectra[0, 0]
+        else:
+            cs0, _norm = self.get_cs(self.data[0, 0])
+        _var, nvalid = self.cyclic_variance(cs0)
+        dof_per_subint = nvalid - (2 * self.nlag - 1) - self.nphase
+        dof = self.nspec * dof_per_subint
+        merit_tol = merit_n_sigma * float(np.sqrt(2.0 / dof)) if dof > 0 else 0.0
 
         prev_merit = None
         stable_count = 0
@@ -1171,10 +1214,12 @@ class CyclicSolver(_IOMixin):
             prev_merit = total_merit
 
             logger.info(
-                "outer_loop pass %d/%d: total merit=%.6e jitter_rank=%d stable=%d/%d",
+                "outer_loop pass %d/%d: total merit=%.6e (tol=%.3g, dof=%d) jitter_rank=%d stable=%d/%d",
                 pass_idx + 1,
                 n_passes,
                 total_merit,
+                merit_tol,
+                dof,
                 self.jitter_rank,
                 stable_count,
                 patience,

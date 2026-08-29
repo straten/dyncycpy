@@ -205,6 +205,19 @@ update_profile_every_iteration_until = 5
 update_profile_after = 0
 plot_all = True
 
+# Early-stopping: treat the fit as converged once demerit's (get_reduced_chisq's)
+# relative change from the previous accepted step is smaller than the natural
+# sampling-fluctuation scale of a chi-squared statistic with CS.get_dof()
+# degrees of freedom, sqrt(2/dof) -- same statistical criterion as
+# pycyc.CyclicSolver.outer_loop's merit_n_sigma (see its docstring), applied
+# here to consecutive FISTA iterations instead of consecutive outer_loop
+# passes. merit_n_sigma scales that noise floor (1.0 = one sigma); require
+# merit_patience consecutive non-reset steps below it, since a single
+# iteration's step size can be small without the fit having truly converged.
+# Set merit_patience=0 to disable and always run exactly max_iterations.
+merit_n_sigma = 1.0
+merit_patience = 5
+
 # CS.doppler_window = ('kaiser', 8.0)
 
 # maximum Doppler shift cut-off (fraction of Doppler shifts to keep)
@@ -297,6 +310,7 @@ if args.solver == "fista":
     bad_step = 0
 
     prev_merit = best_merit
+    merit_stable_count = 0
 
     # Start timer
     prev_time = start_time = time.time()
@@ -375,6 +389,15 @@ if args.solver == "fista":
 
         really_bad = not math.isfinite(reduced_chisq) or reduced_chisq > 2.0 * prev_merit
 
+        # Statistically-scaled early stopping: see merit_n_sigma/merit_patience's
+        # definition above. A really_bad step is a reset, not evidence either
+        # way about convergence, so it doesn't count toward or break the streak.
+        if not really_bad:
+            dof = CS.get_dof()
+            merit_rel_change = abs(reduced_chisq - prev_merit) / abs(prev_merit) if prev_merit != 0 else math.inf
+            merit_tol = merit_n_sigma * math.sqrt(2.0 / dof) if dof > 0 else 0.0
+            merit_stable_count = merit_stable_count + 1 if merit_rel_change < merit_tol else 0
+
         if really_bad:
             print("**** really bad step - RESET")
             t_n = 1
@@ -382,6 +405,13 @@ if args.solver == "fista":
         else:
             alphas = np.append(alphas, 1.0 / L)
             prev_merit = reduced_chisq
+
+        if merit_patience > 0 and merit_stable_count >= merit_patience:
+            print(
+                f"cycsolve: merit converged (relative change below the {merit_n_sigma}-sigma "
+                f"noise floor for {merit_stable_count} consecutive iterations) after iteration {i}"
+            )
+            break
 
         if alphas.size == 0:
             alpha = 1.0 / L  # this should happen only if the first step is bad
