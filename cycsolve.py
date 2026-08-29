@@ -215,8 +215,19 @@ plot_all = True
 # merit_patience consecutive non-reset steps below it, since a single
 # iteration's step size can be small without the fit having truly converged.
 # Set merit_patience=0 to disable and always run exactly max_iterations.
+#
+# merit_patience=5 (tried first) was fooled by an ordinary FISTA momentum
+# ripple on real P2067_full data: an overshoot past the best-so-far point
+# at iteration 51, followed by 5 small-relative-change recovery steps
+# (52-56) that never actually got back below the pre-overshoot merit,
+# triggered a false "converged" at iteration 57 (see the two adaptive-
+# restart commits this reverts -- neither restart variant fixed the
+# ripple itself without hurting overall convergence, so raising patience
+# to outlast a single ripple is the more direct fix). 15 comfortably
+# exceeds that ripple's ~6-7 iteration duration; revisit if a longer-lived
+# ripple is ever seen to fool this too.
 merit_n_sigma = 1.0
-merit_patience = 5
+merit_patience = 15
 
 # CS.doppler_window = ('kaiser', 8.0)
 
