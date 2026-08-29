@@ -499,6 +499,18 @@ if args.solver == "fista":
                 except Exception:
                     print("##################################### jitter eigenvector plot failed")
 
+    # Restore the best-ever iterate before saving: whatever CS.h_doppler_delay
+    # holds when the loop exits (whether by early-stopping above or simply
+    # reaching max_iterations) is just wherever the last accepted FISTA step
+    # happened to land, which is not necessarily best_x -- a step can be
+    # worse than the best seen so far (as tracked by best_merit/best_x)
+    # without being "really bad" enough to trigger the in-loop reset. The
+    # per-iteration diagnostic plots above intentionally show the actual
+    # trajectory (x_n, warts and all); only the final saved solution needs
+    # this correction.
+    CS.h_doppler_delay = np.copy(best_x)
+    CS.h_time_delay = pycyc.freq2time(CS.h_doppler_delay, axis=0)
+
 else:  # args.solver == "outer"
     # CyclicSolver.outer_loop alternates a classical per-subint L-BFGS-B
     # wavefield fit (CyclicSolver.loop) with profile/jitter-model updates,
