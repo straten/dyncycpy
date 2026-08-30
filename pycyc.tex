@@ -560,6 +560,149 @@ $h$ itself.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%  Flat-response attractor at zero delay
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{A flat-response attractor at zero delay}
+\label{sec:flat_response_attractor}
+
+\noindent
+Sections~\ref{sec:degenerate_phase} and~\ref{sec:gauge_stability} concern directions along which
+$M$ is exactly \emph{invariant}: no force, spurious or otherwise, acts along them, and
+\Eqn{grad_rotation} shows the pure-phase part of that invariance cannot accumulate drift under
+FISTA momentum even in principle. This section concerns a different phenomenon: a direction along
+which $M$ is \emph{not} invariant, but along which the model's own bilinear structure creates a
+disproportionately easy, stable minimum -- one that a natural default initial condition starts
+inside of. It was diagnosed from a real-data anomaly: $h(\tau;\omega)$ develops a large,
+non-physical-looking peak at $\tau=0,\,\omega=0$, together with ringing in $\omega$ that
+Section~\ref{sec:gauge_stability}'s projection substantially suppresses. Unlike the ringing, the
+peak itself does not decay with further iterations, and $h(0;t)$ shows why: its phase is nearly
+constant and its amplitude comparable across every subintegration $t$ -- a single, essentially
+$t$-independent complex number, not scintillation noise.
+
+\subsubsection*{A $\nu$-independent response exactly reproduces the profile}
+
+Fix a subintegration $t_l$ and suppose $H(\nu;t_l)=c$, a complex constant independent of $\nu$.
+\Eqn{inverse_dft} then gives $h(\tau;t_l) = \Nchan^{1/2} c\,\delta_{\tau,0}$: a $\nu$-independent
+response is, equivalently, a pure impulse at $\tau=0$. Substituting into the model,
+\begin{equation}
+S'_\mu(\alpha,\nu;t_l) = H(\nu+\alpha/2;t_l)H^*(\nu-\alpha/2;t_l)S_\mu(\alpha)g(t_l)
+= |c|^2 S_\mu(\alpha)\, g(t_l),
+\label{eqn:flat_response_model}
+\end{equation}
+independent of $\nu$: a flat response reproduces an exact, $\nu$-independent replica of the pulse
+profile, scaled by $|c|^2 g(t_l)$, at every harmonic $\alpha$ -- it explains whatever part of
+$D_\mu(\alpha,\nu;t_l)$ looks like "profile shape times a single number," with zero delay/Doppler
+resolving power, using only the one real degree of freedom $|c|^2$ (the phase of $c$ is degenerate
+by Section~\ref{sec:degenerate_phase} and drops out of \Eqn{flat_response_model} entirely).
+
+\subsubsection*{The gradient at a flat response is concentrated at $\tau=0$}
+
+Evaluate \Eqn{dSconj_dh} and \Eqn{dS_dh} at $H(\nu;t_l)=c$, so that $H(\nu\mp\alpha/2;t_l)=c$
+throughout:
+\begin{align}
+\frac{dS_\mu^{\prime *}(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+&= c\,\Nchan^{-1/2}\exp(2\pi i\tau_j\nu)\exp(i\pi\tau_j\alpha)\,S_\mu^*(\alpha)\,g(t_l), \\
+\frac{dS'_\mu(\alpha,\nu;t_l)}{dh^*(\tau_j;t_l)}
+&= c\,\Nchan^{-1/2}\exp(2\pi i\tau_j\nu)\exp(-i\pi\tau_j\alpha)\,S_\mu(\alpha)\,g(t_l).
+\end{align}
+Substitute these, together with \Eqn{flat_response_model}'s residual $R_\mu(\alpha,\nu;t_l) =
+|c|^2 S_\mu(\alpha) g(t_l) - D_\mu(\alpha,\nu;t_l)$, into \Eqn{dM_dh}, and use the discrete
+orthogonality of the DFT basis underlying Equations~\ref{eqn:inverse_dft}--\ref{eqn:forward_dft},
+\begin{equation}
+\sum_\nu \exp(2\pi i \tau_j \nu) = \Nchan\,\delta_{\tau_j,0}.
+\label{eqn:dft_orthogonality}
+\end{equation}
+Every term built from the \emph{model} piece of $R_\mu$ ($|c|^2 S_\mu(\alpha) g(t_l)$, which does
+not depend on $\nu$ and so survives the $\nu$-sum only through \Eqn{dft_orthogonality}) collapses
+onto $\tau_j=0$ exactly; every term built from the \emph{data} piece ($D_\mu$, which does depend on
+$\nu$) does not:
+\begin{align}
+\left.\frac{dM}{dh^*(\tau_j;t_l)}\right|_{H=c}
+= \;& 2c\,|c|^2\,g^2(t_l)\,\Nchan^{1/2}\Big(\textstyle\sum_\alpha|S_\mu(\alpha)|^2\Big)\,\delta_{\tau_j,0} \notag \\
+  & - c\,g(t_l)\,\Nchan^{-1/2}\!\!\sum_{\alpha,\nu}\!\Big[S_\mu^*(\alpha)e^{i\pi\tau_j\alpha}D_\mu(\alpha,\nu;t_l)
+    + S_\mu(\alpha)e^{-i\pi\tau_j\alpha}D_\mu^*(\alpha,\nu;t_l)\Big] e^{2\pi i \tau_j\nu}.
+\label{eqn:flat_response_gradient}
+\end{align}
+The second line is present, with comparable size, at every $\tau_j$: it is simply the ordinary
+data-driven pull toward matching $D_\mu$'s own delay structure, the same kind of term that acts on
+$h(\tau_j;t_l)$ everywhere else along the optimization. The first line, by contrast, exists
+\emph{only} at $\tau_j=0$, where discrete Fourier orthogonality forces the model's entire
+self-correlation -- the profile power $\sum_\alpha|S_\mu(\alpha)|^2$, summed over all \Nchan\
+channels of an exactly flat response -- to land. This is a structural property of the bilinear
+shear model combined with a $\nu$-independent $H$, not a numerical coincidence, an approximation,
+or a consequence of any degenerate direction: it holds even far from convergence, for any profile
+$S_\mu$, any data $D_\mu$, and any subintegration.
+
+\subsubsection*{A stable, generically non-zero equilibrium}
+
+Setting \Eqn{flat_response_gradient} to zero at $\tau_j=0$ (where $e^{i\pi\tau_j\alpha}=e^{2\pi i
+\tau_j\nu}=1$) gives, for $c\ne0$,
+\begin{equation}
+|c|^2 = \frac{\Nchan^{-1}\sum_{\alpha,\nu}\mathrm{Re}\left[S_\mu^*(\alpha)D_\mu(\alpha,\nu;t_l)\right]}
+{g(t_l)\sum_\alpha|S_\mu(\alpha)|^2},
+\label{eqn:flat_response_equilibrium}
+\end{equation}
+structurally the same kind of closed-form least-squares solution as the gain and profile equations
+of Sections~\ref{sec:gain_variations} and~\ref{sec:intrinsic_cyclic_spectrum} -- and, because
+$D_\mu$ is dominated by the pulsar's own signal, whose harmonic structure correlates with
+$S_\mu(\alpha)$ essentially by construction, generically non-zero and positive. The bracketed
+coefficient of $c$ in \Eqn{flat_response_gradient}'s $\tau_j=0$ term increases monotonically with
+$|c|^2$ (its leading coefficient, $2g^2(t_l)\Nchan^{1/2}\sum_\alpha|S_\mu(\alpha)|^2$, is manifestly
+positive), so \Eqn{flat_response_equilibrium} is the minimum of $M$ restricted to this direction,
+not the unstable $c=0$ solution -- a stable fixed point that gradient descent converges to and does
+not spontaneously leave. This matches the observed real-data behaviour: $|h(0;\omega{=}0)|$ grows
+quickly over the first $\sim$10 iterations and then plateaus near a constant value through
+convergence, rather than growing without bound the way an unstable, momentum-driven runaway would.
+
+\subsubsection*{Why it appears at initialization, and why it persists}
+
+\texttt{pycyc.CyclicSolver}'s default initial wavefield (\texttt{CyclicSolver.initWavefield}, before
+any \texttt{first\_wavefield\_from\_best\_harmonic} refinement) sets
+$h(\tau;t)=\sqrt{\Nchan\Nsub}\,\delta_{\tau,0}$ identically for every subintegration -- exactly
+$H(\nu;t)=1$ for every $\nu$ and every $t$, the $H=c$ ansatz above, and, because it is exactly
+$t$-independent, a pure delta in Doppler at $\omega=0$ too (\Eqn{forward_dft_tau_omega}). The first
+several FISTA iterations therefore start already inside \Eqn{flat_response_equilibrium}'s basin,
+for every subintegration simultaneously and at essentially the same value (since the equilibrium
+depends on $t_l$ only through $D_\mu(\cdot,\cdot;t_l)$ and $g(t_l)$, which vary comparatively slowly
+from one subintegration to the next) -- producing a component of $h(0;t)$ that is coherent (nearly
+constant amplitude and phase) across $t$ by construction, not by any cross-subintegration coupling
+in $M$ (there is none), which \Eqn{forward_dft_tau_omega} then concentrates near $\omega=0$.
+(\texttt{cycsolve.py}'s actual default instead seeds the first wavefield from a best-harmonic
+profile-domain estimate, \texttt{first\_wavefield\_from\_best\_harmonic=10}, a less extreme, less
+purely-flat starting point that was previously found empirically to converge to a meaningfully
+less delta-concentrated final wavefield than the bare-delta case -- consistent with
+\Eqn{flat_response_equilibrium}, since a starting point further from the flat-response basin gives
+the ordinary, non-enhanced gradient at every other $\tau_j$ correspondingly more of a head start
+resolving genuine structure before $\tau=0$'s equilibrium is reached, even though
+\Eqn{flat_response_equilibrium}'s own value does not depend on the initial condition at all. This
+predicts that the two initializations should converge toward the same $\tau=0$ equilibrium value
+give enough iterations, which has not yet been checked directly.)
+
+Because \Eqn{flat_response_equilibrium} is a genuine local minimum of $M$ restricted to the
+$\tau=0$ direction, not merely a transient the optimizer passes through, later iterations' gradient
+at every \emph{other} delay -- driven only by the ordinary data term, with no analogue of the
+$\delta_{\tau_j,0}$ enhancement -- has no particular incentive to relocate the power already
+captured at $\tau=0$ into genuine, correctly-resolved delay-Doppler structure elsewhere: doing so
+would not further reduce $M$ once \Eqn{flat_response_equilibrium} is satisfied, since the same
+$\nu$-averaged, profile-correlated power is explained equally well by a concentrated impulse at
+$\tau=0$ as by any physically-distributed combination of images summing to the same total. This is
+why the peak plateaus rather than growing or shrinking away, and why it survives well past
+convergence (in one real-data run, essentially unchanged from iteration~10 through iteration~66 --
+the same run in which enabling \texttt{CS.subtract\_degenerate\_projections} independently
+suppressed the surrounding ringing of Section~\ref{sec:gauge_stability} without visibly changing
+this peak). The two phenomena share a location but not a cause: the ringing comes from directions
+along which $M$ is exactly invariant, and momentum can in principle drift unopposed along the part
+of that invariance ($\phi_t$'s delay-shift companion) that lacks \Eqn{grad_rotation}'s all-angle,
+$S_\mu$-independent guarantee; this peak comes from a direction along which $M$ is \emph{not}
+invariant but has a strong, stable, easily-reached minimum that happens to coincide with $\tau=0$
+and with the optimizer's own initial condition.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 %%  Minimal Spectral Entropy
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
