@@ -435,6 +435,13 @@ class CyclicSolver(_IOMixin):
         if self.iprint:
             logger.info(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
+        # Additive only for now (Stage 1 of dynamic_frequency_response_refactor,
+        # see /home/wvanstra/.claude/plans/lovely-forging-mountain.md): keep
+        # H(nu,T) available and correct alongside the existing h_doppler_delay/
+        # h_time_delay state, without changing any behavior yet -- nothing
+        # reads self.h_time_freq until later stages.
+        self._sync_time_freq_from_time_delay()
+
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_doppler_delay.shape)
@@ -1284,6 +1291,29 @@ class CyclicSolver(_IOMixin):
             h_doppler_delay *= factor
             # print(f'normalize factor={factor}')
         return h_doppler_delay
+
+    def _sync_time_freq_from_time_delay(self):
+        """Recompute self.h_time_freq -- H(nu,T), the per-channel frequency
+        response with no Fourier transform applied to the subintegration
+        axis -- from the current self.h_time_delay. dynamic_frequency_
+        response_refactor (see /home/wvanstra/.claude/plans/lovely-forging-
+        mountain.md) makes h_time_freq the persistent state FISTA steps and
+        stores between iterations; this is the one place that definition is
+        realized, so every call site that used to resync self.h_doppler_delay
+        from self.h_time_delay calls this instead."""
+        self.h_time_freq = time2freq(self.h_time_delay, axis=1)
+
+    def _doppler_delay_view(self):
+        """On-demand h(tau;omega), computed from the current
+        self.h_time_delay -- not persisted. A few regularizers (delay
+        shrinkage's noise estimate, spectral entropy, Doppler taper/low-pass)
+        are genuinely defined in terms of Doppler structure, not just "some
+        batch axis paired with delay" (see the refactor plan's domain-need
+        table), so they still need this view; everything else operates on
+        self.h_time_delay directly and never needs it. Callers that mutate
+        the returned array must fold the change back via
+        self.h_time_delay = freq2time(view, axis=0) before continuing."""
+        return time2freq(self.h_time_delay, axis=0)
 
     def updateWavefieldSubint(self, ipol, isub):
         if self.save_cyclic_spectra:
