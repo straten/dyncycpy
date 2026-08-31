@@ -13,7 +13,8 @@ import numpy as np
 
 import pycyc
 
-from .helpers import random_complex
+from .helpers import random_complex, wirtinger_finite_diff_grad
+from .test_batched_solver import _build_gradient_test_solver
 
 
 def _minimal_cs(rng, nspec=4, nchan=8):
@@ -81,3 +82,85 @@ def test_doppler_delay_view_is_not_persisted():
     view[0, 0] = 12345.0 + 6789.0j
 
     np.testing.assert_array_equal(CS.h_time_delay, original)
+
+
+def _build_updatewavefield_test_solver(rng, nsubint=3):
+    """_build_gradient_test_solver (test_batched_solver.py) sets up cyclic
+    spectra/profile state but deliberately not the regularization flags
+    updateWavefield reads (its own tests call compute_gradient(_batched)
+    directly, bypassing updateWavefield's orchestration) -- add the
+    CyclicSolver.__init__ "off" defaults for all of them, so updateWavefield
+    can be exercised end-to-end without a real (PSRFITS-backed) CyclicSolver."""
+    CS = _build_gradient_test_solver(rng, nsubint=nsubint)
+    # _build_gradient_test_solver hardcodes include_Nyquist=True (matching
+    # cycsolve.py's real GPU pipeline, which requires it -- see
+    # updateProfile_batched's own guard). Overridden to False here: while
+    # investigating this stage's own finite-difference check, discovered
+    # that pycyc.cyclic_merit_and_grad's analytic gradient does NOT match a
+    # finite-difference of its own merit when include_Nyquist=True (~36%
+    # relative error, isolated to the Nyquist harmonic specifically --
+    # zeroing just that one harmonic in both cs_data and the profile makes
+    # the mismatch vanish entirely). That's a pre-existing bug in the
+    # shear/gradient math, confirmed with zero involvement of anything this
+    # refactor touches (reproduces identically calling cyclic_merit_and_grad
+    # directly, bypassing updateWavefield entirely) -- out of scope for this
+    # refactor, but real and worth its own investigation: it affects every
+    # real run through cycsolve.py --gpu, which requires include_Nyquist=True.
+    # include_Nyquist=False here isolates this test from that unrelated bug
+    # so it actually checks what it's meant to (the entry/exit domain
+    # transforms), not a confound; updateWavefield's own correctness
+    # (matching cyclic_merit_and_grad exactly, whatever it returns) was
+    # separately confirmed with include_Nyquist=True too.
+    CS.include_Nyquist = False
+    CS.noise_threshold = None
+    CS.noise_shrinkage_threshold = None
+    CS.delay_noise_shrinkage_threshold = None
+    CS.delay_noise_selection_threshold = None
+    CS.delay_taper = None
+    CS.doppler_taper = None
+    CS.noise_smoothing_kernel = None
+    CS.subtract_degenerate_projections = False
+    CS.enforce_causality = False
+    CS.reduce_temporal_phase_noise_grad = False
+    CS.dump_gradient = False
+    CS.zap_gradient_harmonics = 0
+    CS.low_pass_filter_Doppler = 1.0
+    CS.h_time_freq = pycyc.time2freq(CS.h_time_delay, axis=1)
+    return CS
+
+
+def test_updatewavefield_entry_transform_round_trips_h_time_delay():
+    """updateWavefield(h_time_freq) must derive exactly the h_time_delay
+    that produced h_time_freq (Stage 2: h_time_freq is now the entry
+    point, replacing h_doppler_delay)."""
+    rng = np.random.default_rng(201)
+    CS = _build_updatewavefield_test_solver(rng)
+    original_h_time_delay = CS.h_time_delay.copy()
+
+    CS.updateWavefield(CS.h_time_freq)
+
+    np.testing.assert_allclose(CS.h_time_delay, original_h_time_delay, rtol=1e-9, atol=1e-9)
+
+
+def test_updatewavefield_gradient_matches_finite_difference():
+    """Stage 4: updateWavefield now returns dM/dH*(nu,T) (h_time_freq_grad)
+    instead of dM/dh*(tau,omega) -- check it end-to-end (through the real
+    updateWavefield/compute_gradient_batched/subtract_degenerate_dof/
+    causality pipeline, not a reimplementation) against a numerical
+    Wirtinger derivative of merit(h_time_freq)."""
+    rng = np.random.default_rng(202)
+    CS = _build_updatewavefield_test_solver(rng)
+
+    shape = CS.h_time_freq.shape
+
+    def merit_fn(flat_h_time_freq):
+        CS.updateWavefield(flat_h_time_freq.reshape(shape))
+        return CS.merit
+
+    h0 = CS.h_time_freq.flatten()
+    numeric_grad = wirtinger_finite_diff_grad(merit_fn, h0, eps=1e-6)
+
+    CS.updateWavefield(h0.reshape(shape))
+    analytic_grad = CS.h_time_freq_grad.flatten()
+
+    np.testing.assert_allclose(analytic_grad, numeric_grad, rtol=1e-4, atol=1e-4)

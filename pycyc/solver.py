@@ -435,13 +435,6 @@ class CyclicSolver(_IOMixin):
         if self.iprint:
             logger.info(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
-        # Additive only for now (Stage 1 of dynamic_frequency_response_refactor,
-        # see /home/wvanstra/.claude/plans/lovely-forging-mountain.md): keep
-        # H(nu,T) available and correct alongside the existing h_doppler_delay/
-        # h_time_delay state, without changing any behavior yet -- nothing
-        # reads self.h_time_freq until later stages.
-        self._sync_time_freq_from_time_delay()
-
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
             ashape = np.asarray(self.h_doppler_delay.shape)
@@ -474,6 +467,15 @@ class CyclicSolver(_IOMixin):
 
         if self.initial_guess_noise_perturbation_rms > 0:
             self._perturb_initial_wavefield_guess()
+
+        # H(nu,T) -- self.h_time_freq -- must be correct before updateProfile()
+        # (called below) starts reading it as authoritative: compute_first_
+        # wavefield_from_best_harmonic only updates h_doppler_delay, and
+        # doesn't itself keep h_time_delay in sync (_perturb_initial_wavefield_
+        # guess does, when active); re-derive both from whichever is the most
+        # recently updated of the two before syncing h_time_freq from them.
+        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
+        self._sync_time_freq_from_time_delay()
 
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
         self.first_harmonic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan), dtype=np.complex128)
@@ -860,21 +862,22 @@ class CyclicSolver(_IOMixin):
         # initialize profile from data
         # the results of this routine have been checked against filter_profile and they perform the same
 
-        self.normalize(self.h_doppler_delay)
+        self.normalize(self.h_time_freq)
 
-        self.h_time_delay = freq2time(self.h_doppler_delay)
+        self.h_time_delay = freq2time(self.h_time_freq, axis=1)
+        self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.align_frequency_responses:
             logger.info(f"reduce temporal phase and delay noise")
             h_time_freq = time2freq(self.h_time_delay, axis=1)
             align_to_neighbour(h_time_freq)
             self.h_time_delay = freq2time(h_time_freq, axis=1)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            self._sync_all_from_time_delay()
 
         if self.reduce_temporal_phase_noise:
             logger.info(f"reduce temporal phase noise")
             minimize_temporal_phase_noise(self.h_time_delay)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            self._sync_all_from_time_delay()
 
         if self.minimize_spectral_entropy:
             if self.minimize_spectral_entropy_delay:
@@ -885,20 +888,26 @@ class CyclicSolver(_IOMixin):
             else:
                 logger.info(f"minimize spectral entropy")
                 minimize_spectral_entropy(self.h_time_delay)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            self._sync_all_from_time_delay()
 
         if self.enforce_orthogonal_real_imag:
-            z = (self.h_doppler_delay * self.h_doppler_delay).sum()
+            h_doppler_delay = self._doppler_delay_view()
+            z = (h_doppler_delay * h_doppler_delay).sum()
             ph = z / np.abs(z)
             ph = np.sqrt(ph)
-            abs_origin = np.abs(self.h_doppler_delay[0, 0])
+            abs_origin = np.abs(h_doppler_delay[0, 0])
             logger.info(f"enforce_orthogonal_real_imag z={z} ph={ph} abs_origin={abs_origin}")
-            self.h_doppler_delay *= np.conj(ph)
-            self.h_time_delay = freq2time(self.h_doppler_delay)
+            h_doppler_delay *= np.conj(ph)
+            self.h_time_delay = freq2time(h_doppler_delay, axis=0)
+            self._sync_time_freq_from_time_delay()
+            self.h_doppler_delay = h_doppler_delay
 
         if self.enforce_real_at_origin:
-            self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
-            self.h_time_delay = freq2time(self.h_doppler_delay)
+            h_doppler_delay = self._doppler_delay_view()
+            h_doppler_delay[0, 0] = np.real(h_doppler_delay[0, 0])
+            self.h_time_delay = freq2time(h_doppler_delay, axis=0)
+            self._sync_time_freq_from_time_delay()
+            self.h_doppler_delay = h_doppler_delay
 
         # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
         # same single-flag dispatch as updateWavefield/compute_gradient_batched.
@@ -1242,20 +1251,20 @@ class CyclicSolver(_IOMixin):
         """
 
         self.h_time_delay_grad = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-        self.h_doppler_delay_grad = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
+        self.h_time_freq_grad = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
         self.nopt = 0
 
-        self.updateWavefield(self.h_doppler_delay)
+        self.updateWavefield(self.h_time_freq)
 
     def get_derivative(self, wavefield):
-        return self.h_doppler_delay_grad
+        return self.h_time_freq_grad
 
     def get_func_val(self, wavefield):
         return self.merit
 
     def evaluate(self, wavefield):
         self.updateWavefield(wavefield)
-        return self.merit, np.copy(self.h_doppler_delay_grad)
+        return self.merit, np.copy(self.h_time_freq_grad)
 
     def get_cs(self, ps):
         # cast single-precision input data to double-precision before computing the Fourier transform
@@ -1302,6 +1311,24 @@ class CyclicSolver(_IOMixin):
         realized, so every call site that used to resync self.h_doppler_delay
         from self.h_time_delay calls this instead."""
         self.h_time_freq = time2freq(self.h_time_delay, axis=1)
+
+    def _sync_time_freq_grad_from_time_delay_grad(self):
+        """Gradient counterpart of _sync_time_freq_from_time_delay: recompute
+        self.h_time_freq_grad -- dM/dH*(nu,T), the gradient in the same
+        domain as the new canonical h_time_freq state -- from the current
+        self.h_time_delay_grad."""
+        self.h_time_freq_grad = time2freq(self.h_time_delay_grad, axis=1)
+
+    def _sync_all_from_time_delay(self):
+        """Refresh both h_time_freq (the new canonical state) and
+        h_doppler_delay from the current self.h_time_delay. Transitional
+        (Stages 2-4 of the refactor): h_doppler_delay is no longer read by
+        anything in this file, but cycsolve.py's FISTA loop still reads/
+        writes CS.h_doppler_delay directly until Stage 5 migrates it to
+        h_time_freq, so both stay in sync until then. Stage 6 drops the
+        second line once nothing needs it."""
+        self._sync_time_freq_from_time_delay()
+        self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
     def _doppler_delay_view(self):
         """On-demand h(tau;omega), computed from the current
@@ -1381,7 +1408,16 @@ class CyclicSolver(_IOMixin):
                         x += x_offset
                         y += y_offset
 
-    def updateWavefield(self, h_doppler_delay):
+    def updateWavefield(self, h_time_freq):
+        # Regularizers below (rms noise threshold, shrinkage, delay
+        # shrinkage, delay/Doppler tapers) act on the wavefield itself,
+        # before the gradient is computed, and are genuinely defined in
+        # terms of Doppler structure (see the refactor plan's domain-need
+        # table) -- so derive the Doppler-delay view up front:
+        # h_time_freq (nu,T) -> h_time_delay (t,tau) -> h_doppler_delay (omega,tau).
+        h_time_delay = freq2time(h_time_freq, axis=1)
+        h_doppler_delay = time2freq(h_time_delay, axis=0)
+
         rms_noise = rms_wavefield(h_doppler_delay)
 
         if rms_noise > 0 and self.noise_threshold is not None:
@@ -1431,8 +1467,15 @@ class CyclicSolver(_IOMixin):
         if self.doppler_taper is not None:
             h_doppler_delay *= self.doppler_taper[:, np.newaxis]
 
+        # Fold any regularization above back into the canonical intermediate
+        # (h_time_delay) and persistent (h_time_freq) states. h_doppler_delay
+        # is also kept in sync for now: nothing in this file reads it as
+        # authoritative anymore, but cycsolve.py's FISTA loop still reads/
+        # writes CS.h_doppler_delay directly until Stage 5 migrates it to
+        # h_time_freq.
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
-        np.copyto(self.h_doppler_delay, h_doppler_delay)
+        self._sync_time_freq_from_time_delay()
+        self.h_doppler_delay = h_doppler_delay
 
         nonzero = np.count_nonzero(h_doppler_delay)
         # although re & im count as separate terms in sum,
@@ -1472,19 +1515,31 @@ class CyclicSolver(_IOMixin):
             with open("h_time_delay_grad.pkl", "wb") as fh:
                 pickle.dump(self.h_time_delay_grad, fh)
 
-        self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad)
+        # zap_gradient_harmonics/low_pass_filter_Doppler are genuinely
+        # Doppler-specific (see the refactor plan's domain-need table); only
+        # pay for the extra transform pair when one of them (or dump_gradient,
+        # for the diagnostic pickle below) actually needs the Doppler-delay
+        # gradient. self.h_doppler_delay_grad is transient here -- nothing
+        # outside this block reads it (evaluate()/get_derivative() return
+        # h_time_freq_grad, synced below).
+        if self.dump_gradient or self.zap_gradient_harmonics > 0 or self.low_pass_filter_Doppler < 1:
+            self.h_doppler_delay_grad = time2freq(self.h_time_delay_grad, axis=0)
 
-        if self.zap_gradient_harmonics > 0:
-            self._zap_gradient_harmonics()
+            if self.zap_gradient_harmonics > 0:
+                self._zap_gradient_harmonics()
 
-        if self.dump_gradient:
-            logger.debug("dumping doppler delay gradient to h_doppler_delay_grad.pkl")
-            with open("h_doppler_delay_grad.pkl", "wb") as fh:
-                pickle.dump(self.h_doppler_delay_grad, fh)
+            if self.dump_gradient:
+                logger.debug("dumping doppler delay gradient to h_doppler_delay_grad.pkl")
+                with open("h_doppler_delay_grad.pkl", "wb") as fh:
+                    pickle.dump(self.h_doppler_delay_grad, fh)
 
-        if self.low_pass_filter_Doppler < 1:
-            quarter_nsub = round(self.nsubint * self.low_pass_filter_Doppler / 2.0)
-            self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub, :] = 0
+            if self.low_pass_filter_Doppler < 1:
+                quarter_nsub = round(self.nsubint * self.low_pass_filter_Doppler / 2.0)
+                self.h_doppler_delay_grad[quarter_nsub:-quarter_nsub, :] = 0
+
+            self.h_time_delay_grad = freq2time(self.h_doppler_delay_grad, axis=0)
+
+        self._sync_time_freq_grad_from_time_delay_grad()
 
         align_phase_gradient = False
         if align_phase_gradient:

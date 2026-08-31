@@ -136,3 +136,38 @@ def test_gain_bug_regression():
     _, grad_2, _ = pycyc.cyclic_merit_and_grad(ht0, params, s0, cs_data, gain=2.5)
 
     np.testing.assert_allclose(grad_2, 2.5**2 * grad_1, rtol=1e-10)
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Pre-existing bug, found incidentally while finite-difference-testing "
+        "dynamic_frequency_response_refactor's updateWavefield end-to-end (see "
+        "/home/wvanstra/.claude/plans/lovely-forging-mountain.md), not fixed "
+        "here -- out of that refactor's scope. With include_Nyquist=True (the "
+        "CyclicSolver default, and required by updateProfile_batched, so this "
+        "affects every real run through cycsolve.py --gpu), cyclic_merit_and_"
+        "grad's analytic gradient has a ~36% relative error against its own "
+        "finite difference, isolated to the Nyquist harmonic specifically: "
+        "zeroing just that one harmonic in both cs_data and the profile makes "
+        "the mismatch vanish entirely (checked separately, not reproduced "
+        "here). include_Nyquist=False (this file's default) does not exhibit "
+        "it -- likely something in how the Nyquist bin's shear/model "
+        "contribution is folded into the gradient sum, not yet root-caused."
+    ),
+    strict=True,
+)
+def test_cyclic_merit_and_grad_matches_finite_difference_include_nyquist():
+    rng = np.random.default_rng(0)
+    params = make_cs(NCHAN, NHARM, NLAG, BW_MHZ, REF_FREQ_HZ, include_Nyquist=True)
+    s0 = random_complex(rng, (NHARM,))
+    cs_data = random_complex(rng, (NCHAN, NHARM))
+    ht0 = random_complex(rng, (NLAG,))
+
+    def merit_only(ht):
+        merit, _grad, _nonzero = pycyc.cyclic_merit_and_grad(ht, params, s0, cs_data, gain=1.0)
+        return merit
+
+    _analytic_merit, analytic_grad, _ = pycyc.cyclic_merit_and_grad(ht0, params, s0, cs_data, gain=1.0)
+    numeric_grad = wirtinger_finite_diff_grad(merit_only, ht0)
+
+    np.testing.assert_allclose(analytic_grad, numeric_grad, rtol=1e-5, atol=1e-5)
