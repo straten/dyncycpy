@@ -1481,6 +1481,27 @@ class CyclicSolver(_IOMixin):
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
         self._sync_time_freq_from_time_delay()
 
+        # Write the regularized wavefield back into the caller's h_time_freq
+        # array, in place. Pre-refactor, updateWavefield(h_doppler_delay)
+        # operated directly on its input parameter (regularizers np.copyto'd
+        # into it with no intervening domain transform), so this same
+        # mutation was already implicit: fista.take_fista_step's y_n/x_n
+        # (the same array objects CyclicSolver.evaluate is called with) got
+        # silently regularized as a side effect of evaluate() -- e.g. re-
+        # shrunk/re-zeroed to the acausal-causality convention -- before the
+        # next FISTA step's y_n - alpha*y_grad ever read them. This
+        # refactor's entry-point transform (h_time_delay = freq2time(
+        # h_time_freq, axis=1)) derives a fresh array instead of aliasing
+        # the input, which silently dropped that mutation -- confirmed on
+        # real P2067 data to be load-bearing for FISTA's convergence: without
+        # this line, the wavefield used for the *next* gradient step is the
+        # pre-regularization one, and delay_noise_shrinkage_threshold's re-
+        # applied-every-iteration noise estimate (already fragile to any
+        # difference between the array it last shrank and the array it's
+        # asked to shrink again) diverges the whole trajectory to a ~27%
+        # worse converged demerit within ~10 iterations.
+        np.copyto(h_time_freq, self.h_time_freq)
+
         nonzero = np.count_nonzero(h_doppler_delay)
         # although re & im count as separate terms in sum,
         # normalize_cs_by_noise_rms normalizes by the sum of the variances in re & im

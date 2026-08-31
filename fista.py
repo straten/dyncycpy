@@ -9,6 +9,7 @@ import logger
 
 # from lib import Residual, extract_part_of_array
 from pycyc import CyclicSolver as Residual  # TODO dirty hack
+from pycyc import freq2time, time2freq
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
@@ -77,18 +78,38 @@ def apply_prox_operators(
     x_np1,
     alpha,
 ):
+    # x_np1 is H(nu,T) (dynamic_frequency_response_refactor, see
+    # /home/wvanstra/.claude/plans/lovely-forging-mountain.md) -- axis 1 is
+    # frequency (nu), not delay. construct_lambda_matrix's causality/
+    # sparsity penalty (delay_for_inf, the L1 prior _lambda, and its own
+    # unconditional infinite penalty on the second half of axis 1) is
+    # defined in terms of DELAY specifically: it only makes physical sense
+    # as "shrink/zero acausal or small-magnitude delay bins", not frequency
+    # bins. Transform to h(tau,T) first and back afterward so this operates
+    # in the domain it was actually designed for. Not the cause of the real-
+    # data convergence divergence this refactor's Stage 7 check found (that
+    # was CyclicSolver.updateWavefield losing an in-place-mutation side
+    # effect on its input, fixed separately) -- with cycsolve.py's own
+    # delay_for_inf=-nchan//2, the unconditional infinite penalty above is
+    # immediately overwritten back to 0 by construct_lambda_matrix's own
+    # delay_for_inf<0 branch, making this a no-op in that specific call --
+    # but a real, load-bearing fix for any other delay_for_inf/_lambda
+    # combination (e.g. backtrack_B3's callers, or a future cycsolve.py
+    # change), where this matters and previously corrupted the model by
+    # penalizing the wrong axis.
+    x_np1_delay = freq2time(x_np1, axis=1)
     _lambda_array = construct_lambda_matrix(
-        shape=x_np1.shape,
+        shape=x_np1_delay.shape,
         _lambda=_lambda,
         delay_for_inf=delay_for_inf,
         zero_penalty_coords=zero_penalty_coordinates,
         fix_support=fix_support,
     )
-    x_np1 = complex_prox_l1(x_np1, _lambda_array, 1.0 / alpha)
+    x_np1_delay = complex_prox_l1(x_np1_delay, _lambda_array, 1.0 / alpha)
     if fix_phase_value is not None:
-        x_np1 = complex_phase_fix(x_np1, [fix_phase_coords], fix_phase_value)
+        x_np1_delay = complex_phase_fix(x_np1_delay, [fix_phase_coords], fix_phase_value)
 
-    return x_np1
+    return time2freq(x_np1_delay, axis=1)
 
 
 def complex_prox_l1(x: np.ndarray, _lambda: np.ndarray, L: float):

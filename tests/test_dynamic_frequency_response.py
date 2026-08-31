@@ -215,6 +215,56 @@ def test_updatewavefield_entry_transform_round_trips_h_time_delay():
     np.testing.assert_allclose(CS.h_time_delay, original_h_time_delay, rtol=1e-9, atol=1e-9)
 
 
+def test_updatewavefield_mutates_input_array_to_regularized_value():
+    """updateWavefield(h_time_freq) must write its regularized result back
+    into the caller's h_time_freq array in place, matching pre-refactor
+    updateWavefield(h_doppler_delay)'s behavior of operating directly on
+    (and np.copyto-mutating) its input parameter with no intervening copy.
+    fista.take_fista_step's y_n/x_n rely on this: the *next* FISTA step's
+    y_n - alpha*y_grad must see the regularized wavefield evaluate() just
+    computed the gradient from, not the pre-regularization one -- without
+    this, delay_noise_shrinkage_threshold's noise estimate (re-applied every
+    iteration, already fragile to any difference between the array it last
+    shrank and the array it's asked to shrink again) was found to diverge
+    the whole trajectory to a ~27% worse converged demerit on real P2067
+    data within about 10 iterations."""
+    rng = np.random.default_rng(203)
+    # nsubint=32 (not the default 3): delay_noise_power_wavefield's Doppler-
+    # extrema noise strip is 10 samples wide, meaningless for nsubint < ~20.
+    # A per-subint-independent (not tiled) wavefield gives the Doppler axis
+    # genuine structure to estimate a noise floor from -- _build_gradient_
+    # test_solver's own default wavefield is identical across subints
+    # (np.tile), which is a Doppler-domain delta function with ~zero power
+    # at the extrema strip, so shrinkage never actually zeros anything.
+    CS = _build_updatewavefield_test_solver(rng, nsubint=32)
+    nsubint, nchan = CS.h_time_delay.shape
+    # Sparse structure (mostly small "background" with a few larger
+    # "signal" bins), like a real shrinkage-thresholded wavefield -- iid
+    # Gaussian noise everywhere (no signal/background contrast) leaves
+    # nothing for the shrinkage threshold to actually zero.
+    h_doppler_delay = 0.05 * random_complex(rng, (nsubint, nchan))
+    signal_mask = rng.random((nsubint, nchan)) < 0.1
+    nsignal = np.count_nonzero(signal_mask)
+    h_doppler_delay[signal_mask] = 10.0 * random_complex(rng, (nsignal,))
+    CS.h_time_delay = pycyc.freq2time(h_doppler_delay, axis=0)
+    CS.h_time_freq = pycyc.time2freq(CS.h_time_delay, axis=1)
+    CS.delay_noise_shrinkage_threshold = 1.0
+    CS.delay_noise_selection_threshold = 2.0
+
+    caller_array = CS.h_time_freq.copy()
+    original = caller_array.copy()
+    CS.updateWavefield(caller_array)
+
+    # the regularizer must actually have changed something, or this test
+    # wouldn't distinguish "mutated in place" from "left untouched" -- check
+    # against CS.h_time_freq (the internal, definitely-regularized state),
+    # not caller_array: without the fix, caller_array trivially never
+    # changes at all, which would make that comparison pass for the wrong
+    # reason instead of catching a weak fixture.
+    assert not np.array_equal(CS.h_time_freq, original), "shrinkage didn't change anything -- test fixture too weak"
+    np.testing.assert_array_equal(caller_array, CS.h_time_freq)
+
+
 def test_updatewavefield_gradient_matches_finite_difference():
     """Stage 4: updateWavefield now returns dM/dH*(nu,T) (h_time_freq_grad)
     instead of dM/dh*(tau,omega) -- check it end-to-end (through the real
