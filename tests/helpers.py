@@ -90,15 +90,20 @@ def wirtinger_finite_diff_grad(merit_fn, ht0, eps=1e-6):
 class RealMultiSubintFunc:
     """func stand-in whose evaluate() computes the *real* per-subint merit
     and Wirtinger gradient (pycyc.cyclic_merit_and_grad, one independent
-    synthetic problem per subint) in the time-delay domain and transforms
-    to/from Doppler-delay exactly as CyclicSolver.evaluate/updateWavefield
-    do -- unlike a stub with pre-scripted returns, this actually computes a
-    gradient from whatever wavefield it's given, so it can drive a genuine,
-    many-iteration FISTA trajectory through the real fista.take_fista_step
-    rather than a single hand-constructed step. Originally test_fista.py's
-    _RealMultiSubintFunc; promoted here so golden-trajectory regression
-    tests (see test_golden_regression.py) can share it without duplicating
-    the gradient-harness code."""
+    synthetic problem per subint) in an internal time-delay domain and
+    transforms to/from a Fourier-conjugate domain (axis 0 -- an arbitrary
+    but fixed choice, not necessarily matching whichever axis
+    CyclicSolver.evaluate/updateWavefield currently transform: see
+    fista.take_fista_step's own gauge-correction comment for why its
+    per-subintegration math is exactly invariant to that choice, as long as
+    axis 0 stays the subintegration axis) -- unlike a stub with
+    pre-scripted returns, this actually computes a gradient from whatever
+    wavefield it's given, so it can drive a genuine, many-iteration FISTA
+    trajectory through the real fista.take_fista_step rather than a single
+    hand-constructed step. Originally test_fista.py's _RealMultiSubintFunc;
+    promoted here so golden-trajectory regression tests (see
+    test_golden_regression.py) can share it without duplicating the
+    gradient-harness code."""
 
     def __init__(self, params, s0, cs_data_per_subint):
         self.params = params

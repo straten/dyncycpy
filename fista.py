@@ -9,7 +9,6 @@ import logger
 
 # from lib import Residual, extract_part_of_array
 from pycyc import CyclicSolver as Residual  # TODO dirty hack
-from pycyc import freq2time
 
 log = logger.setup_logger(is_debug=False)
 log = logger.get_logger(__name__)
@@ -218,36 +217,39 @@ def take_fista_step(
 
     # L_min itself is computed with a *per-subint* gauge correction, not
     # the single shared `z` above (which is kept only for the diagnostic
-    # prints): x_np1/y_n/y_grad/func_grad live in Doppler-delay space (FFT
-    # of the wavefield along the subint axis), but the cyclic-spectrum
-    # merit is invariant under an *independent* phase rotation of each
-    # subint's own time-delay wavefield (each subint's contribution to the
-    # merit depends only on its own h_time_delay row, with no cross-subint
-    # coupling in the model) -- a single shared phasor can only remove the
-    # mean component of that drift across subints; the independent
-    # per-subint part shows up as a convolution across Doppler bins rather
-    # than a simple pointwise correction there. So the correction is done
-    # here in the time-delay domain instead, where each row genuinely is
-    # one subint and the same closed-form phase-alignment trick applies
-    # per row. grad(h_t * e^{i phi_t}) == e^{i phi_t} * grad(h_t) exactly
-    # per subint (same derivation as the global case, since each row's
-    # merit/gradient has no cross-subint coupling), so the same per-row
-    # phasor corrects the gradient difference too. Verified empirically:
-    # this estimate stays stable (its var_diff/gdiff are each exactly
-    # correct by construction, regardless of drift magnitude) whereas a
-    # single shared phasor's var_diff/gdiff can each individually be
-    # inflated by many orders of magnitude by independent per-subint
-    # drift that isn't real wavefield movement -- whether that visibly
-    # distorts the final L ratio (not just its two ingredients) depends
-    # on the specific noise realization, so this is a robustness fix, not
-    # only a fix for a specific observed blow-up the way the `z` fix
-    # above was.
-    x_np1_time = freq2time(x_np1, axis=0)
-    y_n_time = freq2time(y_n, axis=0)
-    y_grad_time = freq2time(y_grad, axis=0)
-    func_grad_time = freq2time(func_grad, axis=0)
-
-    z_t = np.sum(np.conj(x_np1_time) * y_n_time, axis=1)
+    # prints): the cyclic-spectrum merit is invariant under an
+    # *independent* phase rotation of each subint's own frequency response
+    # H(nu;t) (each subint's contribution to the merit depends only on its
+    # own row, with no cross-subint coupling in the model) -- a single
+    # shared phasor can only remove the mean component of that drift
+    # across subints. dynamic_frequency_response_refactor (see
+    # /home/wvanstra/.claude/plans/lovely-forging-mountain.md): x_np1/y_n/
+    # y_grad/func_grad are now H(nu,T) -- already indexed by subint on
+    # axis 0, with no Fourier transform applied to that axis -- so the
+    # per-row correction below is already a simple pointwise operation
+    # directly on these arrays; no domain transform is needed first the
+    # way one used to be, to reach the (then-separate) time-delay domain
+    # where the correction is pointwise per subintegration. This isn't
+    # merely convenient: diff_t/gdiff_t's squared norms below are each an
+    # inner product (or a norm of a linear combination) taken *within* one
+    # subint's own row, and a per-subintegration Fourier transform (like
+    # the one this used to require) is exactly unitary -- Parseval's
+    # theorem in its stronger, inner-product-preserving form -- so L_min
+    # is provably identical whether computed here or in the old time-delay
+    # domain; removing the transform changes nothing about the result.
+    # grad(h_t * e^{i phi_t}) == e^{i phi_t} * grad(h_t) exactly per subint
+    # (same derivation as the global case, since each row's merit/gradient
+    # has no cross-subint coupling), so the same per-row phasor corrects
+    # the gradient difference too. Verified empirically: this estimate
+    # stays stable (its var_diff/gdiff are each exactly correct by
+    # construction, regardless of drift magnitude) whereas a single shared
+    # phasor's var_diff/gdiff can each individually be inflated by many
+    # orders of magnitude by independent per-subint drift that isn't real
+    # wavefield movement -- whether that visibly distorts the final L
+    # ratio (not just its two ingredients) depends on the specific noise
+    # realization, so this is a robustness fix, not only a fix for a
+    # specific observed blow-up the way the `z` fix above was.
+    z_t = np.sum(np.conj(x_np1) * y_n, axis=1)
     z_t_abs = np.abs(z_t)
     # guard against a degenerate (exactly zero/orthogonal) subint row --
     # nsubint independent divisions here vs. one for the global `z` above,
@@ -256,10 +258,10 @@ def take_fista_step(
     # than propagating NaN into the whole L_min estimate
     z_t = np.divide(z_t, z_t_abs, out=np.ones_like(z_t), where=z_t_abs > 0)
 
-    diff_t = z_t[:, np.newaxis] * x_np1_time - y_n_time
+    diff_t = z_t[:, np.newaxis] * x_np1 - y_n
     var_diff_t = np.vdot(diff_t, diff_t)
 
-    gdiff_t = y_grad_time - z_t[:, np.newaxis] * func_grad_time
+    gdiff_t = y_grad - z_t[:, np.newaxis] * func_grad
     L_min = np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
 
     if math.isfinite(func_val):

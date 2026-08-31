@@ -136,26 +136,26 @@ def test_L_min_bounded_for_phase_drift_dominated_step():
 
 
 def _l_min_for_independent_subint_drift(rng_seed, phi_spread, nsub=10, nchan=8, alpha=1.0):
-    """Builds a scenario in the time-delay domain (each row an
-    independent subint, with its own independent phase drift phi_t plus a
-    tiny genuine step), transforms to Doppler-delay (what take_fista_step
-    actually operates on, exactly as CyclicSolver.evaluate returns), and
-    runs it through the real take_fista_step. Returns (x_n in Doppler-delay,
-    L_min, target_x_np1_time) so callers can check both correctness and
-    the stability of L_min across different drift magnitudes."""
+    """Builds a scenario with each row an independent subint (axis 0), with
+    its own independent phase drift phi_t plus a tiny genuine step, and runs
+    it through the real take_fista_step directly -- dynamic_frequency_
+    response_refactor (see /home/wvanstra/.claude/plans/lovely-forging-
+    mountain.md) made H(nu,T) the domain take_fista_step operates on
+    directly, already indexed by subint on axis 0 with no Fourier transform
+    applied to that axis, so no domain transform is needed here either
+    (previously this transformed to Doppler-delay first, matching what
+    CyclicSolver.evaluate used to return). Returns (x_n, L_min,
+    target_x_np1_time) so callers can check both correctness and the
+    stability of L_min across different drift magnitudes."""
     rng = np.random.default_rng(rng_seed)
     shape = (nsub, nchan)
-    y_n_time = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    y_n = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     phi_t = rng.uniform(-phi_spread, phi_spread, nsub)
-    tiny_step_time = 1e-6 * (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    tiny_step = 1e-6 * (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
 
-    target_x_np1_time = np.exp(1j * phi_t)[:, None] * y_n_time + tiny_step_time
-    y_grad_time = (y_n_time - target_x_np1_time) / alpha
-    func_grad_time = np.exp(1j * phi_t)[:, None] * y_grad_time  # per-subint grad(h*e^{iphi})==e^{iphi}*grad(h)
-
-    y_n = pycyc.time2freq(y_n_time, axis=0)
-    y_grad = pycyc.time2freq(y_grad_time, axis=0)
-    func_grad = pycyc.time2freq(func_grad_time, axis=0)
+    target_x_np1_time = np.exp(1j * phi_t)[:, None] * y_n + tiny_step
+    y_grad = (y_n - target_x_np1_time) / alpha
+    func_grad = np.exp(1j * phi_t)[:, None] * y_grad  # per-subint grad(h*e^{iphi})==e^{iphi}*grad(h)
 
     func = _StubFunc([(0.0, y_grad), (0.0, func_grad)])
     x_n, y_np1, L_min, t_np1, demerits = fista.take_fista_step(
@@ -263,10 +263,10 @@ def test_L_min_stable_under_independent_per_subint_phase_drift():
 
 def test_L_min_matches_reference_per_subint_formula():
     """Direct check that take_fista_step's actual L_min matches the
-    per-subint formula it's documented to implement (time-delay domain,
-    per-row phase alignment applied to both position and gradient
-    differences) -- not just "doesn't blow up," but the specific,
-    derived value."""
+    per-subint formula it's documented to implement (per-row phase
+    alignment applied directly to both position and gradient differences,
+    no domain transform first) -- not just "doesn't blow up," but the
+    specific, derived value."""
     seed = 7
     x_n, L_min, target_x_np1_time = _l_min_for_independent_subint_drift(seed, phi_spread=0.3)
 
