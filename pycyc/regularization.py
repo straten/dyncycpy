@@ -61,7 +61,7 @@ def apply_threshold(x: np.ndarray, threshold: float, kernel=None):
     out = np.heaviside(x_power - limit, 1) * x
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    logger.info(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.debug(f"apply_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -87,7 +87,7 @@ def apply_shrinkage_threshold(x: np.ndarray, threshold: float, kernel=None, deca
     out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    logger.info(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.debug(f"apply_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -118,7 +118,7 @@ def apply_delay_shrinkage_threshold(x: np.ndarray, threshold: float, baseline_th
     out = np.maximum(absx - shrinkage, 0) * x / absx
     nonz = np.count_nonzero(out)
     sz = np.size(out)
-    logger.info(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
+    logger.debug(f"apply_delay_shrinkage_threshold: zero={(sz-nonz)*100.0/sz} %")
     return out
 
 
@@ -212,11 +212,11 @@ def find_n_largest_indices(arr: np.ndarray, n: int) -> list:
               (row, column) of one of the N largest values.
     """
     if not isinstance(arr, np.ndarray) or arr.ndim != 2:
-        logger.info("Error: Input must be a 2D NumPy array.")
+        logger.error("Error: Input must be a 2D NumPy array.")
         return []
 
     if n <= 0:
-        logger.info("Error: N must be a positive integer.")
+        logger.error("Error: N must be a positive integer.")
         return []
 
     # Get a flattened view of the array. This is an O(1) operation
@@ -500,20 +500,20 @@ def subtract_degenerate_delay_and_phase(h_delay_grad, h_delay):
 
     # verify orthogonality of basis vectors
     dot12 = np.sum(np.conj(v_phase) * v_delay)
-    logger.info(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
+    logger.debug(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
 
     # project gradient onto basis vectors, then subtract the projections from the gradient
     a_phase = np.sum(np.conj(v_phase) * h_freq_grad)
     h_freq_grad -= a_phase * v_phase
 
     b_phase = np.sum(np.conj(v_phase) * h_freq_grad)
-    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
+    logger.debug(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
 
     a_delay = np.sum(np.conj(v_delay) * h_freq_grad)
     h_freq_grad -= a_delay * v_delay
 
     b_delay = np.sum(np.conj(v_delay) * h_freq_grad)
-    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay}")
+    logger.debug(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay=}")
 
     return freq2time(h_freq_grad)
 
@@ -614,11 +614,11 @@ def minimize_difference(hf_ref, hf):
         imax = np.argmax(ccf_power)
         ph_max = np.angle(ccf[imax])
 
-    logger.info(f"{imax=} {ph_max=} {Nchan=}")
+    logger.debug(f"{imax=} {ph_max=} {Nchan=}")
 
     limit = 0
     if limit > 0 and imax > limit and imax < Nchan_use - limit:
-        logger.info(f"{imax=} beyond {limit=}")
+        logger.warning(f"{imax=} beyond {limit=}")
         imax = 0
         ph_max = 0
 
@@ -648,7 +648,7 @@ def minimize_difference(hf_ref, hf):
     if best_imax > Nchan_use / 2:
         best_imax = best_imax - Nchan_use
         alpha[1] = best_imax * 2.0 * np.pi
-        logger.info(f"{best_imax=}")
+        logger.debug(f"{best_imax=}")
 
     hf[:], nus = spectral_shift(alpha, hf)
 
@@ -671,6 +671,6 @@ def align_to_neighbour(h_time_freq):
         if np.abs(R) > 0.05:
             hf0 = hf
         else:
-            logger.info(f"align_to_neighbour i={it} {R=}")
+            logger.debug(f"align_to_neighbour i={it} {R=}")
 
         h_time_freq[it, :] = hf
