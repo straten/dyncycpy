@@ -24,6 +24,8 @@ import numpy as np
 import fista
 import pycyc
 
+from .helpers import RealMultiSubintFunc
+
 
 def test_gradient_transforms_with_global_phase():
     """Grounds the fix: confirms grad(h*e^{i phi}) == e^{i phi}*grad(h)
@@ -287,35 +289,6 @@ def test_L_min_matches_reference_per_subint_formula():
     np.testing.assert_allclose(L_min, L_ref, rtol=1e-8)
 
 
-class _RealMultiSubintFunc:
-    """func stand-in whose evaluate() computes the *real* per-subint merit
-    and Wirtinger gradient (pycyc.cyclic_merit_and_grad, one independent
-    synthetic problem per subint) in the time-delay domain and transforms
-    to/from Doppler-delay exactly as CyclicSolver.evaluate/updateWavefield
-    do -- unlike _StubFunc's pre-scripted returns, this actually computes
-    a gradient from whatever wavefield it's given, so it can drive a
-    genuine, many-iteration FISTA trajectory through the real
-    fista.take_fista_step rather than a single hand-constructed step."""
-
-    def __init__(self, params, s0, cs_data_per_subint):
-        self.params = params
-        self.s0 = s0
-        self.cs_data_per_subint = cs_data_per_subint
-
-    def normalize(self, h_dopp):
-        return h_dopp  # identity, matching conserve_wavefield_energy=False
-
-    def evaluate(self, h_dopp):
-        h_time = pycyc.freq2time(h_dopp, axis=0)
-        merit_total = 0.0
-        grad_time = np.zeros_like(h_time)
-        for t in range(h_time.shape[0]):
-            m, g, _ = pycyc.cyclic_merit_and_grad(h_time[t], self.params, self.s0, self.cs_data_per_subint[t])
-            merit_total += m
-            grad_time[t] = g
-        return merit_total, pycyc.time2freq(grad_time, axis=0)
-
-
 def test_no_gauge_drift_over_long_fista_run():
     """Regression test for the reasoning documented in pycyc.tex
     (degenerate-phase section, "Stability of the gauge alignment under
@@ -354,7 +327,7 @@ def test_no_gauge_drift_over_long_fista_run():
     cs_data_per_subint = [
         rng.standard_normal((nchan, nharm)) + 1j * rng.standard_normal((nchan, nharm)) for _ in range(nsub)
     ]
-    func = _RealMultiSubintFunc(params, s0, cs_data_per_subint)
+    func = RealMultiSubintFunc(params, s0, cs_data_per_subint)
 
     y_n_time = rng.standard_normal((nsub, nlag)) + 1j * rng.standard_normal((nsub, nlag))
     y_n = pycyc.time2freq(y_n_time, axis=0)

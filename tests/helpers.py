@@ -87,6 +87,38 @@ def wirtinger_finite_diff_grad(merit_fn, ht0, eps=1e-6):
     return grad
 
 
+class RealMultiSubintFunc:
+    """func stand-in whose evaluate() computes the *real* per-subint merit
+    and Wirtinger gradient (pycyc.cyclic_merit_and_grad, one independent
+    synthetic problem per subint) in the time-delay domain and transforms
+    to/from Doppler-delay exactly as CyclicSolver.evaluate/updateWavefield
+    do -- unlike a stub with pre-scripted returns, this actually computes a
+    gradient from whatever wavefield it's given, so it can drive a genuine,
+    many-iteration FISTA trajectory through the real fista.take_fista_step
+    rather than a single hand-constructed step. Originally test_fista.py's
+    _RealMultiSubintFunc; promoted here so golden-trajectory regression
+    tests (see test_golden_regression.py) can share it without duplicating
+    the gradient-harness code."""
+
+    def __init__(self, params, s0, cs_data_per_subint):
+        self.params = params
+        self.s0 = s0
+        self.cs_data_per_subint = cs_data_per_subint
+
+    def normalize(self, h_dopp):
+        return h_dopp  # identity, matching conserve_wavefield_energy=False
+
+    def evaluate(self, h_dopp):
+        h_time = pycyc.freq2time(h_dopp, axis=0)
+        merit_total = 0.0
+        grad_time = np.zeros_like(h_time)
+        for t in range(h_time.shape[0]):
+            m, g, _ = pycyc.cyclic_merit_and_grad(h_time[t], self.params, self.s0, self.cs_data_per_subint[t])
+            merit_total += m
+            grad_time[t] = g
+        return merit_total, pycyc.time2freq(grad_time, axis=0)
+
+
 def real_finite_diff_grad(merit_fn, x0, eps=1e-6):
     """Numerically estimate the gradient of a real-valued merit_fn(x) -> float
     with respect to a real-valued parameter vector x0, via central
