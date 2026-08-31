@@ -394,9 +394,9 @@ class CyclicSolver(_IOMixin):
 
         if self.initial_h_time_freq is None:
             self.expected_power = self.nchan * self.nspec
-            self.h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
-            self.h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.expected_power)
-            self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
+            h_doppler_delay = np.zeros((self.nspec, self.nchan), dtype=np.complex128)
+            h_doppler_delay[0, self.first_wavefield_delay] = np.sqrt(self.expected_power)
+            self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
             # ensure that delta-function yields expected frequency response at all times
             for isub in range(self.nspec):
@@ -413,31 +413,30 @@ class CyclicSolver(_IOMixin):
                 logger.info(f"padding input shape={self.initial_h_time_freq.shape} to {current_shape=}")
                 h_time_freq = pad_wavefield(self.initial_h_time_freq, current_shape)
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
-                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
                 plot_Doppler_vs_delay(
                     self.h_doppler_delay, self.mean_time_offset, self.bw, "input_wavefield_after_padding.png"
                 )
             else:
                 h_time_freq = self.initial_h_time_freq
                 self.h_time_delay = freq2time(h_time_freq, axis=1)
-                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
             if self.zero_initial_delay:
                 h_time_power = np.sum(np.abs(self.h_time_delay) ** 2, axis=0)
                 peak = np.argmax(h_time_power)
                 logger.info(f"{peak=}")
                 self.h_time_delay = np.roll(self.h_time_delay, -peak, axis=1)
-                self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
             if self.enforce_real_at_origin:
-                self.h_doppler_delay[0, 0] = np.real(self.h_doppler_delay[0, 0])
+                h_doppler_delay = self._doppler_delay_view()
+                h_doppler_delay[0, 0] = np.real(h_doppler_delay[0, 0])
+                self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
         if self.iprint:
             logger.info(f"ORIGIN AMPLITUDE: {self.h_doppler_delay[0,0]}")
 
         self.noise_smoothing_kernel = None
         if self.noise_smoothing_duty_cycle is not None:
-            ashape = np.asarray(self.h_doppler_delay.shape)
+            ashape = np.asarray(self.h_time_delay.shape)
             wshape = np.round(ashape * self.noise_smoothing_duty_cycle)
             logger.info(f"noise smoothing kernel shape: {wshape}")
             kernel = np.outer(
@@ -469,12 +468,10 @@ class CyclicSolver(_IOMixin):
             self._perturb_initial_wavefield_guess()
 
         # H(nu,T) -- self.h_time_freq -- must be correct before updateProfile()
-        # (called below) starts reading it as authoritative: compute_first_
-        # wavefield_from_best_harmonic only updates h_doppler_delay, and
-        # doesn't itself keep h_time_delay in sync (_perturb_initial_wavefield_
-        # guess does, when active); re-derive both from whichever is the most
-        # recently updated of the two before syncing h_time_freq from them.
-        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
+        # (called below) starts reading it as authoritative: both
+        # compute_first_wavefield_from_best_harmonic and
+        # _perturb_initial_wavefield_guess already keep self.h_time_delay
+        # in sync when active, so just sync h_time_freq from it.
         self._sync_time_freq_from_time_delay()
 
         self.dynamic_spectrum = np.zeros((self.nsubint, self.npol, self.nchan))
@@ -518,10 +515,15 @@ class CyclicSolver(_IOMixin):
             self.pp_intrinsic = np.roll(self.pp_intrinsic, phase_roll)
             self.pp_scattered = np.roll(self.pp_scattered, phase_roll)
             self.h_time_delay = np.roll(self.h_time_delay, self.roll_initial_guess, axis=1)
-            self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
+            # this roll runs after updateProfile() has already made
+            # h_time_freq authoritative -- keep it in sync too.
+            self._sync_time_freq_from_time_delay()
 
     def compute_first_wavefield_from_best_harmonic(self):
-        initial_total_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+        # Parseval/orthonormal-DFT power is invariant to which domain it's
+        # summed in, so this matches whatever the pre-refactor np.sum(np.abs
+        # (self.h_doppler_delay)**2) computed, without needing that view.
+        initial_total_power = np.sum(np.abs(self.h_time_delay) ** 2)
         maxharm = np.minimum(self.first_wavefield_from_best_harmonic, self.nharm)
         sn = np.zeros(maxharm)
 
@@ -556,7 +558,7 @@ class CyclicSolver(_IOMixin):
 
         # extract the harmonic and sum over polarizations
         time_freq = np.sum(self.cyclic_spectra[:, :, :, best_harmonic], axis=1)
-        self.h_doppler_delay = time2freq(freq2time(time_freq, axis=1), axis=0)
+        h_doppler_delay = time2freq(freq2time(time_freq, axis=1), axis=0)
 
         # apply general denoising *before* computing the origin-specific
         # fix below -- previously this ran after, so the geometric-mean
@@ -575,16 +577,16 @@ class CyclicSolver(_IOMixin):
         if self.delay_noise_shrinkage_threshold is not None:
             logger.debug(f"delay_noise_shrinkage_threshold={self.delay_noise_shrinkage_threshold}")
             np.copyto(
-                self.h_doppler_delay,
+                h_doppler_delay,
                 apply_delay_shrinkage_threshold(
-                    self.h_doppler_delay,
+                    h_doppler_delay,
                     self.delay_noise_shrinkage_threshold,
                     self.delay_noise_selection_threshold,
                     self.noise_smoothing_kernel,
                 ),
             )
 
-        power = np.abs(self.h_doppler_delay) ** 2
+        power = np.abs(h_doppler_delay) ** 2
 
         # set the power at the origin equal to the logarithmic/geometric mean of its neighbours
         # (excluding any neighbour that is exactly zero -- log10(0) is -inf
@@ -599,28 +601,30 @@ class CyclicSolver(_IOMixin):
                     log_sum += np.log10(power[i, j])
                     n_nonzero += 1
         mean_amp = pow(10, 0.5 * log_sum / n_nonzero) if n_nonzero > 0 else 0.0
-        zero_amp = np.abs(self.h_doppler_delay[0, 0])
+        zero_amp = np.abs(h_doppler_delay[0, 0])
         logger.debug(f"amplitude[0,0] current={zero_amp} new={mean_amp}")
 
         if zero_amp > 0:
-            self.h_doppler_delay[0, 0] *= mean_amp / zero_amp
+            h_doppler_delay[0, 0] *= mean_amp / zero_amp
         else:
             # phase is undefined for an exactly-zero complex value -- 0 is
             # as good a default as any, and avoids a 0/0 division
-            self.h_doppler_delay[0, 0] = mean_amp + 0.0j
-        self.h_doppler_delay[:, self.nchan // 2 :] = 0.0
+            h_doppler_delay[0, 0] = mean_amp + 0.0j
+        h_doppler_delay[:, self.nchan // 2 :] = 0.0
 
-        power = np.abs(self.h_doppler_delay) ** 2
+        power = np.abs(h_doppler_delay) ** 2
         total_power = np.sum(power)
         if total_power > 0:
             scale_factor = np.sqrt(initial_total_power / total_power)
             logger.debug(f"total power original={initial_total_power} new={total_power} scale={scale_factor}")
-            self.h_doppler_delay *= scale_factor
+            h_doppler_delay *= scale_factor
         else:
             logger.debug(
                 f"total power original={initial_total_power} new={total_power}: "
                 "best-harmonic wavefield is entirely zero, leaving unscaled"
             )
+
+        self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
     def _perturb_initial_wavefield_guess(self):
         """
@@ -633,26 +637,27 @@ class CyclicSolver(_IOMixin):
         changing the overall flux normalization the rest of initWavefield
         expects downstream (e.g. updateProfile's gain fit).
         """
-        initial_total_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+        initial_total_power = np.sum(np.abs(self.h_time_delay) ** 2)
 
+        h_doppler_delay = self._doppler_delay_view()
         rng = np.random.default_rng()
         sigma = self.initial_guess_noise_perturbation_rms / np.sqrt(2.0)
         noise = sigma * (
-            rng.standard_normal(self.h_doppler_delay.shape) + 1j * rng.standard_normal(self.h_doppler_delay.shape)
+            rng.standard_normal(h_doppler_delay.shape) + 1j * rng.standard_normal(h_doppler_delay.shape)
         )
-        self.h_doppler_delay = self.h_doppler_delay + noise
+        h_doppler_delay = h_doppler_delay + noise
         # the initial guess must respect causality regardless of how long
         # self.enforce_causality holds during the FISTA loop itself
-        self.h_doppler_delay[:, self.nchan // 2 :] = 0.0
+        h_doppler_delay[:, self.nchan // 2 :] = 0.0
 
-        perturbed_power = np.sum(np.abs(self.h_doppler_delay) ** 2)
+        perturbed_power = np.sum(np.abs(h_doppler_delay) ** 2)
         scale_factor = np.sqrt(initial_total_power / perturbed_power)
         logger.debug(
             f"initial_guess_noise_perturbation_rms={self.initial_guess_noise_perturbation_rms}: "
             f"total power original={initial_total_power} after-noise={perturbed_power} scale={scale_factor}"
         )
-        self.h_doppler_delay *= scale_factor
-        self.h_time_delay = freq2time(self.h_doppler_delay, axis=0)
+        h_doppler_delay *= scale_factor
+        self.h_time_delay = freq2time(h_doppler_delay, axis=0)
 
     def solve(self, **kwargs):
         """
@@ -865,19 +870,18 @@ class CyclicSolver(_IOMixin):
         self.normalize(self.h_time_freq)
 
         self.h_time_delay = freq2time(self.h_time_freq, axis=1)
-        self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
 
         if self.align_frequency_responses:
             logger.info(f"reduce temporal phase and delay noise")
             h_time_freq = time2freq(self.h_time_delay, axis=1)
             align_to_neighbour(h_time_freq)
             self.h_time_delay = freq2time(h_time_freq, axis=1)
-            self._sync_all_from_time_delay()
+            self._sync_time_freq_from_time_delay()
 
         if self.reduce_temporal_phase_noise:
             logger.info(f"reduce temporal phase noise")
             minimize_temporal_phase_noise(self.h_time_delay)
-            self._sync_all_from_time_delay()
+            self._sync_time_freq_from_time_delay()
 
         if self.minimize_spectral_entropy:
             if self.minimize_spectral_entropy_delay:
@@ -888,7 +892,7 @@ class CyclicSolver(_IOMixin):
             else:
                 logger.info(f"minimize spectral entropy")
                 minimize_spectral_entropy(self.h_time_delay)
-            self._sync_all_from_time_delay()
+            self._sync_time_freq_from_time_delay()
 
         if self.enforce_orthogonal_real_imag:
             h_doppler_delay = self._doppler_delay_view()
@@ -900,14 +904,12 @@ class CyclicSolver(_IOMixin):
             h_doppler_delay *= np.conj(ph)
             self.h_time_delay = freq2time(h_doppler_delay, axis=0)
             self._sync_time_freq_from_time_delay()
-            self.h_doppler_delay = h_doppler_delay
 
         if self.enforce_real_at_origin:
             h_doppler_delay = self._doppler_delay_view()
             h_doppler_delay[0, 0] = np.real(h_doppler_delay[0, 0])
             self.h_time_delay = freq2time(h_doppler_delay, axis=0)
             self._sync_time_freq_from_time_delay()
-            self.h_doppler_delay = h_doppler_delay
 
         # CuPy port (see /home/willem/.claude/plans/stateful-dreaming-wall.md):
         # same single-flag dispatch as updateWavefield/compute_gradient_batched.
@@ -1293,13 +1295,16 @@ class CyclicSolver(_IOMixin):
 
         return cs, norm
 
-    def normalize(self, h_doppler_delay):
+    def normalize(self, h):
+        # Parseval/orthonormal-DFT power is invariant to which domain h is
+        # expressed in, so this is correct whether h is h_time_freq,
+        # h_time_delay, or h_doppler_delay.
         if self.conserve_wavefield_energy:
-            total_power = np.sum(np.abs(h_doppler_delay) ** 2)
+            total_power = np.sum(np.abs(h) ** 2)
             factor = np.sqrt(self.expected_power / total_power)
-            h_doppler_delay *= factor
+            h *= factor
             # print(f'normalize factor={factor}')
-        return h_doppler_delay
+        return h
 
     def _sync_time_freq_from_time_delay(self):
         """Recompute self.h_time_freq -- H(nu,T), the per-channel frequency
@@ -1319,17 +1324,6 @@ class CyclicSolver(_IOMixin):
         self.h_time_delay_grad."""
         self.h_time_freq_grad = time2freq(self.h_time_delay_grad, axis=1)
 
-    def _sync_all_from_time_delay(self):
-        """Refresh both h_time_freq (the new canonical state) and
-        h_doppler_delay from the current self.h_time_delay. Transitional
-        (Stages 2-4 of the refactor): h_doppler_delay is no longer read by
-        anything in this file, but cycsolve.py's FISTA loop still reads/
-        writes CS.h_doppler_delay directly until Stage 5 migrates it to
-        h_time_freq, so both stay in sync until then. Stage 6 drops the
-        second line once nothing needs it."""
-        self._sync_time_freq_from_time_delay()
-        self.h_doppler_delay = time2freq(self.h_time_delay, axis=0)
-
     def _doppler_delay_view(self):
         """On-demand h(tau;omega), computed from the current
         self.h_time_delay -- not persisted. A few regularizers (delay
@@ -1341,6 +1335,19 @@ class CyclicSolver(_IOMixin):
         the returned array must fold the change back via
         self.h_time_delay = freq2time(view, axis=0) before continuing."""
         return time2freq(self.h_time_delay, axis=0)
+
+    @property
+    def h_doppler_delay(self):
+        """Read-only h(tau;omega), recomputed on demand from self.h_time_delay
+        (Stage 6 of the refactor: h_doppler_delay is no longer persistent
+        state anywhere in this file -- h_time_freq is). Kept as a property,
+        not an attribute, purely for plotting.py/io.py's existing callers
+        (e.g. plot_Doppler_vs_delay) and any other read-only diagnostic use;
+        assigning to it raises AttributeError by design, since there is no
+        longer a well-defined "the" persistent h_doppler_delay to write into
+        -- callers that need to mutate a Doppler-delay array should use
+        _doppler_delay_view() and fold the result back into h_time_delay."""
+        return self._doppler_delay_view()
 
     def updateWavefieldSubint(self, ipol, isub):
         if self.save_cyclic_spectra:
@@ -1468,14 +1475,11 @@ class CyclicSolver(_IOMixin):
             h_doppler_delay *= self.doppler_taper[:, np.newaxis]
 
         # Fold any regularization above back into the canonical intermediate
-        # (h_time_delay) and persistent (h_time_freq) states. h_doppler_delay
-        # is also kept in sync for now: nothing in this file reads it as
-        # authoritative anymore, but cycsolve.py's FISTA loop still reads/
-        # writes CS.h_doppler_delay directly until Stage 5 migrates it to
-        # h_time_freq.
+        # (h_time_delay) and persistent (h_time_freq) states.
+        # self.h_doppler_delay is a read-only property recomputed from
+        # h_time_delay on demand, so nothing further to sync here.
         self.h_time_delay = freq2time(h_doppler_delay, axis=0)
         self._sync_time_freq_from_time_delay()
-        self.h_doppler_delay = h_doppler_delay
 
         nonzero = np.count_nonzero(h_doppler_delay)
         # although re & im count as separate terms in sum,

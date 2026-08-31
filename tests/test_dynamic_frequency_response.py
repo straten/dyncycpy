@@ -10,6 +10,7 @@ test files) so every test this refactor adds is easy to find in one place.
 """
 
 import numpy as np
+import pytest
 
 import pycyc
 
@@ -82,6 +83,78 @@ def test_doppler_delay_view_is_not_persisted():
     view[0, 0] = 12345.0 + 6789.0j
 
     np.testing.assert_array_equal(CS.h_time_delay, original)
+
+
+def test_h_doppler_delay_property_matches_doppler_delay_view():
+    rng = np.random.default_rng(106)
+    CS = _minimal_cs(rng)
+
+    np.testing.assert_array_equal(CS.h_doppler_delay, CS._doppler_delay_view())
+
+
+def test_h_doppler_delay_property_tracks_h_time_delay_live():
+    """Stage 6: h_doppler_delay is a read-only property computed on demand
+    from h_time_delay, not persistent state -- it must reflect whatever
+    h_time_delay currently holds, even if that changes after the CS is
+    built, with no separate sync step."""
+    rng = np.random.default_rng(107)
+    CS = _minimal_cs(rng)
+    CS.h_time_delay = random_complex(rng, CS.h_time_delay.shape)
+
+    np.testing.assert_array_equal(CS.h_doppler_delay, pycyc.time2freq(CS.h_time_delay, axis=0))
+
+
+def test_h_doppler_delay_property_is_read_only():
+    rng = np.random.default_rng(108)
+    CS = _minimal_cs(rng)
+
+    with pytest.raises(AttributeError):
+        CS.h_doppler_delay = np.zeros_like(CS.h_time_delay)
+
+
+def test_compute_first_wavefield_from_best_harmonic_writes_h_time_delay_causally():
+    """Stage 6: compute_first_wavefield_from_best_harmonic now builds its
+    result in a local h_doppler_delay and only ever writes self.h_time_delay
+    (h_doppler_delay is a read-only property, not settable) -- check the
+    Doppler-delay-domain invariants the function is documented to enforce
+    (acausal half zeroed, total power rescaled back to the pre-call value,
+    Parseval-invariant so checkable via either domain) survive that change,
+    since a domain mixup in the rewrite (e.g. zeroing the wrong axis) would
+    silently violate one of these without necessarily crashing."""
+    rng = np.random.default_rng(109)
+    CS = _build_gradient_test_solver(rng)
+    CS.first_wavefield_from_best_harmonic = CS.nharm
+    CS.delay_noise_shrinkage_threshold = None
+    CS.noise_smoothing_kernel = None
+    initial_total_power = np.sum(np.abs(CS.h_time_delay) ** 2)
+
+    CS.compute_first_wavefield_from_best_harmonic()
+
+    h_doppler_delay = CS.h_doppler_delay
+    np.testing.assert_array_equal(h_doppler_delay[:, CS.nchan // 2 :], 0.0)
+    np.testing.assert_allclose(np.sum(np.abs(h_doppler_delay) ** 2), initial_total_power, rtol=1e-9)
+    np.testing.assert_allclose(
+        pycyc.freq2time(h_doppler_delay, axis=0), CS.h_time_delay, rtol=1e-9, atol=1e-9
+    )
+
+
+def test_perturb_initial_wavefield_guess_preserves_causality_and_power():
+    """Same rationale as the best-harmonic test above: _perturb_initial_
+    wavefield_guess now reads/writes h_time_delay only, via a local
+    _doppler_delay_view() -- check its documented invariants (acausal half
+    stays zero, total power restored to its pre-perturbation value) still
+    hold."""
+    rng = np.random.default_rng(110)
+    CS = _build_gradient_test_solver(rng)
+    CS.h_time_delay[:, CS.nchan // 2 :] = 0.0  # establish the causal precondition the method assumes
+    CS.initial_guess_noise_perturbation_rms = 0.5
+    initial_total_power = np.sum(np.abs(CS.h_time_delay) ** 2)
+
+    CS._perturb_initial_wavefield_guess()
+
+    h_doppler_delay = CS.h_doppler_delay
+    np.testing.assert_array_equal(h_doppler_delay[:, CS.nchan // 2 :], 0.0)
+    np.testing.assert_allclose(np.sum(np.abs(h_doppler_delay) ** 2), initial_total_power, rtol=1e-9)
 
 
 def _build_updatewavefield_test_solver(rng, nsubint=3):

@@ -121,7 +121,6 @@ def _build_synthetic_cyclic_solver(rng, nsubint=8, inject_jitter=True):
     # rough (perturbed, not exact) initial wavefield guess
     ht_guess = ht_true + 0.5 * (rng.standard_normal(nlag) + 1j * rng.standard_normal(nlag))
     CS.h_time_delay = np.tile(ht_guess, (nsubint, 1))
-    CS.h_doppler_delay = pycyc.time2freq(CS.h_time_delay, axis=0)
     CS.h_time_freq = pycyc.time2freq(CS.h_time_delay, axis=1)
 
     ph0 = np.zeros(nharm, dtype=np.complex128)

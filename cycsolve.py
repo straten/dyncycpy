@@ -465,12 +465,17 @@ if args.solver == "fista":
 
         if plot_all or i < 10 or i % 10 == 0:
             base = "cycsolve_" + f"{i:03d}"
+            # x_n is H(nu,T) (Stage 5); plot_Doppler_vs_delay/plot_power_vs_delay
+            # and the pickled wavefield are all in the h(tau,omega) domain, so
+            # transform on demand -- preserves the on-disk/plot convention that
+            # this session's existing analysis scripts already assume.
+            x_n_doppler_delay = pycyc.time2freq(pycyc.freq2time(x_n, axis=1), axis=0)
             try:
-                plot_Doppler_vs_delay(x_n, CS.mean_time_offset, CS.bw, base + "_wavefield.png")
+                plot_Doppler_vs_delay(x_n_doppler_delay, CS.mean_time_offset, CS.bw, base + "_wavefield.png")
             except Exception:
                 print("##################################### wavefield plot failed")
             with open(base + "_wavefield.pkl", "wb") as fh:
-                pickle.dump(x_n, fh)
+                pickle.dump(x_n_doppler_delay, fh)
 
             if CS.model_gain_variations:
                 try:
@@ -484,7 +489,7 @@ if args.solver == "fista":
                     pickle.dump(CS.optimal_gains, fh)
 
             try:
-                plot_power_vs_delay(x_n, CS.bw, base + "_impulse_response.png")
+                plot_power_vs_delay(x_n_doppler_delay, CS.bw, base + "_impulse_response.png")
             except Exception:
                 print("##################################### impulse response plot failed")
 
@@ -553,11 +558,9 @@ else:  # args.solver == "outer"
         loop_kwargs=dict(iprint=-1),
     )
 
-    # outer_loop updates self.h_time_delay per subint directly; refresh the
-    # Doppler-delay wavefield from it for plotting (unload_solution below
-    # only needs h_time_delay, so this is for diagnostics only).
-    CS.h_doppler_delay = pycyc.time2freq(CS.h_time_delay, axis=0)
-
+    # outer_loop updates self.h_time_delay per subint directly; CS.h_doppler_delay
+    # is a read-only property computed on demand from it, for plotting
+    # (unload_solution below only needs h_time_delay).
     try:
         plot_Doppler_vs_delay(CS.h_doppler_delay, CS.mean_time_offset, CS.bw, "cycsolve_outer_wavefield.png")
     except Exception:
