@@ -138,36 +138,81 @@ def test_gain_bug_regression():
     np.testing.assert_allclose(grad_2, 2.5**2 * grad_1, rtol=1e-10)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Pre-existing bug, found incidentally while finite-difference-testing "
-        "dynamic_frequency_response_refactor's updateWavefield end-to-end (see "
-        "/home/wvanstra/.claude/plans/lovely-forging-mountain.md), not fixed "
-        "here -- out of that refactor's scope. With include_Nyquist=True (the "
-        "CyclicSolver default, and required by updateProfile_batched, so this "
-        "affects every real run through cycsolve.py --gpu), cyclic_merit_and_"
-        "grad's analytic gradient has a ~36% relative error against its own "
-        "finite difference, isolated to the Nyquist harmonic specifically: "
-        "zeroing just that one harmonic in both cs_data and the profile makes "
-        "the mismatch vanish entirely (checked separately, not reproduced "
-        "here). include_Nyquist=False (this file's default) does not exhibit "
-        "it -- likely something in how the Nyquist bin's shear/model "
-        "contribution is folded into the gradient sum, not yet root-caused."
-    ),
-    strict=True,
-)
-def test_cyclic_merit_and_grad_matches_finite_difference_include_nyquist():
+@pytest.mark.parametrize("gain", [1.0, 2.5, 0.3])
+@pytest.mark.parametrize("exclude_DC", [0, 1])
+@pytest.mark.parametrize("nyquist_data_is_real", [False, True])
+def test_cyclic_merit_and_grad_matches_finite_difference_include_nyquist(gain, exclude_DC, nyquist_data_is_real):
+    """Regression test for the Nyquist-harmonic gradient bug (found while
+    finite-difference-testing dynamic_frequency_response_refactor's
+    updateWavefield end-to-end, see
+    /home/wvanstra/.claude/plans/lovely-forging-mountain.md, fixed by
+    switching make_model_cs's Nyquist-harmonic forcing from .abs() to .real()
+    and adding the matching gradient correction in cyclic_merit_and_grad):
+    with include_Nyquist=True (the CyclicSolver default, and required by
+    updateProfile_batched, so this affects every real run through
+    cycsolve.py --gpu), the analytic gradient must match a numerical
+    (Wirtinger) finite difference of the same function's own merit.
+
+    nyquist_data_is_real parametrizes over the specific mechanism: a
+    residual with a nonzero imaginary part at the Nyquist harmonic (real
+    data always has *some* residual noise there, even though the true
+    signal must be real) is exactly what exposed the bug -- the pre-fix
+    gradient carried a spurious i*Im(residual)*(dz*-dz) term at that column
+    that vanished only when the residual happened to be exactly real there.
+    Both cases must pass now."""
     rng = np.random.default_rng(0)
-    params = make_cs(NCHAN, NHARM, NLAG, BW_MHZ, REF_FREQ_HZ, include_Nyquist=True)
+    params = make_cs(NCHAN, NHARM, NLAG, BW_MHZ, REF_FREQ_HZ, include_Nyquist=True, exclude_DC=exclude_DC)
     s0 = random_complex(rng, (NHARM,))
     cs_data = random_complex(rng, (NCHAN, NHARM))
+    if nyquist_data_is_real:
+        cs_data[:, NHARM - 1] = cs_data[:, NHARM - 1].real
     ht0 = random_complex(rng, (NLAG,))
 
     def merit_only(ht):
-        merit, _grad, _nonzero = pycyc.cyclic_merit_and_grad(ht, params, s0, cs_data, gain=1.0)
+        merit, _grad, _nonzero = pycyc.cyclic_merit_and_grad(ht, params, s0, cs_data, gain=gain)
         return merit
 
-    _analytic_merit, analytic_grad, _ = pycyc.cyclic_merit_and_grad(ht0, params, s0, cs_data, gain=1.0)
+    _analytic_merit, analytic_grad, _ = pycyc.cyclic_merit_and_grad(ht0, params, s0, cs_data, gain=gain)
     numeric_grad = wirtinger_finite_diff_grad(merit_only, ht0)
 
     np.testing.assert_allclose(analytic_grad, numeric_grad, rtol=1e-5, atol=1e-5)
+
+
+def test_make_model_cs_nyquist_harmonic_is_real_not_magnitude():
+    """make_model_cs must force the Nyquist harmonic to Re(z), not |z|:
+    .abs() would also flip the sign whenever the unconstrained z happens to
+    have a negative real part, which .real() must not do."""
+    rng = np.random.default_rng(3)
+    params = make_cs(NCHAN, NHARM, NLAG, BW_MHZ, REF_FREQ_HZ, include_Nyquist=True)
+    s0 = random_complex(rng, (NHARM,))
+    ht0 = random_complex(rng, (NLAG,))
+    hf0 = pycyc.time2freq(ht0)
+
+    cs, hfplus, hfminus = pycyc.make_model_cs(params, hf0, s0)
+    unconstrained = (s0[np.newaxis, :] * hfplus * np.conj(hfminus))[:, NHARM - 1]
+
+    assert np.any(unconstrained.real < 0), "test fixture too weak: no negative-real-part case to distinguish .real from .abs"
+    np.testing.assert_allclose(cs[:, NHARM - 1].imag, 0.0, atol=1e-12)
+    np.testing.assert_allclose(cs[:, NHARM - 1], unconstrained.real, rtol=1e-9, atol=1e-9)
+
+
+def test_cyclic_merit_and_grad_batched_matches_nonbatched_include_nyquist():
+    """The batched Nyquist gradient correction (cyclic_merit_and_grad_batched)
+    must match the non-batched cyclic_merit_and_grad it's meant to mirror,
+    not just pass finite differences on its own -- covers a second, easy-to-
+    miss call site (make_model_cs_batched / cyclic_merit_and_grad_batched)
+    for the same fix."""
+    rng = np.random.default_rng(4)
+    batch = 5
+    params = make_cs(NCHAN, NHARM, NLAG, BW_MHZ, REF_FREQ_HZ, include_Nyquist=True)
+    s0 = random_complex(rng, (NHARM,))
+    cs_data_batch = random_complex(rng, (batch, NCHAN, NHARM))
+    ht_batch = random_complex(rng, (batch, NLAG))
+
+    merit_b, grad_b, nonzero_b = pycyc.cyclic_merit_and_grad_batched(ht_batch, params, s0, cs_data_batch)
+
+    for i in range(batch):
+        merit_i, grad_i, nonzero_i = pycyc.cyclic_merit_and_grad(ht_batch[i], params, s0, cs_data_batch[i])
+        np.testing.assert_allclose(merit_b[i], merit_i, rtol=1e-9, atol=1e-9)
+        np.testing.assert_allclose(grad_b[i], grad_i, rtol=1e-9, atol=1e-9)
+        assert nonzero_b[i] == nonzero_i

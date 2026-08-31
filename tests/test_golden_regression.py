@@ -70,29 +70,36 @@ def test_golden_merit_trajectory():
 # only if a stage *intentionally* changes behavior; every structural stage
 # (2-6) should leave it unchanged, since none of them are meant to touch the
 # math, only which array is treated as persistent state.
+#
+# Regenerated once, intentionally: this fixture uses include_Nyquist=True
+# with fully random complex cs_data (no constraint on the Nyquist harmonic
+# being real), which is exactly the case pycyc.objective.make_model_cs's
+# Nyquist-harmonic gradient fix (.abs() -> .real(), plus the matching
+# cyclic_merit_and_grad correction -- see tests/test_gradient_regression.py)
+# changes; these values reflect the corrected gradient.
 GOLDEN_MERITS_FISTA = [
-    4299.03376499944,
-    4298.341141787558,
-    4297.453671604273,
-    4296.376529214418,
-    4295.113009101457,
-    4293.66547863817,
-    4292.035780369103,
-    4290.22543459734,
-    4288.235753503163,
-    4286.067910667304,
-    4283.722985961566,
-    4281.201995865401,
-    4278.505914682629,
-    4275.635689823791,
-    4272.592253076715,
-    4269.376529081472,
-    4265.9894418058775,
-    4262.431919558309,
-    4258.704898909053,
-    4254.809327782647,
+    4222.114088567756,
+    4221.422400594005,
+    4220.536133858493,
+    4219.460459675667,
+    4218.19867223329,
+    4216.753140473786,
+    4215.12570982791,
+    4213.317904521486,
+    4211.331041533142,
+    4209.1663000166545,
+    4206.824766123768,
+    4204.307463272442,
+    4201.615373327308,
+    4198.749451853565,
+    4195.710639364232,
+    4192.4998697753035,
+    4189.11807686388,
+    4185.566199265303,
+    4181.845184380006,
+    4177.9559914522015,
 ]
-GOLDEN_FINAL_POWER_FISTA = 138.04497002080376
+GOLDEN_FINAL_POWER_FISTA = 138.02613929412604
 
 
 def test_golden_fista_trajectory_multi_subint():

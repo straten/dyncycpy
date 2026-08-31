@@ -165,26 +165,13 @@ def _build_updatewavefield_test_solver(rng, nsubint=3):
     CyclicSolver.__init__ "off" defaults for all of them, so updateWavefield
     can be exercised end-to-end without a real (PSRFITS-backed) CyclicSolver."""
     CS = _build_gradient_test_solver(rng, nsubint=nsubint)
-    # _build_gradient_test_solver hardcodes include_Nyquist=True (matching
-    # cycsolve.py's real GPU pipeline, which requires it -- see
-    # updateProfile_batched's own guard). Overridden to False here: while
-    # investigating this stage's own finite-difference check, discovered
-    # that pycyc.cyclic_merit_and_grad's analytic gradient does NOT match a
-    # finite-difference of its own merit when include_Nyquist=True (~36%
-    # relative error, isolated to the Nyquist harmonic specifically --
-    # zeroing just that one harmonic in both cs_data and the profile makes
-    # the mismatch vanish entirely). That's a pre-existing bug in the
-    # shear/gradient math, confirmed with zero involvement of anything this
-    # refactor touches (reproduces identically calling cyclic_merit_and_grad
-    # directly, bypassing updateWavefield entirely) -- out of scope for this
-    # refactor, but real and worth its own investigation: it affects every
-    # real run through cycsolve.py --gpu, which requires include_Nyquist=True.
-    # include_Nyquist=False here isolates this test from that unrelated bug
-    # so it actually checks what it's meant to (the entry/exit domain
-    # transforms), not a confound; updateWavefield's own correctness
-    # (matching cyclic_merit_and_grad exactly, whatever it returns) was
-    # separately confirmed with include_Nyquist=True too.
-    CS.include_Nyquist = False
+    # _build_gradient_test_solver hardcodes include_Nyquist=True, matching
+    # cycsolve.py's real GPU pipeline (updateProfile_batched requires it).
+    # Previously overridden to False here to dodge a pre-existing Nyquist-
+    # harmonic gradient bug in pycyc.objective.make_model_cs/cyclic_merit_
+    # and_grad, found while developing this test -- see
+    # tests/test_gradient_regression.py's Nyquist tests. Now fixed, so left
+    # at its real-pipeline default.
     CS.noise_threshold = None
     CS.noise_shrinkage_threshold = None
     CS.delay_noise_shrinkage_threshold = None

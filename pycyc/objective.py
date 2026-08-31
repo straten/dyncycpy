@@ -65,9 +65,30 @@ def make_model_cs(
 
     cs = cs * hfplus * np.conj(hfminus)
 
-    # force the Nyquist harmonic to be real-valued
+    # force the Nyquist harmonic to be real-valued: a real intrinsic
+    # profile's cyclic spectrum must have a real Nyquist harmonic (Hermitian
+    # symmetry of the profile's Fourier transform, same as an FFT's own
+    # Nyquist bin). Uses .real (not .abs, which also discards the sign) --
+    # see cyclic_merit_and_grad's matching gradient correction, which this
+    # must stay paired with: taking .real here changes the Wirtinger
+    # derivative of this column with respect to ht, and the gradient must
+    # account for that or it silently computes the derivative of the
+    # unconstrained (pre-.real) value instead.
+    #
+    # The trailing .copy() matters on the GPU (xp=cupy, see
+    # make_model_cs_batched/cyclic_merit_and_grad_batched): assigning
+    # xp.real(cs[:, nharm-1]) (a view aliased with cs itself) directly back
+    # into cs[:, nharm-1] left the imaginary component un-zeroed on cupy in
+    # one reproduction and correctly zeroed in another with the same shapes
+    # and dtype -- inconsistent across otherwise-identical runs, consistent
+    # with an unsynchronized read-after-write hazard on the aliased buffer
+    # rather than a deterministic cupy behavior difference from numpy.
+    # Forcing the real part into an independent array before the assignment
+    # (materializing it, rather than assigning a lazy/aliased view) removes
+    # the aliasing and was reliably correct in every reproduction attempted.
+    # numpy is unaffected either way; the copy costs one small array alloc.
     if params.include_Nyquist:
-        cs[:, nharm - 1] = np.abs(cs[:, nharm - 1])
+        cs[:, nharm - 1] = np.real(cs[:, nharm - 1]).copy()
 
     if padding:
         cs = cyclic_padding(cs, bw, ref_freq)
@@ -114,9 +135,13 @@ def make_model_cs_batched(
     # way it broadcasts against (batch, nchan, nharm) with no repeat/copy.
     cs = s0_batch[..., xp.newaxis, :] * hfplus * xp.conj(hfminus)
 
-    # force the Nyquist harmonic to be real-valued
+    # force the Nyquist harmonic to be real-valued -- see make_model_cs's
+    # matching comment; must stay paired with cyclic_merit_and_grad_batched's
+    # gradient correction below. The .copy() matters on the GPU -- see
+    # make_model_cs's comment on the aliased-assignment hazard it works
+    # around.
     if params.include_Nyquist:
-        cs[:, :, nharm - 1] = xp.abs(cs[:, :, nharm - 1])
+        cs[:, :, nharm - 1] = xp.real(cs[:, :, nharm - 1]).copy()
 
     return cs, hfplus, hfminus
 
@@ -243,6 +268,28 @@ def cyclic_merit_and_grad(
     active = _active_mask(residual.shape[0], residual.shape[1], params)
     gradient_residual = np.where(active, residual, 0)
 
+    # make_model_cs forced the Nyquist harmonic's model value to Re(z)
+    # instead of the unconstrained complex z = gain*s0*hfplus*conj(hfminus)
+    # -- w = Re(z) = (z+z*)/2 has dw/dz = dw/dz* = 1/2, not the identity
+    # relationship grad_sum1/grad_sum2 below assume for every other column.
+    # Working through the chain rule for |w - data|^2 (data may itself carry
+    # a nonzero imaginary part at this harmonic, e.g. measurement noise, even
+    # though w is exactly real by construction) collapses to exactly this:
+    # replace the residual (and, since it's now real, its own conjugate) at
+    # this one column with its real part before it feeds grad_sum1/grad_sum2
+    # below. Skipping this previously left a spurious i*Im(residual)*(dz* -
+    # dz) term in the gradient wherever the data's Nyquist harmonic wasn't
+    # exactly real -- confirmed by finite difference to be a ~36% relative
+    # error on synthetic data with no such constraint, and present (though
+    # smaller, from real data's own residual-noise imaginary part) on every
+    # real run through cycsolve.py --gpu, which requires include_Nyquist.
+    # .copy() -- see make_model_cs's comment on the aliased-assignment
+    # hazard this works around on the GPU (cyclic_merit_and_grad_batched
+    # below shares this exact pattern).
+    if params.include_Nyquist:
+        nharm = s0.shape[0]
+        gradient_residual[:, nharm - 1] = np.real(gradient_residual[:, nharm - 1]).copy()
+
     phasors = params.shear_phasors
 
     # make nchan / nlag copies of the intrinsic profile
@@ -340,6 +387,16 @@ def cyclic_merit_and_grad_batched(
     # once here rather than per subint
     active = xp.asarray(_active_mask(residual.shape[1], residual.shape[2], params))
     gradient_residual = xp.where(active[xp.newaxis, :, :], residual, 0)
+
+    # see cyclic_merit_and_grad's matching comment: make_model_cs_batched
+    # forced the Nyquist harmonic's model value to Re(z), so its residual's
+    # gradient contribution must use Re(residual) here too, not the general
+    # complex-residual formula grad_sum1/grad_sum2 below otherwise assume.
+    # .copy() -- see make_model_cs's comment on the aliased-assignment
+    # hazard this works around on the GPU.
+    if params.include_Nyquist:
+        nharm = s0_batch.shape[-1]
+        gradient_residual[:, :, nharm - 1] = xp.real(gradient_residual[:, :, nharm - 1]).copy()
 
     phasors = params.shear_phasors
 
