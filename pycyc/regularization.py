@@ -140,6 +140,21 @@ def delay_noise_power_wavefield(power, threshold):
     power.shape[1]
     # print(f"delay_noise_power_wavefield ndelay={ndelay} ndoppler={ndoppler}")
 
+    # "informative" (not previously zeroed) samples are counted below via a
+    # magnitude threshold rather than exact-zero comparison: a value that is
+    # mathematically exactly zero (permanently causally-zeroed delay bins,
+    # or bins already zeroed by a prior shrinkage pass) can pick up ~1e-14-
+    # relative floating-point noise from an unrelated Fourier round-trip
+    # elsewhere in the pipeline (e.g. a domain change that is a mathematical
+    # identity but not bit-exact) without becoming physically nonzero.
+    # np.count_nonzero's bit-exact test would then miscount such a bin as
+    # informative, diluting the averages below -- confirmed to move the
+    # estimated noise floor, and hence how much of the wavefield is shrunk
+    # to zero, by tens of percent on real data. A relative-epsilon floor,
+    # many orders of magnitude above float64's rounding floor but far below
+    # any genuine signal on this problem's dynamic range, avoids that.
+    eps = np.finfo(power.dtype).eps * np.max(power) * 1e4 if power.size and np.max(power) > 0 else 0.0
+
     # for the initial estimate of noise power as a function of delay,
     # extract a 10-doppler-shift-wide strip at the +/- extrema of Doppler shift
     # (where signal is expected to be low)
@@ -149,13 +164,13 @@ def delay_noise_power_wavefield(power, threshold):
     edge = power[min:max, :]
 
     sum_edge = np.sum(edge, axis=0)
-    count_edge = np.maximum(np.count_nonzero(edge, axis=0), 1)
+    count_edge = np.maximum(np.count_nonzero(edge > eps, axis=0), 1)
 
     masked_delay_power = sum_edge / count_edge
     for i in range(10):
         masked = np.heaviside(threshold * masked_delay_power - power, 1) * power
         sum_masked = np.sum(masked, axis=0)
-        count_masked = np.maximum(np.count_nonzero(masked, axis=0), 1)
+        count_masked = np.maximum(np.count_nonzero(masked > eps, axis=0), 1)
         masked_delay_power = sum_masked / (bias * count_masked)
 
     return masked_delay_power
