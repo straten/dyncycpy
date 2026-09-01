@@ -3,9 +3,9 @@ pycyc.regularization - wavefield regularization and degenerate-DOF removal.
 
 Covers noise thresholding/shrinkage of the 2D Doppler-delay wavefield,
 spectral-entropy minimization of the degenerate per-subint phase (pycyc.tex
-Appendix "Minimal Spectral Entropy"), removal of the degenerate
-phase/delay/shift projections from the wavefield gradient, and
-frequency-response alignment between neighbouring subints.
+Appendix "Minimal Spectral Entropy"), removal of the degenerate per-subint
+phase projection from the wavefield gradient, and frequency-response
+alignment between neighbouring subints.
 """
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
     "minimize_spectral_entropy_with_delay",
     "circular",
     "minimize_temporal_phase_noise",
-    "subtract_degenerate_delay_and_phase",
+    "subtract_degenerate_phase",
     "subtract_degenerate_dof",
     "spectral_shift",
     "spectral_distance",
@@ -498,50 +498,75 @@ def minimize_temporal_phase_noise(x):
         xprev = x[isub]
 
 
-def subtract_degenerate_delay_and_phase(h_delay_grad, h_delay):
+def subtract_degenerate_phase(h_delay_grad, h_delay):
     """
-    Subtract phase and delay terms from the gradient
+    Remove the gradient's component along the per-subint merit's one
+    genuinely degenerate direction: an arbitrary overall phase (H(nu) ->
+    H(nu)*e^{i*phi}, real phi). This is an exact null direction of the merit
+    for *every* H (verified: dM/dphi == 0 by finite difference, to float64
+    precision, at an arbitrary H) -- see pycyc.tex/fista.py's own gauge-
+    correction discussion of the same symmetry.
+
+    This function previously also removed a "rigid delay shift" direction
+    (H(nu) -> H(nu)*e^{i*2*pi*nu*tau}, real tau) under the assumption --
+    stated in cycsolve.py's own comment enabling subtract_degenerate_
+    projections -- that it was likewise an exact null direction. It is not:
+    WDvS13's model is S'(alpha,nu) = H(nu+alpha/2)*conj(H(nu-alpha/2))*S(alpha),
+    and a delay shift of H introduces an alpha-dependent phase factor
+    e^{i*2*pi*tau*alpha} into S' that a *fixed* S(alpha) (s0/ph_ref, held
+    constant while this per-subint gradient is computed) does not match --
+    a rigid delay shift is degenerate with a corresponding phase-vs-harmonic
+    rotation of the *profile*, not with holding the profile fixed. Confirmed
+    directly: dM/dtau != 0 by finite difference (checked at several
+    magnitudes, e.g. ~660 at merit~5100 for one representative case) at an
+    arbitrary H, for a per-subint merit with s0 held fixed -- exactly the
+    situation this function runs in. Removing any real-valued component
+    along that direction (however carefully -- even the real-only,
+    correctly-orthogonalized projection an earlier version of this function
+    used) therefore discards genuine, non-degenerate gradient information
+    the per-subint fit needs. Only the phase direction is removed now.
+
+    A complex (not real-only) projection coefficient would additionally be
+    wrong even for the genuinely degenerate phase direction: v_phase below
+    is a single complex vector (the tangent of H(nu)->H(nu)*e^{i*phi} at
+    phi=0), so a *complex* projection a = <v_phase,g> removes a full complex
+    multiple a*v_phase = Re(a)*v_phase + Im(a)*(i*v_phase) -- but only the
+    Re(a)*v_phase part corresponds to a real-phi perturbation. i*v_phase =
+    i*(i*h_freq) = -h_freq is an amplitude-rescaling direction, not a null
+    direction of the merit (confirmed by finite difference: dM/dt != 0 along
+    it) -- removing it was silently discarding more genuine gradient
+    information every iteration. Using only Re(a) fixes that.
     """
     h_freq_grad = time2freq(h_delay_grad)
     h_freq = time2freq(h_delay)
-    nchan = h_freq.shape[0]
 
-    # phase basis vector
+    # phase basis vector: tangent of H(nu) -> H(nu)*e^{i*phi} at phi=0
     v_phase = 1.0j * h_freq
     v_phase /= np.sqrt(np.sum(np.abs(v_phase) ** 2))
-    # linear phase gradient along frequency basis vector
-    v_delay = 1.0j * np.fft.fftfreq(nchan) * h_freq
-    v_delay /= np.sqrt(np.sum(np.abs(v_delay) ** 2))
 
-    # verify orthogonality of basis vectors
-    dot12 = np.sum(np.conj(v_phase) * v_delay)
-    logger.info(f"subtract_degenerate_delay_and_phase dot product of basis vectors: {dot12}")
-
-    # project gradient onto basis vectors, then subtract the projections from the gradient
-    a_phase = np.sum(np.conj(v_phase) * h_freq_grad)
+    # real-only projection: phase is a real-parametrized degeneracy (see
+    # docstring), so only Re(<v_phase,g>) is ever subtracted -- Im(<v_phase,
+    # g>) is genuine gradient information (the amplitude direction) and must
+    # survive.
+    a_phase = np.real(np.sum(np.conj(v_phase) * h_freq_grad))
     h_freq_grad -= a_phase * v_phase
-
-    b_phase = np.sum(np.conj(v_phase) * h_freq_grad)
-    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_phase=} {b_phase=}")
-
-    a_delay = np.sum(np.conj(v_delay) * h_freq_grad)
-    h_freq_grad -= a_delay * v_delay
-
-    b_delay = np.sum(np.conj(v_delay) * h_freq_grad)
-    logger.info(f"subtract_degenerate_delay_and_phase projections: {a_delay=} {b_delay}")
+    logger.debug(f"subtract_degenerate_phase projection: {a_phase=}")
 
     return freq2time(h_freq_grad)
 
 
 def subtract_degenerate_dof(h_time_delay_grad, h_time_delay):
     """
-    Subtract phase and two linear phase gradients from the gradient
+    Remove each subint's own degenerate-phase gradient component (see
+    subtract_degenerate_phase) independently. Previously also removed a
+    "rigid delay shift" direction per subint; dropped (see
+    subtract_degenerate_phase's docstring) after confirming by finite
+    difference that it is not actually a null direction of the per-subint
+    (profile-held-fixed) merit this operates on.
     """
     ntime = h_time_delay.shape[0]
     for itime in range(ntime):
-        h_time_delay_grad[itime, :] = subtract_degenerate_delay_and_phase(
-            h_time_delay_grad[itime, :], h_time_delay[itime, :]
-        )
+        h_time_delay_grad[itime, :] = subtract_degenerate_phase(h_time_delay_grad[itime, :], h_time_delay[itime, :])
     return h_time_delay_grad
 
 

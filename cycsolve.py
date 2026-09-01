@@ -167,21 +167,32 @@ CS.pad_cyclic_spectra = False
 # otherwise suppress it. See the delay/omega noise-growth investigation.
 CS.enforce_causality = True
 
-# Remove two real per-subint degenerate directions from the gradient every
-# iteration -- an arbitrary overall phase and an arbitrary rigid delay
-# shift of each subint's own impulse response, both exact null directions
-# of the per-subint merit (see pycyc.regularization.subtract_degenerate_dof/
-# subtract_degenerate_delay_and_phase, and fista.take_fista_step's own
-# comment on this same invariance). Previously left off (the CyclicSolver
-# default): FISTA's momentum term amplifies whatever difference exists
-# between consecutive iterates regardless of whether the gradient actually
-# opposes it, so with nothing projecting these 2*nspec directions out, any
-# drift along them (initialization asymmetry, interaction with the other
+# Remove each subint's own degenerate-phase gradient component every
+# iteration -- an arbitrary overall phase of that subint's own impulse
+# response, the one direction that is an exact null direction of the
+# per-subint merit (see pycyc.regularization.subtract_degenerate_dof/
+# subtract_degenerate_phase, and fista.take_fista_step's own comment on
+# this same invariance). Originally also removed a "rigid delay shift"
+# direction and used the wrong (full complex, not real-only) projection
+# coefficient for both -- dropped/fixed after finding by finite difference
+# that delay is *not* actually degenerate for this per-subint,
+# profile-held-fixed merit (a delay shift of H is degenerate with a
+# corresponding phase-vs-harmonic rotation of the *profile*, not with
+# holding the profile fixed), and that the complex coefficient was
+# silently discarding a genuine, non-degenerate amplitude-direction
+# gradient component every iteration -- see subtract_degenerate_phase's
+# docstring for the full derivation.
+#
+# Enabled (the CyclicSolver default is off): FISTA's momentum term
+# amplifies whatever difference exists between consecutive iterates
+# regardless of whether the gradient actually opposes it, so with nothing
+# projecting the per-subint degenerate-phase direction out, any drift
+# along it (initialization asymmetry, interaction with the other
 # regularizers) compounds unchecked. Diagnosed from h(tau=0,omega) growing
 # a large, non-physical near-DC spike and surrounding Gibbs ringing across
-# iterations on real P2067_full data -- a coherent per-subint phase/delay
-# drift is exactly the kind of low-order perturbation that concentrates
-# near zero Doppler when Fourier-transformed along the subint axis.
+# iterations on real P2067_full data -- a coherent per-subint phase drift
+# is exactly the kind of low-order perturbation that concentrates near
+# zero Doppler when Fourier-transformed along the subint axis.
 CS.subtract_degenerate_projections = True
 
 warmup_passes = 1
