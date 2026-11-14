@@ -19,6 +19,8 @@
 #include <fftw3.h>
 #include <cassert>
 #include <cstring>
+#include <cmath>
+#include <ctime>
 
 using namespace std;
 
@@ -32,10 +34,22 @@ public:
   //! Default constructor
   dyn_res_sim ();
 
+  //! Seed the random number generators
+  void setup ();
+
   //! Process the given archive
   void process (Pulsar::Archive*);
 
 protected:
+
+  //! Seed for the random number generators (if zero, the seed is derived from the current time)
+  long seed = 0;
+
+  //! Source of normally distributed noise
+  BoxMuller gasdev;
+
+  //! Output frequencies are reset to span the simulated bandwidth in upper sideband order
+  bool reset_frequencies = false;
 
   //! Sampling interval in seconds
   double sampling_interval = 15.0;
@@ -43,8 +57,8 @@ protected:
   //! Number of time samples
   unsigned ntime = 256;
 
-  //! Include Nyquist (if zero, Nyquist frequency is zeroed)
-  unsigned include_Nyquist = 1;
+  //! Include the Nyquist harmonic (if false, the Nyquist harmonic is zeroed)
+  bool include_Nyquist = true;
 
   //! Timescale of exponential decay of impulse response
   double arc_decay = 0.0;
@@ -79,10 +93,10 @@ protected:
   //! Add noise to the dynamic response, as a fraction of the rms in the response
   double dyn_resp_noise_fraction = 0.0;
 
-  //! Add instrumental noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  //! Add instrumental noise to the simulated dynamic periodic spectra, as a fraction of the peak harmonic amplitude
   double instrumental_noise_fraction = 0.0;
 
-  //! Add self noise to the simulated dynamic periodic spectra, as a fraction of the peak
+  //! Add self noise to the simulated dynamic periodic spectra, as a fraction of the flux in each phase bin
   double self_noise_fraction = 0.0;
 
   //! discrete scattered wave (Doppler, delay) harmonic coordinates
@@ -138,6 +152,9 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
 {
   CommandLine::Argument* arg;
 
+  arg = menu.add (seed, "seed", "integer");
+  arg->set_help ("Seed for random number generators (default: derived from current time)");
+
   menu.add ("\n" "Dynamic response options:");
 
   arg = menu.add (sampling_interval, 't', "seconds");
@@ -168,13 +185,13 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg->set_help ("Arc maximum Doppler shift, as a fraction of maximum Doppler shift sampled");
 
   arg = menu.add (arc_width, 'w', "pixels");
-  arg->set_help ("Arc width in pixels along Doppler axis");
+  arg->set_help ("Gaussian width of arc in pixels, along both Doppler and delay axes");
 
   arg = menu.add (Tukey_width, 'T', "flat");
   arg->set_help ("Fractional width of flat top of Tukey window");
 
   arg = menu.add (dyn_resp_noise_fraction, 'r', "rms");
-  arg->set_help ("Standard deviation of additional noise, relative to rms of signal");
+  arg->set_help ("Standard deviation of real and imaginary parts of additional noise, relative to rms of signal");
 
   menu.add ("\n" "Periodic spectra options:");
 
@@ -194,19 +211,50 @@ void dyn_res_sim::add_options (CommandLine::Menu& menu)
   arg->set_help ("Phase bins per delay bin");  
 
   arg = menu.add (delta_profile, "delta");
-  arg->set_help ("Intrinsic profile is a delta function"); 
+  arg->set_help ("Intrinsic profile is a delta function");
+
+  arg = menu.add (include_Nyquist, "nonyq");
+  arg->set_help ("do not include the Nyquist harmonic of the profile");
 
   arg = menu.add (instrumental_noise_fraction, 'N', "rms");
-  arg->set_help ("Standard deviation of additional noise, relative to peak harmonic power");
+  arg->set_help ("Standard deviation of real and imaginary parts of additional noise in each harmonic, relative to peak harmonic amplitude");
 
   arg = menu.add (self_noise_fraction, 'S', "rms");
   arg->set_help ("Standard deviation of additional self-noise, relative to power in each phase bin");
+}
+
+void dyn_res_sim::setup ()
+{
+  // the current microsecond alone yields only 10^6 distinct seeds
+  if (!seed)
+    seed = long(time(nullptr)) * 1000000 + usec_seed();
+
+  cerr << "dyn_res_sim::setup random number seed=" << seed << endl;
+
+  srandom (seed);
+  gasdev = BoxMuller (seed);
 }
 
 std::complex<double> random_phasor()
 {
   double phase = random_double () * 2.0 * M_PI;
   return { cos(phase), sin(phase) };
+}
+
+//! Set the bandwidth and the centre frequency of each channel, such that frequency increases with channel index
+void set_frequencies (Pulsar::Archive* archive, double cfreq, double bw)
+{
+  unsigned nchan = archive->get_nchan();
+  double chanbw = bw / nchan;
+
+  archive->set_bandwidth (bw);
+
+  for (unsigned isub=0; isub < archive->get_nsubint(); isub++)
+  {
+    auto subint = archive->get_Integration(isub);
+    for (unsigned ichan=0; ichan < nchan; ichan++)
+      subint->set_centre_frequency (ichan, cfreq + (ichan + 0.5 - 0.5*nchan) * chanbw);
+  }
 }
 
 void dyn_res_sim::process (Pulsar::Archive* archive)
@@ -218,8 +266,13 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   archive->tscrunch();
 
   unsigned nchan = archive->get_nchan();
-  unsigned npol = archive->get_npol();
   unsigned nbin = archive->get_nbin();
+
+  // the simulated spectra are always upper sideband (see below)
+  reset_frequencies = phase_bin_per_delay || archive->get_bandwidth() < 0;
+
+  // the dynamic response spans ntime contiguous intervals, starting at the start of the input archive
+  MJD start_time = archive->start_time();
 
   if (phase_bin_per_delay)
   {
@@ -230,7 +283,8 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
     double period = nbin * phase_bin_time_interval;
 
     // get rid of the phase predictor
-    delete archive->get_model();
+    if (archive->has_model())
+      delete archive->get_model();
     auto subint = archive->get_Integration(0);
     subint->set_folding_period(period);
 
@@ -241,12 +295,20 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   }
 
   double cfreq = archive->get_centre_frequency();
-  double bw = archive->get_bandwidth();
-  double chanbw = bw / nchan;
+
+  // Radio frequency increases with channel index in all simulated output, regardless of the
+  // sideband of the input archive.  A causal response then lies at +ve delays along the
+  // Fourier conjugate of the channel index, as assumed by pycyc (which uses only |bw|).
+  double bw = fabs(archive->get_bandwidth());
 
   Reference::To<Pulsar::DynamicResponse> ext = new Pulsar::DynamicResponse;
   ext->set_centre_frequency(cfreq);
   ext->set_bandwidth(bw);
+
+  // as assumed by dsp::DynamicFilter, response itime spans min + interval * [itime, itime+1],
+  // where interval = (max - min) / ntime
+  ext->set_minimum_epoch(start_time);
+  ext->set_maximum_epoch(start_time + ntime * sampling_interval);
 
   ext->set_nchan(nchan);
   ext->set_ntime(ntime);
@@ -265,6 +327,8 @@ void dyn_res_sim::process (Pulsar::Archive* archive)
   clone->pscrunch();
   clone->fscrunch();
   clone->tscrunch();
+  if (reset_frequencies)
+    set_frequencies (clone, cfreq, bw);
   clone->add_extension(ext);
 
   std::string filename = "dyn_resp_sim.fits";
@@ -333,15 +397,15 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
   double log10_max = 0.0;
   double log10_min = -8.0;
 
-  unsigned ibin_min = 1;
   unsigned ibin_max = 0.5 * max_profile_harmonic * nbin;
 
   double log10_curvature = ( log10_min - log10_max ) / (ibin_max * ibin_max);
- 
+
   // DC bin
   profile[0] = 0.0;
 
-  for (unsigned ibin=1; ibin < nbin/2; ibin++)
+  // when nbin is even, the Nyquist harmonic (ibin = nbin/2) remains zero
+  for (unsigned ibin=1; ibin < (nbin+1)/2; ibin++)
   {
     double log10_amp = log10_max + log10_curvature * ibin * ibin;
     double amp = pow(10.0, log10_amp);
@@ -350,15 +414,13 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
 
     if (asymmetry)
     {
+      // rotate the phase of each harmonic by up to -asymmetry radians, without changing its amplitude
       double im_amp = 1.0 / (1.0 + exp(-0.5*ibin/double(ibin_max)));
-      profile[ibin] = std::complex<double>(amp, -asymmetry*im_amp);
+      profile[ibin] = std::polar(amp, -asymmetry*im_amp);
     }
 
     profile[nbin-ibin] = std::conj(profile[ibin]);
   }
-
-  if (!include_Nyquist)
-    profile[nbin/2] = 0;
 
   auto fftinout = reinterpret_cast<fftw_complex*>( profile.data() );
   auto plan = fftw_plan_dft_1d (nbin, fftinout, fftinout, FFTW_BACKWARD, FFTW_ESTIMATE);
@@ -376,70 +438,130 @@ void dyn_res_sim::generate_intrinsic_profile (Pulsar::Archive* archive)
 
 void dyn_res_sim::verify_output_extension (const Pulsar::DynamicResponse* ext, const std::string& filename)
 {
-  cerr << "dyn_res_sim::verify_output_extension get expected extension data" << endl;
+  const char* method = "dyn_res_sim::verify_output_extension";
+
+  cerr << method << " get expected extension data" << endl;
   auto data = ext->get_data().data();
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
   Reference::To<Pulsar::Archive> test = Pulsar::Archive::load(filename);
   auto test_ext = test->get<Pulsar::DynamicResponse>();
-  cerr << "dyn_res_sim::verify_output_extension get loaded extension data" << endl;
+  if (!test_ext)
+    throw Error (InvalidState, method, filename + " does not contain a DynamicResponse extension");
+
+  if (test_ext->get_nchan() != nchan || test_ext->get_ntime() != ntime || test_ext->get_npol() != ext->get_npol())
+    throw Error (InvalidState, method, "loaded ntime=%u nchan=%u npol=%u != expected ntime=%u nchan=%u npol=%u",
+                 test_ext->get_ntime(), test_ext->get_nchan(), test_ext->get_npol(), ntime, nchan, ext->get_npol());
+
+  unsigned errors = 0;
+
+  // header parameters are stored as double-precision values in text
+  auto differ = [](double loaded, double expected) { return fabs(loaded - expected) > 1e-12 * fabs(expected); };
+
+  if (differ (test_ext->get_centre_frequency(), ext->get_centre_frequency()))
+  {
+    cerr << method << " centre frequency loaded=" << test_ext->get_centre_frequency() << " != " << ext->get_centre_frequency() << endl;
+    errors ++;
+  }
+
+  if (differ (test_ext->get_bandwidth(), ext->get_bandwidth()))
+  {
+    cerr << method << " bandwidth loaded=" << test_ext->get_bandwidth() << " != " << ext->get_bandwidth() << endl;
+    errors ++;
+  }
+
+  // epochs are stored as a double-precision number of days, with a resolution of ~10 microseconds
+  double epoch_tolerance = 1e-4; // seconds
+
+  if (fabs((test_ext->get_minimum_epoch() - ext->get_minimum_epoch()).in_seconds()) > epoch_tolerance)
+  {
+    cerr << method << " minimum epoch loaded=" << test_ext->get_minimum_epoch() << " != " << ext->get_minimum_epoch() << endl;
+    errors ++;
+  }
+
+  if (fabs((test_ext->get_maximum_epoch() - ext->get_maximum_epoch()).in_seconds()) > epoch_tolerance)
+  {
+    cerr << method << " maximum epoch loaded=" << test_ext->get_maximum_epoch() << " != " << ext->get_maximum_epoch() << endl;
+    errors ++;
+  }
+
+  if (test_ext->get_impulse_pos() != ext->get_impulse_pos() || test_ext->get_impulse_neg() != ext->get_impulse_neg())
+  {
+    cerr << method << " impulse pos:neg loaded=" << test_ext->get_impulse_pos() << ":" << test_ext->get_impulse_neg()
+         << " != " << ext->get_impulse_pos() << ":" << ext->get_impulse_neg() << endl;
+    errors ++;
+  }
+
+  cerr << method << " get loaded extension data" << endl;
   auto test_data = test_ext->get_data().data();
+
+  // the response is stored as double-precision complex values
+  unsigned data_errors = 0;
   for (unsigned ichan=0; ichan < nchan; ichan++)
   {
     for (unsigned itime=0; itime < ntime; itime++)
     {
       unsigned idx = itime*nchan + ichan;
       auto diff = test_data[idx] - data[idx];
-      if (abs(diff) > 1e-3)
+      if (abs(diff) > 1e-12)
       {
-        cerr << "ichan=" << ichan << " itime=" << itime << " " << data[idx] << " - " << test_data[idx] << " = " << diff << endl;
+        if (data_errors < 10)
+          cerr << "ichan=" << ichan << " itime=" << itime << " " << data[idx] << " - " << test_data[idx] << " = " << diff << endl;
+        data_errors ++;
       }
     }
   }
+
+  if (errors || data_errors)
+    throw Error (InvalidState, method, "%u header parameters and %u response values in %s differ from expected values",
+                 errors, data_errors, filename.c_str());
 }
 
 void add_response (complex<double>* data, unsigned jomega, unsigned jtau, unsigned ntime, unsigned nchan, double amplitude, double arc_width)
 {
-  data[jomega*nchan + jtau] += amplitude * random_phasor();
-
-  if (arc_width)
+  if (!arc_width)
   {
-    // compute the Gaussian out to where the amplitude falls to 10^-9
-    int fizzle = sqrt(arc_width * 9 * log(10.0));
-    // cerr << "add_response compute Gaussian out to " << fizzle << " pixels from arc" << endl;
-
-    for (int iom=int(jomega)-fizzle; iom <= int(jomega)+fizzle; iom++)
-      for (int itau=int(jtau)-fizzle; itau <= int(jtau)+fizzle; itau++)
-      {
-        double dist_om = (double(iom) - double(jomega)) / arc_width;
-        double dist_tau = (double(itau) - double(jtau)) / arc_width;
-        double amp = exp( -dist_om*dist_om -dist_tau*dist_tau );
-
-        unsigned kom = (iom + ntime) % ntime;
-        unsigned ktau = (itau + nchan) % nchan;
-
-        data[kom*nchan + ktau] += amplitude * amp * random_phasor();
-      }
+    data[jomega*nchan + jtau] += amplitude * random_phasor();
+    return;
   }
+
+  // compute the Gaussian out to where the amplitude falls to 10^-9
+  int fizzle = ceil(arc_width * sqrt(9 * log(10.0)));
+  // cerr << "add_response compute Gaussian out to " << fizzle << " pixels from arc" << endl;
+
+  // signed dimensions, so that negative coordinates are wrapped correctly
+  int nom = ntime;
+  int ntau = nchan;
+
+  for (int iom=int(jomega)-fizzle; iom <= int(jomega)+fizzle; iom++)
+    for (int itau=int(jtau)-fizzle; itau <= int(jtau)+fizzle; itau++)
+    {
+      double dist_om = (double(iom) - double(jomega)) / arc_width;
+      double dist_tau = (double(itau) - double(jtau)) / arc_width;
+      double amp = exp( -dist_om*dist_om -dist_tau*dist_tau );
+
+      unsigned kom = ((iom % nom) + nom) % nom;
+      unsigned ktau = ((itau % ntau) + ntau) % ntau;
+
+      data[kom*nchan + ktau] += amplitude * amp * random_phasor();
+    }
 }
 
 void Tukey (vector<double>& window, double fraction_flat)
 {
   unsigned ndat = window.size();
   unsigned transition_end = ndat * (1-fraction_flat) / 2;
-  double frequency = M_PI/transition_end;
 
   cerr << "Tukey: ndat=" << ndat << " transition_end=" << transition_end << endl;
 
-  float denom_start = 2*transition_end;
-  float denom_end = 2*transition_end;
-
-  for (unsigned idat=0; idat<ndat/2; idat++)
+  for (unsigned idat=0; idat < (ndat+1)/2; idat++)
   {
     double amp = 1.0;
+
+    // offset by half a sample, so that the first and last samples are not weighted by zero
     if (idat < transition_end)
-      amp = 0.5 * (1 - cos(idat*frequency));
+      amp = 0.5 * (1 - cos(M_PI*(idat+0.5)/transition_end));
 
     window[idat] = window[ndat-idat-1] = amp;
   }
@@ -454,17 +576,42 @@ void Tukey (vector<double>& window, double fraction_flat)
 
 /*! 
 In principle, we wish to perform a forward FFT along the delay axis and a backward FFT
-along the differential Doppler delay axis.  This could be achieved by complex conjugating
-and reversing the elements along differential Doppler delay axis.  However, since the
-phases are random, it doesn't matter (at least, as long as only the dynamic frequency 
-response is used from this point onward, and there is no need to return to the
-delay-Doppler wavefield).
+along the differential Doppler delay axis.  This could be achieved by reversing the
+elements along differential Doppler delay axis (index j -> -j modulo ntime), as done in
+generate_scattered_waves.  However, when the phases are random, it doesn't matter (at
+least, as long as only the dynamic frequency response is used from this point onward,
+and there is no need to return to the delay-Doppler wavefield).
 */
 void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
 {
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
   auto data = ext->get_data().data();
+
+  // record the extent of the impulse response along the delay axis before it is transformed
+  // (as in generate_periodic_spectra, the upper half of the delay axis is treated as -ve delays)
+  unsigned impulse_pos = 0;
+  unsigned impulse_neg = 0;
+
+  for (unsigned itime=0; itime < ntime; itime++)
+    for (unsigned ichan=1; ichan < nchan; ichan++)
+      if (data[itime*nchan + ichan] != 0.0)
+      {
+        if (ichan < (nchan+1)/2)
+          impulse_pos = std::max(impulse_pos, ichan);
+        else
+          impulse_neg = std::max(impulse_neg, nchan-ichan);
+      }
+
+  // both additive noise and tapering in the frequency domain spread the impulse response over all delays
+  if (dyn_resp_noise_fraction > 0.0 || Tukey_width)
+  {
+    impulse_pos = (nchan-1)/2;
+    impulse_neg = nchan/2;
+  }
+
+  ext->set_impulse_pos(impulse_pos);
+  ext->set_impulse_neg(impulse_neg);
 
   auto fftin = reinterpret_cast<fftw_complex*>(data);
   auto plan = fftw_plan_dft_2d(ntime, nchan, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
@@ -484,7 +631,6 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
   if (dyn_resp_noise_fraction > 0.0)
   {
     cerr << "dyn_res_sim::transform_wavefield adding noise with fractional rms=" << dyn_resp_noise_fraction << endl;
-    BoxMuller gasdev (usec_seed());
     for (unsigned idat=0; idat < ndat; idat++)
     {
       data[idat] += dyn_resp_noise_fraction * complex<double>(gasdev(),gasdev());
@@ -496,9 +642,21 @@ void dyn_res_sim::transform_wavefield (Pulsar::DynamicResponse* ext)
     vector<double> window (nchan);
     Tukey (window, Tukey_width);
 
+    double power_before = 0.0;
+    double power_after = 0.0;
+
     for (unsigned itime=0; itime < ntime; itime++)
       for (unsigned ichan=0; ichan < nchan; ichan++)
+      {
+        power_before += norm(data[itime*nchan + ichan]);
         data[itime*nchan + ichan] *= window[ichan];
+        power_after += norm(data[itime*nchan + ichan]);
+      }
+
+    // preserve the rms of the dynamic response
+    double rescale = sqrt(power_before / power_after);
+    for (unsigned idat=0; idat < ndat; idat++)
+      data[idat] *= rescale;
   }
 
   if (degenerate_phase)
@@ -513,13 +671,9 @@ void dyn_res_sim::randomize_phase (Pulsar::DynamicResponse* ext)
   unsigned ntime = ext->get_ntime();
   auto data = ext->get_data().data();
 
-  vector<complex<double>> phasors (ntime);
-  vector<complex<double>> sums (ntime);
-
   for (unsigned itime=0; itime < ntime; itime++)
   {
     auto phasor = random_phasor();
-    phasors[itime] = phasor;
 
     complex<double> sum = 0.0;
 
@@ -532,7 +686,6 @@ void dyn_res_sim::randomize_phase (Pulsar::DynamicResponse* ext)
 
 #if MINIMIZE_DC_PHASE
 
-    sums[itime] = sum;
     phasor = conj(sum) / abs(sum);
 
     for (unsigned ichan=0; ichan < nchan; ichan++)
@@ -593,9 +746,14 @@ void dyn_res_sim::generate_scattered_waves(Pulsar::DynamicResponse* ext)
     int itime = wave.first;
     int ichan = wave.second;
 
-    // reverse the time axis ... see note about conjugation at dyn_res_sim::transform_wavefield
-    int jtime = (ntime-itime) % ntime;
-    int jchan = (nchan+ichan) % nchan;
+    if (2*abs(itime) > int(ntime) || 2*abs(ichan) > int(nchan))
+      throw Error (InvalidParam, "dyn_res_sim::generate_scattered_waves",
+                   "Doppler:delay=%d:%d exceeds the maximum harmonic coordinates=%u:%u",
+                   itime, ichan, ntime/2, nchan/2);
+
+    // reverse the time axis ... see note about reversal at dyn_res_sim::transform_wavefield
+    int jtime = (int(ntime)-itime) % int(ntime);
+    int jchan = (int(nchan)+ichan) % int(nchan);
 
     cerr << "dyn_res_sim::generate_scattered_waves coords=" << jtime << ":" << jchan << endl;
 
@@ -615,13 +773,17 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   unsigned nchan = ext->get_nchan();
   unsigned ntime = ext->get_ntime();
 
+  if (arc_max_delay <= 0.0 || arc_max_delay > 1.0)
+    throw Error (InvalidParam, "dyn_res_sim::generate_scintillation_arc",
+                 "arc maximum delay fraction=%lf must be greater than 0 and no greater than 1", arc_max_delay);
+
   auto data = ext->get_data().data();
 
   for (unsigned ichan=0; ichan < nchan; ichan++)
     for (unsigned itime=0; itime < ntime; itime++)
       data[itime*nchan + ichan] = 0;
 
-  // sampling interval along delay axis, in seconds
+  // sampling interval along delay axis, in seconds (bw is always positive; see dyn_res_sim::process)
   double delta_tau = 1e-6/bw;
   // maximum positive delay
   double max_tau = 0.5 * nchan * delta_tau; 
@@ -637,7 +799,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   double curvature = arc_curvature;
   if (curvature == 0)
   {
-    cerr << "dyn_res_sim::process setting arc curvature to span " << arc_max_Doppler*100.0 << "\% of Doppler axis at maximum delay" << endl;
+    cerr << "dyn_res_sim::process setting arc curvature to span " << arc_max_Doppler*100.0 << "% of Doppler axis at maximum delay" << endl;
     double span_omega = arc_max_Doppler * max_omega;
     curvature = arc_max_delay * max_tau / (span_omega * span_omega);
   }
@@ -648,7 +810,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
   if (decay == 0)
   {
     double default_decay = 0.1;
-    cerr << "dyn_res_sim::process setting decay time scale to " << default_decay*100.0 << "\% of maximum delay" << endl;
+    cerr << "dyn_res_sim::process setting decay time scale to " << default_decay*100.0 << "% of maximum delay" << endl;
     decay = arc_max_delay * max_tau * default_decay;
   }
 
@@ -675,7 +837,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
     {
       omega = iomega * delta_omega;
       tau = curvature * omega*omega;
-      jtau = tau / delta_tau;
+      jtau = lround(tau / delta_tau);
       jomega = iomega;
 
       // when the step in tau is larger than the sampling interval (i.e. a delay is skipped)
@@ -697,7 +859,7 @@ void dyn_res_sim::generate_scintillation_arc (Pulsar::DynamicResponse* ext, doub
       tau = itau * delta_tau;
       omega = sqrt(tau/curvature);
       jtau = itau;
-      jomega = omega / delta_omega;
+      jomega = lround(omega / delta_omega);
       if (jomega >= nomega)
         break;
 
@@ -729,8 +891,11 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   assert(nchan == archive->get_nchan());
   unsigned nbin = archive->get_nbin();
 
-  double bw_MHz = archive->get_bandwidth();
+  // always positive; see dyn_res_sim::process
+  double bw_MHz = ext->get_bandwidth();
   double chanbw_Hz = bw_MHz * 1e6 / nchan;
+
+  MJD start_time = ext->get_minimum_epoch();
 
   Reference::To<Pulsar::Archive> prototype = archive->clone();
   prototype->pscrunch();
@@ -748,30 +913,26 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   for (unsigned ibin=0; ibin<nbin; ibin++)
     intrinsic_spectrum[ibin] = f_amps[ibin];
 
-  if (self_noise_fraction > 0.0)
-  {
-    cerr << "dyn_res_sim::generate_periodic_spectra adding self noise with fractional rms=" << self_noise_fraction << endl;
-    BoxMuller gasdev (usec_seed());
-    for (unsigned ibin=0; ibin < nbin; ibin++)
-    {
-      intrinsic_spectrum[ibin] *= 1.0 + self_noise_fraction*gasdev();
-    }
-  }
-
   auto fftin = reinterpret_cast<fftw_complex*>(intrinsic_spectrum.data());
   auto plan = fftw_plan_dft_1d (nbin, fftin, fftin, FFTW_FORWARD, FFTW_ESTIMATE);
   fftw_execute(plan);
   fftw_destroy_plan(plan);
 
-  if (!include_Nyquist)
+  // only when nbin is even is there a Nyquist harmonic
+  bool has_Nyquist = (nbin % 2 == 0);
+
+  if (has_Nyquist && !include_Nyquist)
     intrinsic_spectrum[nbin/2] = 0.0;
+
+  // number of harmonics computed (the remaining harmonics are set by Hermitian symmetry)
+  unsigned nharm = (has_Nyquist && !include_Nyquist) ? nbin/2 : nbin/2 + 1;
 
   // verify that the intrinsic spectrum has the expected Hermiticity
   double total_power = 0;
   double diff_power = 0;
   double max_power = 0;
 
-  for (unsigned ibin=1; ibin < nbin/2; ibin++)
+  for (unsigned ibin=1; ibin < (nbin+1)/2; ibin++)
   {
     auto diff = intrinsic_spectrum[ibin] - conj(intrinsic_spectrum[nbin - ibin]);
     double power = norm(intrinsic_spectrum[ibin]);
@@ -786,7 +947,17 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     cerr << "Intrinsic spectrum does not appear to be Hermitian power=" << total_power << " diff power=" << diff_power << endl;
   }
 
-  double instrumental_noise_power = instrumental_noise_fraction * sqrt(max_power);
+  // standard deviation of the real and imaginary parts of the noise in each harmonic
+  double instrumental_noise_rms = instrumental_noise_fraction * sqrt(max_power);
+
+  // White noise with the above standard deviation in the real and imaginary parts of each harmonic
+  // is, after the unnormalized backward FFT performed below, equivalent to white noise in each
+  // phase bin with a variance equal to nbin times the variance of each complex-valued harmonic.
+  // It is added to each phase bin, so that the DC and Nyquist harmonics require no special treatment.
+  double instrumental_noise_rms_per_bin = instrumental_noise_rms * sqrt(2.0 * nbin);
+
+  if (self_noise_fraction > 0.0)
+    cerr << "dyn_res_sim::generate_periodic_spectra adding self noise with fractional rms=" << self_noise_fraction << endl;
 
   vector<std::complex<double>> temp (nbin);
   vector<std::complex<double>> profile (nbin);
@@ -812,7 +983,12 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
   prototype = archive->clone();
   prototype->pscrunch();
 
-  double scalefac = 0.5/sqrt(2* nbin * nchan);
+  if (reset_frequencies)
+    set_frequencies (prototype, ext->get_centre_frequency(), bw_MHz);
+
+  // Normalize the forward FFT of the intrinsic profile and the backward FFT of each cyclic spectrum.
+  // As the dynamic response has unit rms, the flux scale of the intrinsic profile is preserved.
+  double scalefac = 1.0 / nbin;
 
   for (unsigned itime=0; itime < ntime; itime++)
   {
@@ -834,10 +1010,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
       impulse_response[ichan] /= nchan;
     }
 
-    double total_power = 0.0;
-    double total_cs_power = 0.0;
-
-    for (unsigned ibin=0; ibin < nbin/2 + include_Nyquist; ibin++)
+    for (unsigned ibin=0; ibin < nharm; ibin++)
     {
       for (int sign: {-1, 1})
       {
@@ -848,7 +1021,7 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
         for (unsigned ichan=1; ichan < nchan; ichan++)
         {
           // treat the upper half of the array as -ve delays
-          int jchan = (ichan < nchan/2) ? ichan : int(ichan) - int(nchan);
+          int jchan = (ichan < (nchan+1)/2) ? ichan : int(ichan) - int(nchan);
           double phase = slope * double(jchan) / nchan;
           complex<double> phasor (cos(phase), sin(phase));
           shifted_impulse_response[ichan] *= phasor;
@@ -859,8 +1032,6 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
         for (unsigned ichan=0; ichan < nchan; ichan++)
         {
-          total_power += norm(frequency_response[ichan]);
-
           if (sign == -1)
             frequency_response[ichan] = conj(frequency_response[ichan]);
 
@@ -868,43 +1039,22 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
 
           // S'(nu;alpha) = H(nu + alpha/2) H^*(nu - alpha/2) S(nu;alpha)
           spectrum[ibin] *= frequency_response[ichan];
-          if (ibin > 0)
-            spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
 
-          if (ibin == nbin/2)
-          {
-            // the Nyquist bin of a real-valued signal is real-valued
-            spectrum[ibin] = std::abs(spectrum[ibin]);
-          }
-
+          // after multiplying by both H(nu + alpha/2) and H^*(nu - alpha/2)
           if (sign == 1)
-            total_cs_power += norm(spectrum[ibin]);
+          {
+            if (2*ibin == nbin)
+            {
+              // The Nyquist harmonic of a real-valued signal sampled at nbin phase bins is the sum of
+              // the harmonics at +nbin/2 and -nbin/2, which are complex conjugates of each other;
+              // i.e. S'(nu;+alpha) + S'(nu;-alpha) = 2 Re[ H(nu + alpha/2) H^*(nu - alpha/2) S(nu;alpha) ]
+              // where the factor of 2 is already included in the Nyquist harmonic of the intrinsic spectrum
+              spectrum[ibin] = spectrum[ibin].real();
+            }
+            else if (ibin > 0)
+              spectrum[nbin-ibin] = conj(spectrum[ibin]);  // Hermitian spectrum
+          }
         }
-      }
-    }
-
-    double rms = sqrt(total_power / (nchan * 2 * (nbin/2 - 1)));
-
-    // cerr << "standard deviation of frequency response = " << rms << endl;
-    // cerr << "total power in cyclic spectrum = " << total_cs_power << endl;
-
-    if (instrumental_noise_power > 0.0)
-    {
-      BoxMuller gasdev (usec_seed());
-
-      // cerr << "adding noise with rms=" << instrumental_noise_power << endl;
-      for (unsigned ichan=0; ichan < nchan; ichan++)
-      {
-        auto spectrum = cyclic_spectrum.data() + ichan*nbin;
-
-        for (unsigned ibin=1; ibin < nbin/2; ibin++)
-        {
-          complex<double> noise (instrumental_noise_power*gasdev(), instrumental_noise_power*gasdev());
-          spectrum[ibin] += noise;
-          spectrum[nbin-ibin] += conj(noise);  // Hermitian spectrum
-        }
-        spectrum[0] += instrumental_noise_power*gasdev();
-        spectrum[nbin/2] += instrumental_noise_power*gasdev();
       }
     }
 
@@ -912,11 +1062,25 @@ void dyn_res_sim::generate_periodic_spectra (const Pulsar::DynamicResponse* ext,
     auto subint = output->get_Integration(0);
     unsigned ipol = 0;
 
+    // each periodic spectrum is integrated over a single sampling interval of the dynamic response
+    subint->set_epoch (start_time + (itime + 0.5) * sampling_interval);
+    subint->set_duration (sampling_interval);
+
     for (unsigned ichan=0; ichan < nchan; ichan++) try
     {
       memcpy(temp.data(), cyclic_spectrum.data() + ichan*nbin, nbin * sizeof(complex<double>));
       fftw_execute(bin_plan);
       // profile now contains the periodic spectrum for ichan
+
+      // self noise is proportional to the scattered flux in each phase bin of each channel,
+      // and is independent between phase bins, channels, and time samples
+      if (self_noise_fraction > 0.0)
+        for (unsigned ibin=0; ibin < nbin; ibin++)
+          profile[ibin] *= 1.0 + self_noise_fraction*gasdev();
+
+      if (instrumental_noise_rms_per_bin > 0.0)
+        for (unsigned ibin=0; ibin < nbin; ibin++)
+          profile[ibin] += instrumental_noise_rms_per_bin*gasdev();
 
       auto f_amps = subint->get_Profile(ipol,ichan)->get_amps();
       copy(f_amps, profile);
@@ -948,9 +1112,7 @@ catch (Error& error)
 
 int main (int argc, char** argv)
 {
-  // seeds the random number generator with the current microsecond
-  random_init ();
-
+  // the random number generators are seeded in dyn_res_sim::setup
   dyn_res_sim program;
   return program.main (argc, argv);
 }
