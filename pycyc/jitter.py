@@ -280,7 +280,12 @@ def fit_jitter_basis_calibrated(
 
 
 def reconstruct_jittered_profile(
-    s0: np.ndarray, epsilon_t: np.ndarray, gain_t: np.ndarray, weights: np.ndarray, basis: np.ndarray
+    s0: np.ndarray,
+    epsilon_t: np.ndarray,
+    gain_t: np.ndarray,
+    weights: np.ndarray,
+    basis: np.ndarray,
+    fix_relative_gain: bool = False,
 ) -> np.ndarray:
     """
     Rebuild the per-subint jitter-aware profile
@@ -294,14 +299,40 @@ def reconstruct_jittered_profile(
     weights: (nsubint, rank), basis: (rank, nharm), from fit_jitter_basis.
     If rank is 0 (no significant jitter found), pass weights/basis with a
     zero-length second/first axis and the jitter term is simply zero.
+    fix_relative_gain: if True, fix the gauge of the per-subint gain
+    degeneracy of the cyclic-spectrum model. The model
+    H(nu+alpha/2) H*(nu-alpha/2) S(alpha;T) is invariant under
+    h[T] -> c[T] * h[T], S(alpha;T) -> S(alpha;T) / c[T]**2 for any real
+    c[T], so a per-subint profile that is free to follow its subint's own
+    amplitude absorbs any error in the amplitude of that subint's
+    wavefield, and the wavefield fit then has nothing to correct it with.
+    With this option the real coefficient of every subint's profile along
+    its own aligned reference S0(alpha) * exp(i*alpha*epsilon[T]) is
+    replaced by the mean of that coefficient over subints, which carries
+    the flux scale of the profile relative to s0. The coefficient is
+    g[T] plus the real projection of the subint's jitter term onto its
+    aligned reference: PCA mixes subints, so a truncated-rank
+    reconstruction of residuals that were each orthogonal to their own
+    aligned reference need not be; and if the gain was not fit, it is the
+    jitter term that carries it. All variation of gain between subints is
+    then left to the wavefield.
 
     Returns: (nsubint, nharm) reconstructed per-subint profile.
     """
     nharm = s0.shape[0]
     alpha = np.arange(nharm)
-    aligned = gain_t[:, np.newaxis] * s0[np.newaxis, :] * np.exp(1j * np.outer(epsilon_t, alpha))
+    unit_aligned = s0[np.newaxis, :] * np.exp(1j * np.outer(epsilon_t, alpha))
     jitter = weights @ basis
-    return aligned + jitter
+
+    if fix_relative_gain:
+        power = np.sum(np.abs(unit_aligned) ** 2, axis=1)
+        projection = np.real(np.sum(np.conj(unit_aligned) * jitter, axis=1))
+        valid = power > 0
+        projection[valid] /= power[valid]
+        jitter = jitter - projection[:, np.newaxis] * unit_aligned
+        gain_t = np.full(gain_t.shape, np.mean(gain_t + projection))
+
+    return gain_t[:, np.newaxis] * unit_aligned + jitter
 
 
 def subspace_principal_angle(basis_a: np.ndarray, basis_b: np.ndarray) -> float | None:

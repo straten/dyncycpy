@@ -133,6 +133,73 @@ def test_reconstruct_jittered_profile_matches_injected_noiseless_model():
     np.testing.assert_allclose(reconstructed, s_t_all, atol=2e-2, rtol=2e-2)
 
 
+def _coefficient_along_aligned_reference(s0, epsilon_t, profiles):
+    """Real least-squares coefficient of each subint's profile along its
+    own aligned reference s0 * exp(i*alpha*epsilon_t), and what is left
+    after that component is removed."""
+    aligned = s0[None, :] * np.exp(1j * np.outer(epsilon_t, np.arange(s0.shape[0])))
+    coefficient = np.real(np.sum(np.conj(aligned) * profiles, axis=1)) / np.sum(np.abs(aligned) ** 2, axis=1)
+    return coefficient, profiles - coefficient[:, None] * aligned
+
+
+@pytest.mark.parametrize("fit_gain", [True, False])
+def test_reconstruct_jittered_profile_fix_relative_gain(fit_gain):
+    """The cyclic-spectrum model is invariant under h_t -> c_t * h_t,
+    S_t -> S_t / c_t**2, so a per-subint profile that follows its own
+    subint's gain would absorb any error in the amplitude of that subint's
+    wavefield. With fix_relative_gain, the coefficient of every subint's
+    profile along its aligned reference must be the same (the mean of what
+    it would otherwise have been, preserving the overall flux scale), and
+    nothing else about the profile may change -- whether the gain was fit
+    explicitly (fit_gain=True) or left for the PCA to pick up as its
+    leading component (fit_gain=False)."""
+    rng = np.random.default_rng(5)
+    nsubint, nharm, true_rank = 50, 12, 2
+    s0 = random_complex(rng, (nharm,)) * 4.0
+    alpha = np.arange(nharm)
+
+    true_epsilon = rng.uniform(-0.2, 0.2, nsubint)
+    true_gain = 3.0 * rng.uniform(0.8, 1.2, nsubint)  # mean well away from 1: s0 does not carry the flux scale
+    true_basis = _orthonormal_basis(rng, true_rank, nharm) * 4.0
+    true_weights = random_complex(rng, (nsubint, true_rank)) * 0.3
+    aligned = true_gain[:, None] * s0[None, :] * np.exp(1j * np.outer(true_epsilon, alpha))
+    s_t_all = aligned + true_weights @ true_basis
+
+    epsilon_t, gain_t, residuals = pycyc.compute_residuals(s0, s_t_all, fit_gain=fit_gain)
+    noise_variance_per_harmonic = np.full(nharm, 1e-4)
+    _rank, weights, basis, _eig, _thr, _full_basis = pycyc.fit_jitter_basis(residuals, noise_variance_per_harmonic)
+
+    free = pycyc.reconstruct_jittered_profile(s0, epsilon_t, gain_t, weights, basis)
+    fixed = pycyc.reconstruct_jittered_profile(s0, epsilon_t, gain_t, weights, basis, fix_relative_gain=True)
+
+    free_coefficient, free_remainder = _coefficient_along_aligned_reference(s0, epsilon_t, free)
+    fixed_coefficient, fixed_remainder = _coefficient_along_aligned_reference(s0, epsilon_t, fixed)
+
+    # sanity: without the option, the profile does follow each subint's gain
+    np.testing.assert_allclose(free_coefficient, true_gain, rtol=0.05)
+    assert np.std(free_coefficient) > 0.2
+
+    np.testing.assert_allclose(fixed_coefficient, np.mean(free_coefficient), rtol=1e-12)
+    np.testing.assert_allclose(fixed_remainder, free_remainder, atol=1e-12)
+
+
+def test_reconstruct_jittered_profile_fix_relative_gain_rank_zero():
+    """With no significant jitter, fix_relative_gain reduces to the aligned
+    reference scaled by the mean fitted gain."""
+    rng = np.random.default_rng(6)
+    nsubint, nharm = 10, 8
+    s0 = random_complex(rng, (nharm,))
+    epsilon_t = rng.uniform(-0.2, 0.2, nsubint)
+    gain_t = rng.uniform(0.5, 2.0, nsubint)
+    weights = np.zeros((nsubint, 0), dtype=np.complex128)
+    basis = np.zeros((0, nharm), dtype=np.complex128)
+
+    fixed = pycyc.reconstruct_jittered_profile(s0, epsilon_t, gain_t, weights, basis, fix_relative_gain=True)
+
+    expected = np.mean(gain_t) * s0[None, :] * np.exp(1j * np.outer(epsilon_t, np.arange(nharm)))
+    np.testing.assert_allclose(fixed, expected, rtol=1e-12)
+
+
 def test_estimate_significant_harmonic_cutoff_finds_injected_signal_extent():
     """A real pulsar profile's harmonic power is concentrated at low
     harmonics; estimate_significant_harmonic_cutoff should find roughly

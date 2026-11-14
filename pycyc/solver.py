@@ -217,6 +217,21 @@ class CyclicSolver(_IOMixin):
         # model_gain_variations=False) leak into the residuals as a
         # mean-profile-shaped signal, dominating the PCA's top eigenvector.
         self.jitter_fit_gain = True
+        # hold the gain of every subint's jitter-aware profile at the value
+        # common to all subints (pycyc.jitter.reconstruct_jittered_profile's
+        # fix_relative_gain). The fitted per-subint gain is still removed
+        # from the residuals that the PCA sees (jitter_fit_gain above), but
+        # it is not put back into the profile that the wavefield is fit
+        # against: the cyclic-spectrum model is invariant under
+        # h_t -> c_t h_t, S_t -> S_t / c_t^2, so a profile that follows its
+        # own subint's gain absorbs any error in the amplitude of that
+        # subint's wavefield and leaves no gradient to correct it. Confirmed
+        # on simulated data that, without this, a per-subint gain error
+        # (there excited by a step-size instability) is frozen into the
+        # wavefield as soon as the jitter model is switched on; an
+        # alternating error appears as a copy of the wavefield at the
+        # Nyquist Doppler shift.
+        self.jitter_fix_relative_gain = True
         # optional cap on the PCA rank chosen by pycyc.jitter.fit_jitter_basis
         self.jitter_max_rank = None
         # current per-subint jitter-aware profile (nsubint, nharm), or None
@@ -238,6 +253,12 @@ class CyclicSolver(_IOMixin):
         self.jitter_full_basis = None
         self.jitter_eigenvalues = None
         self.jitter_threshold = None
+        # (nsubint,) per-subint gain fit and removed by the most recent
+        # jitter refresh (all ones unless self.jitter_fit_gain). With
+        # self.jitter_fix_relative_gain, its variation between subints is
+        # not part of self.jitter_profiles, and measures the amplitude
+        # error that remains in each subint's wavefield.
+        self.jitter_gain = None
         # noise-calibration diagnostics from pycyc.jitter.
         # fit_jitter_basis_calibrated: the first harmonic believed free of
         # real pulsar signal (estimated from the pooled reference
@@ -1019,7 +1040,10 @@ class CyclicSolver(_IOMixin):
         self.jitter_threshold = threshold
         self.jitter_noise_h_start = h_noise_start
         self.jitter_noise_kappa = noise_kappa
-        self.jitter_profiles = reconstruct_jittered_profile(ph_ref, epsilon_t, gain_t, weights, basis)
+        self.jitter_gain = gain_t
+        self.jitter_profiles = reconstruct_jittered_profile(
+            ph_ref, epsilon_t, gain_t, weights, basis, fix_relative_gain=self.jitter_fix_relative_gain
+        )
 
     def outer_loop(
         self,

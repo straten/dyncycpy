@@ -69,6 +69,7 @@ def _build_synthetic_cyclic_solver(rng, nsubint=8, inject_jitter=True):
     CS.jitter_warmup_passes = 1
     CS.jitter_max_rank = None
     CS.jitter_fit_gain = True
+    CS.jitter_fix_relative_gain = True
     CS.jitter_profiles = None
     CS.jitter_rank = 0
     CS._jitter_basis = None
@@ -312,3 +313,45 @@ def test_use_last_soln_requires_nthread_one():
     CS_ok.nthread = 1
     CS_ok.loop(isub=0, use_last_soln=True, **loop_kwargs)  # must not raise
     CS_ok.outer_loop(n_passes=2, use_last_soln=True, loop_kwargs=loop_kwargs)  # must not raise
+
+
+@pytest.mark.parametrize("fit_gain", [True, False])
+def test_refresh_jitter_model_does_not_absorb_per_subint_gain(fit_gain):
+    """Regression test for the per-subint gain degeneracy: when subint t's
+    wavefield is wrong by a real factor c_t, its maximum-likelihood profile
+    is the true profile divided by c_t**2. If the jitter-aware profile that
+    the next wavefield fit is run against followed it, the model would
+    match the data exactly and the wavefield error would never be
+    corrected (seen on simulated data as a copy of the wavefield at the
+    Nyquist Doppler shift, for an error that alternates between subints).
+    The refreshed profiles must be identical for every subint here, at the
+    flux scale of the pooled profile."""
+    rng = np.random.default_rng(13)
+    CS = _build_synthetic_cyclic_solver(rng, inject_jitter=False)
+    CS.jitter_fit_gain = fit_gain
+
+    flux = 250.0  # the pooled profile, not the normalized reference, carries the flux scale
+    CS.pp_intrinsic = flux * rng.standard_normal(CS.nphase)
+    ph_ref = pycyc.normalize_profile(pycyc.phase2harm(CS.pp_intrinsic))
+    scale = np.abs(pycyc.phase2harm(CS.pp_intrinsic)[1])
+
+    c_t = 1.0 + 0.1 * (-1.0) ** np.arange(CS.nspec)  # alternating wavefield amplitude error
+    s_t = scale * ph_ref[None, :] / c_t[:, None] ** 2
+    CS.ph_denom[0] = 1.0
+    CS.ph_numer[0] = s_t
+
+    def coefficient():
+        CS._refresh_jitter_model()
+        return np.real(CS.jitter_profiles @ np.conj(ph_ref)) / np.sum(np.abs(ph_ref) ** 2)
+
+    CS.jitter_fix_relative_gain = False
+    np.testing.assert_allclose(coefficient(), scale / c_t**2, rtol=1e-3)  # the degeneracy: profile follows the error
+
+    CS.jitter_fix_relative_gain = True
+    fixed = coefficient()
+    np.testing.assert_allclose(fixed, np.mean(scale / c_t**2), rtol=1e-3)
+    np.testing.assert_allclose(fixed, fixed[0], rtol=1e-12)
+    identical = np.tile(CS.jitter_profiles[0], (CS.nspec, 1))
+    np.testing.assert_allclose(CS.jitter_profiles, identical, rtol=1e-9, atol=1e-9 * scale)
+    if fit_gain:
+        np.testing.assert_allclose(CS.jitter_gain, scale / c_t**2, rtol=1e-6)
