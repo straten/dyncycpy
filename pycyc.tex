@@ -557,6 +557,33 @@ a favorable empirical observation -- no step of \Eqn{grad_rotation}'s derivation
 $h$ was reached, only on $M$ being exactly, not approximately, invariant under the rotation at
 $h$ itself.
 
+The secant measures the curvature of $M$ only along the step that was actually taken, so it bounds
+the Lipschitz constant from below, and $M$ has a family of directions that are systematically
+stiffer than a typical one. The model $S'_\mu(\cdot,\cdot;t_l)$ is homogeneous of degree two in
+$h(\tau;t_l)$, so the real rescaling $h(\tau;t_l)\to(1+g_l)\,h(\tau;t_l)$ changes it by
+$2g_l\,S'_\mu$ to first order, whereas the contributions of the two factors of $H$ add incoherently
+for a generic perturbation of the same norm. Near a solution, the gain direction of each
+subintegration, $\delta h(\tau;t_l)=g_l\,h(\tau;t_l)$, is therefore an eigenvector of the Hessian
+with twice the curvature of a typical direction (2.0000 against $\sim0.97$ at the solution of a
+noise-free simulation), and proportionally more for a subintegration that is brighter than
+average. A step $\alpha=1/L$ with $L$ taken from the secant alone is then about twice the largest
+step for which these modes are stable: any gain error with zero mean over subintegrations (the
+only kind possible when the wavefield energy is conserved) changes sign and roughly doubles on each
+accelerated iteration, until it is large enough to dominate the step and so be seen by the secant.
+In the noise-free simulation this amplified the single-precision rounding of the stored profiles,
+a pattern that alternates between even and odd subintegrations at the $10^{-9}$ level, into a copy
+of the wavefield at the Nyquist Doppler shift with relative amplitude $3.5\times10^{-5}$.
+\texttt{fista.gain\_curvature} therefore measures this curvature explicitly. Because $M$ is a sum
+over subintegrations with no coupling between them, one additional evaluation of the gradient at
+$(1+\delta)\,y_n$ perturbs every subintegration along its own gain direction, and
+\begin{equation}
+L_g = \max_l \frac{\left\| dM/dh^*[(1+\delta)\,y_n](\cdot\,;t_l) - dM/dh^*[y_n](\cdot\,;t_l) \right\|}
+                  {\delta \left\| y_n(\cdot\,;t_l) \right\|},
+\label{eqn:gain_curvature}
+\end{equation}
+with the norms taken over $\tau$ in the time-delay domain, is likewise a lower bound on the
+Lipschitz constant; \texttt{take\_fista\_step} returns the larger of $L_g$ and the secant estimate.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -918,6 +945,49 @@ null hypothesis that $R$ is pure noise at the variance given by
 \Eqn{jitter_noise_variance}, no eigenvalue should exceed this bound, so
 any that do indicate genuine structure rather than noise. This is
 implemented by \texttt{pycyc.jitter.fit\_jitter\_basis}.
+
+\paragraph{Gauge of the per-subintegration gain.} \Eqn{jitter_model}
+cannot be used exactly as fitted for the reference profile of the next
+wavefield fit, because the model cyclic spectrum is invariant under
+%
+\begin{equation}
+H(\nu;t) \to c(t)\,H(\nu;t), \qquad S_\mu(\alpha;t) \to c(t)^{-2}\,S_\mu(\alpha;t)
+\label{eqn:gain_degeneracy}
+\end{equation}
+%
+for any real $c(t)$. The maximum-likelihood $S_\mu(\alpha;t)$ of a
+subintegration whose $H(\nu;t)$ is in error by the factor $c(t)$ is
+exactly the true profile divided by $c(t)^2$, so a reference profile that
+follows the fitted $g(t)$ reproduces the data whatever the amplitude of
+$H(\nu;t)$: the derivative of $M$ along the gain direction of that
+subintegration vanishes, and an amplitude error that is present when the
+jitter model is first applied is never corrected. (In the noise-free
+simulation described with \Eqn{gain_curvature}, this is what made the copy
+of the wavefield at the Nyquist Doppler shift permanent; without the
+jitter model it decays again once the step size has adapted.) The gauge is
+fixed by requiring that the real coefficient of $S_\mu(\alpha;t)$ along
+its own aligned reference,
+$a(\alpha;t) = S_\mu^0(\alpha)\,e^{i\alpha\hat\epsilon(t)}$,
+%
+\begin{equation}
+\gamma(t) = g(t) + \frac{\Re\left[\sum_\alpha a^*(\alpha;t) \sum_k w_k(t)\,P_k(\alpha)\right]}
+                        {\sum_\alpha \left|a(\alpha;t)\right|^2},
+\label{eqn:jitter_gain_gauge}
+\end{equation}
+%
+be the same for every subintegration: $\gamma(t)$ is replaced by its mean
+over $t$, which carries the flux scale of the profile relative to the
+normalized $S_\mu^0$. The second term of \Eqn{jitter_gain_gauge} is
+needed because the singular value decomposition mixes subintegrations, so
+that a truncated reconstruction of residuals that were each orthogonal to
+their own $a(\alpha;t)$ need not be (and because, if $g(t)$ is not fit,
+it is the leading $P_k$ that carries the gain). The gain $g(t)$ is still
+fit and removed from $R(\alpha;t)$, so that real variations of flux do not
+dominate the basis; it is simply not returned to the profile. All
+variation of gain between subintegrations is thereby left to $H(\nu;t)$,
+where the data constrain it. This is implemented by the
+\texttt{fix\_relative\_gain} option of
+\texttt{pycyc.jitter.reconstruct\_jittered\_profile}.
 
 \paragraph{Outer loop.} Because $S_\mu^0(\alpha)$, $\epsilon(t)$, $g(t)$,
 and the jitter basis all depend on the current estimate of $H(\nu;t)$
