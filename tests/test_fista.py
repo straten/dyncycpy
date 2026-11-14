@@ -122,6 +122,7 @@ def test_L_min_bounded_for_phase_drift_dominated_step():
         x_n=y_n,
         demerits=np.array([1.0]),  # nonzero so `func_val - demerits[-2]` isn't touched at iter=0
         eps=None,
+        gain_curvature_epsilon=0,  # secant estimate only: _StubFunc scripts exactly two evaluations
     )
 
     np.testing.assert_allclose(x_n, target_x_np1, rtol=1e-10, atol=1e-10)
@@ -173,6 +174,7 @@ def _l_min_for_independent_subint_drift(rng_seed, phi_spread, nsub=10, nchan=8, 
         x_n=y_n,
         demerits=np.array([1.0]),
         eps=None,
+        gain_curvature_epsilon=0,  # secant estimate only: _StubFunc scripts exactly two evaluations
     )
     return x_n, L_min, target_x_np1_time
 
@@ -411,3 +413,130 @@ def test_no_gauge_drift_over_long_fista_run():
     # genuine systematic drift.
     assert max_angle_global_deg < 1e-6, f"global alignment angle drifted: {max_angle_global_deg:.3e} deg"
     assert max_angle_subint_deg < 1e-6, f"per-subint alignment angle drifted: {max_angle_subint_deg:.3e} deg"
+
+
+def _consistent_multi_subint_problem(rng_seed=3, nsub=6, nchan=32, nharm=8):
+    """Noise-free problem with a known solution: each subint's cyclic
+    spectrum is the model evaluated at that subint's true impulse response.
+    Every subint has unit power, so that all gain modes are comparably
+    stiff."""
+    rng = np.random.default_rng(rng_seed)
+    bw, ref_freq, nlag = 1.0, 1e5, nchan
+    params = pycyc.CyclicModelParams(
+        bw=bw,
+        ref_freq=ref_freq,
+        shear_phasors=pycyc.create_shear_phasors(nchan, nharm, bw, ref_freq),
+        pad_cyclic_spectra=False,
+        include_Nyquist=True,
+        maxharm=None,
+        exclude_DC=0,
+        nlag=nlag,
+    )
+    s0 = rng.standard_normal(nharm) + 1j * rng.standard_normal(nharm)
+    h_true = rng.standard_normal((nsub, nlag)) + 1j * rng.standard_normal((nsub, nlag))
+    h_true *= np.exp(-np.arange(nlag) / 4.0)
+    h_true /= np.sqrt(np.sum(np.abs(h_true) ** 2, axis=1, keepdims=True))
+    cs_data_per_subint = [pycyc.make_model_cs(params, pycyc.time2freq(h_true[t]), s0)[0] for t in range(nsub)]
+    return params, s0, h_true, cs_data_per_subint
+
+
+def test_gain_curvature_matches_per_subint_finite_difference():
+    """fista.gain_curvature probes every subint's gain direction with one
+    evaluation of the whole wavefield; because the merit has no cross-subint
+    coupling, the result must equal the largest of the curvatures obtained
+    by rescaling one subint at a time (computed here directly in the
+    time-delay domain, without func or the Doppler transform).
+
+    Also grounds the reason the probe exists: at the solution, the change in
+    each subint's gradient under a rescaling of that subint is nearly
+    parallel to the subint's own impulse response (the gain direction is
+    close to a Hessian eigenvector), and its curvature is well above that
+    along a generic direction, which is all the secant estimate sees."""
+    params, s0, h_true, cs_data_per_subint = _consistent_multi_subint_problem()
+    func = _RealMultiSubintFunc(params, s0, cs_data_per_subint)
+    epsilon = 1e-4
+
+    y_n = pycyc.time2freq(h_true, axis=0)
+    _, y_grad = func.evaluate(y_n)
+    L_gain = fista.gain_curvature(func, y_n, y_grad, epsilon)
+
+    L_gain_t = np.zeros(h_true.shape[0])
+    for t in range(h_true.shape[0]):
+        _, g0, _ = pycyc.cyclic_merit_and_grad(h_true[t], params, s0, cs_data_per_subint[t])
+        _, g1, _ = pycyc.cyclic_merit_and_grad((1.0 + epsilon) * h_true[t], params, s0, cs_data_per_subint[t])
+        gdiff = g1 - g0
+        L_gain_t[t] = np.linalg.norm(gdiff) / (epsilon * np.linalg.norm(h_true[t]))
+        cosine = np.abs(np.vdot(h_true[t], gdiff)) / (np.linalg.norm(h_true[t]) * np.linalg.norm(gdiff))
+        assert cosine > 0.9, f"subint {t}: gain direction is not close to an eigenvector (cosine={cosine:.3f})"
+
+    np.testing.assert_allclose(L_gain, np.max(L_gain_t), rtol=1e-8)
+
+    rng = np.random.default_rng(0)
+    generic = rng.standard_normal(y_n.shape) + 1j * rng.standard_normal(y_n.shape)
+    generic *= epsilon * np.linalg.norm(y_n) / np.linalg.norm(generic)
+    _, generic_grad = func.evaluate(y_n + generic)
+    L_generic = np.linalg.norm(generic_grad - y_grad) / np.linalg.norm(generic)
+    assert L_gain > 1.5 * L_generic, f"L_gain={L_gain:.3f} L_generic={L_generic:.3f}"
+
+
+class _RecordingFunc(_RealMultiSubintFunc):
+    """Remembers the last wavefield passed to evaluate, which is where a
+    CyclicSolver's internal state (h_doppler_delay, merit, gradients) would
+    be left."""
+
+    def evaluate(self, h_dopp):
+        self.last_evaluated = np.copy(h_dopp)
+        return super().evaluate(h_dopp)
+
+
+def test_take_fista_step_L_covers_gain_curvature():
+    """Regression test for the step-size instability of the per-subint gain
+    modes: a step taken from a generic perturbation of the solution does not
+    excite the gain modes, so the secant estimate of L alone falls well
+    short of the gain curvature and alpha = 1/L overshoots those modes.
+    With the gain-curvature probe enabled (the default), the returned L is
+    no smaller than the gain curvature at y_n.
+
+    The probe must change neither the step that is taken nor the point at
+    which func is last evaluated."""
+    params, s0, h_true, cs_data_per_subint = _consistent_multi_subint_problem()
+    rng = np.random.default_rng(1)
+    perturbation = rng.standard_normal(h_true.shape) + 1j * rng.standard_normal(h_true.shape)
+    perturbation *= 1e-4 * np.exp(-np.arange(h_true.shape[1]) / 4.0)
+    y_n = pycyc.time2freq(h_true + perturbation, axis=0)
+
+    def step(gain_curvature_epsilon):
+        func = _RecordingFunc(params, s0, cs_data_per_subint)
+        x_np1, _, L, _, _ = fista.take_fista_step(
+            iter=0,
+            func=func,
+            backtrack=False,
+            alpha=0.1,
+            eta=5,
+            y_n=np.copy(y_n),
+            _lambda=None,
+            delay_for_inf=-h_true.shape[1],  # no-op prox
+            zero_penalty_coords=np.array([]),
+            fix_phase_value=None,
+            fix_phase_coords=None,
+            fix_support=np.array([]),
+            t_n=1.0,
+            x_n=np.copy(y_n),
+            demerits=np.array([1.0]),
+            eps=None,
+            gain_curvature_epsilon=gain_curvature_epsilon,
+        )
+        return x_np1, L, func.last_evaluated
+
+    x_secant, L_secant, _ = step(0)
+    x_probed, L_probed, last_evaluated = step(1e-3)
+
+    func = _RealMultiSubintFunc(params, s0, cs_data_per_subint)
+    _, y_grad = func.evaluate(y_n)
+    L_gain = fista.gain_curvature(func, y_n, y_grad, 1e-3)
+
+    assert L_secant < 0.75 * L_gain, f"L_secant={L_secant:.3f} L_gain={L_gain:.3f}"
+    np.testing.assert_allclose(L_probed, L_gain, rtol=1e-12)
+
+    np.testing.assert_array_equal(x_probed, x_secant)
+    np.testing.assert_array_equal(last_evaluated, x_probed)

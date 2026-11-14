@@ -140,6 +140,66 @@ def rms_wavefield(h):
     return np.sqrt(variance)
 
 
+def gain_curvature(func, y_n, y_grad, epsilon=1e-3):
+    """
+    Measure the curvature of the merit along the gain direction of each
+    subint, by finite difference of the gradient.
+
+    The cyclic-spectrum model of each subint is homogeneous of degree two
+    in that subint's own impulse response h_t (cs_model = H(+)*conj(H(-))*S),
+    so the real rescaling h_t -> (1+g)*h_t changes the model by 2*g*model:
+    twice the change produced by a generic perturbation of the same norm,
+    for which the two factors of H add incoherently. Near the solution, the
+    gain direction of each subint is therefore an eigenvector of the Hessian
+    with about twice the curvature of a typical direction (exactly 2.0000 vs
+    ~0.97 at the solution of a noise-free simulation), and an even larger
+    multiple for a subint that is brighter than average.
+
+    The secant estimate of L in take_fista_step measures curvature only
+    along the step that was actually taken, so it does not see these modes
+    until they dominate the step. A step size alpha = 1 / L_secant is
+    then up to twice the largest stable step for the gain modes, and any
+    per-subint gain error (seeded by noise or even by round-off) flips sign
+    and roughly doubles on every accelerated iteration. Any gain pattern
+    with zero mean across subints can grow in this way, even when the total
+    power is held fixed by func.normalize.
+
+    Because the merit has no cross-subint coupling, a single evaluation at
+    (1+epsilon)*y_n perturbs every subint along its own gain direction and
+    yields every subint's curvature at once; the largest is returned. Like
+    the secant estimate, this is a lower bound on L (the ratio of a gradient
+    difference to a position difference between two points).
+
+    The (1+epsilon)*y_n evaluation leaves func's internal state at the
+    probed point: the caller is expected to evaluate func again at the
+    point of interest before using that state.
+
+    Args:
+    func: provides evaluate(wavefield) -> (merit, gradient)
+    y_n: (nsubint, nchan) wavefield in the Doppler-delay domain
+    y_grad: gradient of func already evaluated at y_n
+    epsilon: relative size of the gain perturbation; the finite-difference
+    estimate exceeds the curvature at y_n by a fraction ~1.5*epsilon
+
+    Returns: max over subints of |grad_t(probe) - grad_t(y_n)| / |probe_t - y_n,t|
+    """
+    probe = (1.0 + epsilon) * y_n
+    _val, probe_grad = func.evaluate(probe)
+
+    # func.evaluate may modify its argument in place (e.g. thresholds and
+    # tapers), so difference the points that were actually evaluated
+    diff_t = freq2time(probe - y_n, axis=0)
+    gdiff_t = freq2time(probe_grad - y_grad, axis=0)
+
+    var_diff_t = np.sum(np.abs(diff_t) ** 2, axis=1)
+    var_gdiff_t = np.sum(np.abs(gdiff_t) ** 2, axis=1)
+
+    valid = var_diff_t > 0
+    if not np.any(valid):
+        return 0.0
+    return float(np.sqrt(np.max(var_gdiff_t[valid] / var_diff_t[valid])))
+
+
 def take_fista_step(
     iter,
     func,
@@ -157,7 +217,10 @@ def take_fista_step(
     x_n,
     demerits,
     eps,
+    gain_curvature_epsilon=1e-3,
 ):
+    L_gain = 0.0
+
     # calculate the updated model, either with backtracking, or using fixed alpha
     # Apply proximal operators (in the case of backtracking, the operators are applied within the backtracking)
     if backtrack:
@@ -181,6 +244,11 @@ def take_fista_step(
 
         y_val, y_grad = func.evaluate(y_n)
         x_np1 = func.normalize(y_n - alpha * y_grad)
+
+        # Measured here, before func is evaluated at x_np1 below, so that
+        # func's internal state is left at x_np1 as before.
+        if gain_curvature_epsilon:
+            L_gain = gain_curvature(func, y_n, y_grad, gain_curvature_epsilon)
         x_np1 = apply_prox_operators(
             _lambda,
             delay_for_inf,
@@ -261,6 +329,14 @@ def take_fista_step(
 
     gdiff_t = y_grad_time - z_t[:, np.newaxis] * func_grad_time
     L_min = np.sqrt(np.real(np.vdot(gdiff_t, gdiff_t) / var_diff_t))
+
+    # The secant estimate above is blind to the stiff per-subint gain modes
+    # unless the step just taken happened to excite them (see
+    # gain_curvature), so the larger of the two lower bounds on L is used.
+    if gain_curvature_epsilon:
+        print(f"take_fista_step: L secant={L_min} gain={L_gain}")
+        if L_gain > L_min:
+            L_min = L_gain
 
     if math.isfinite(func_val):
         demerits = np.append(demerits, func_val)
